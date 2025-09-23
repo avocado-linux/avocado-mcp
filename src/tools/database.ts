@@ -16,7 +16,7 @@ import { promisify } from "util";
 import path from "path";
 import os from "os";
 // @ts-ignore - bzip2 doesn't have types
-import * as bzip2 from "bzip2";
+import bzip2 from "bzip2";
 
 const parseXML = promisify(parseString);
 
@@ -35,8 +35,8 @@ interface DatabaseInfo {
 
 interface RepoMetadata {
   primaryDb?: string;
-  filelists?: string;
-  other?: string;
+  filelistsDb?: string;
+  otherDb?: string;
 }
 
 class DatabaseManager {
@@ -127,7 +127,10 @@ class DatabaseManager {
     if (sourcePath.endsWith(".bz2")) {
       // Handle bz2 decompression
       const compressedData = readFileSync(sourcePath);
-      const decompressedData = bzip2.decode(compressedData);
+      const uint8Array = new Uint8Array(compressedData);
+      const bitstream = bzip2.array(uint8Array);
+      const decompressedResult = bzip2.simple(bitstream);
+      const decompressedData = Buffer.from(decompressedResult);
       writeFileSync(destPath, decompressedData);
     } else if (sourcePath.endsWith(".gz")) {
       // Handle gzip decompression
@@ -166,14 +169,14 @@ class DatabaseManager {
 
         if (href) {
           switch (type) {
-            case "primary":
+            case "primary_db":
               metadata.primaryDb = href;
               break;
-            case "filelists":
-              metadata.filelists = href;
+            case "filelists_db":
+              metadata.filelistsDb = href;
               break;
-            case "other":
-              metadata.other = href;
+            case "other_db":
+              metadata.otherDb = href;
               break;
           }
         }
@@ -313,30 +316,23 @@ class DatabaseManager {
             }
 
             // Introspect database
-            try {
-              const { tables, schema } = await this.introspectDatabase(dbPath);
+            const { tables, schema } = await this.introspectDatabase(dbPath);
 
-              const dbInfo: DatabaseInfo = {
-                target,
-                repo,
-                dbPath,
-                originalUrl: dbUrl,
-                tables,
-                schema,
-              };
+            const dbInfo: DatabaseInfo = {
+              target,
+              repo,
+              dbPath,
+              originalUrl: dbUrl,
+              tables,
+              schema,
+            };
 
-              databasesForTarget.push(dbInfo);
-              allDatabaseInfo.push(dbInfo);
+            databasesForTarget.push(dbInfo);
+            allDatabaseInfo.push(dbInfo);
 
-              output += `✅ Primary database prepared\n`;
-              output += `- Tables: ${tables.join(", ")}\n`;
-              output += `- Path: ${dbPath}\n`;
-            } catch (dbError) {
-              output += `❌ Database introspection failed: ${dbError}\n`;
-              output += `- Database file exists but cannot be read as SQLite\n`;
-              output += `- File path: ${dbPath}\n`;
-              continue;
-            }
+            output += `✅ Primary database prepared\n`;
+            output += `- Tables: ${tables.join(", ")}\n`;
+            output += `- Path: ${dbPath}\n`;
           } else {
             output += `⚠️  No primary database found in repomd.xml\n`;
           }

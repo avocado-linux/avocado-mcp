@@ -109,14 +109,14 @@ class DatabaseManager {
                 const href = data.location?.[0]?.$?.href;
                 if (href) {
                     switch (type) {
-                        case "primary_db":
+                        case "primary":
                             metadata.primaryDb = href;
                             break;
-                        case "filelists_db":
-                            metadata.filelistsDb = href;
+                        case "filelists":
+                            metadata.filelists = href;
                             break;
-                        case "other_db":
-                            metadata.otherDb = href;
+                        case "other":
+                            metadata.other = href;
                             break;
                     }
                 }

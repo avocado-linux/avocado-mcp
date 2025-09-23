@@ -7,10 +7,12 @@
     "avocado-mcp": "./build/index.js"
   },
   "scripts": {
-    "build": "tsc && node -e \"require('fs').chmodSync('build/index.js', '755')\"",
+    "build": "tsc --project tsconfig.build.json && node -e \"require('fs').chmodSync('build/index.js', '755')\"",
     "dev": "npm run build && node build/index.js",
     "test": "npm run build && npx @modelcontextprotocol/inspector build/index.js",
-    "inspect": "npx @modelcontextprotocol/inspector build/index.js"
+    "test-db": "tsc && node build/test/test-database-preparation.js",
+    "test-bzip2": "cd test && npx tsx test-bzip2.ts",
+    "inspect": "@modelcontextprotocol/inspector build/index.js"
   },
   "files": [
     "build"
@@ -29,17 +31,17 @@
   "description": "MCP server providing access to core Avocado OS resources: targets.json mapping, avocado-config schema, docs.peridio.com, and efficient SQLite database management with automatic discovery, decompression, and querying",
   "devDependencies": {
     "@modelcontextprotocol/inspector": "^0.15.0",
-    "@types/node": "^22.10.0",
     "@types/better-sqlite3": "^7.6.8",
+    "@types/node": "^22.10.0",
     "@types/xml2js": "^0.4.14",
     "typescript": "^5.7.2"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.4.0",
-    "zod": "^3.25.76",
     "better-sqlite3": "^9.2.2",
+    "bzip2": "^0.1.1",
     "node-stream-zip": "^1.15.0",
     "xml2js": "^0.6.2",
-    "bzip2": "^0.1.1"
+    "zod": "^3.25.76"
   }
 }

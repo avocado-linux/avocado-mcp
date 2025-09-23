@@ -24,12 +24,9 @@ registerDatabaseTools(server);
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("Avocado MCP Server v2.0 running");
-  console.error(
+  console.log("Avocado MCP Server v2.0 running");
+  console.log(
     "Tools: schema validation, config reasoning, repository querying, efficient database management, extension patterns",
-  );
-  console.error(
-    "🚀 New: prepare-target-databases & query-databases for streamlined package verification",
   );
 }
 
