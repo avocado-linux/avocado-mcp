@@ -2,11 +2,15 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { registerConsolidatedTools } from "./tools/consolidated.js";
+import { createRequire } from "module";
+
+const require = createRequire(import.meta.url);
+const packageJson = require("../package.json");
 
 // Create server
 const server = new McpServer({
   name: "avocado-os",
-  version: "3.0.0",
+  version: packageJson.version,
 });
 
 // Register consolidated tools

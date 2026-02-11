@@ -1,6 +1,6 @@
 {
   "name": "avocado-os-mcp-server",
-  "version": "3.0.0",
+  "version": "4.0.0",
   "main": "build/index.js",
   "type": "module",
   "bin": {
@@ -8,9 +8,14 @@
   },
   "scripts": {
     "build": "tsc --project tsconfig.build.json && node -e \"require('fs').chmodSync('build/index.js', '755')\"",
+    "prepublishOnly": "npm run build",
     "dev": "npm run build && node build/index.js",
     "test": "npm run build && npx @modelcontextprotocol/inspector build/index.js",
-    "inspect": "@modelcontextprotocol/inspector build/index.js"
+    "inspect": "@modelcontextprotocol/inspector build/index.js",
+    "format": "prettier --write 'src/**/*.ts'",
+    "format:check": "prettier --check 'src/**/*.ts'",
+    "typecheck": "tsc --project tsconfig.build.json --noEmit",
+    "checks": "npm run format:check && npm run typecheck"
   },
   "files": [
     "build"
@@ -24,14 +29,29 @@
     "os",
     "rpm"
   ],
-  "author": "",
+  "author": "Avocado Linux",
   "license": "ISC",
-  "description": "Consolidated MCP server for Avocado OS configuration with 2 essential tools: get-config-schema (required for validation) and query-repos (perfect for package searches during configuration generation)",
+  "description": "MCP server for Avocado OS configuration with essential tools: get-config-schema (required for validation) and query-repos (package searches during configuration generation)",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/avocado-linux/avocado-mcp.git"
+  },
+  "homepage": "https://github.com/avocado-linux/avocado-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/avocado-linux/avocado-mcp/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=18"
+  },
   "devDependencies": {
     "@modelcontextprotocol/inspector": "^0.15.0",
     "@types/better-sqlite3": "^7.6.8",
     "@types/node": "^22.10.0",
     "@types/xml2js": "^0.4.14",
+    "prettier": "^3.5.3",
     "typescript": "^5.7.2"
   },
   "dependencies": {

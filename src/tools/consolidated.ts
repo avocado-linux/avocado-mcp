@@ -57,7 +57,7 @@ class DatabaseManager {
       const TARGETS_JSON_URL =
         "https://repo.avocadolinux.org/latest/apollo/edge/targets.json";
       const response = await fetch(TARGETS_JSON_URL, {
-        headers: { "User-Agent": "avocado-mcp-server/3.0" },
+        headers: { "User-Agent": "avocado-mcp-server" },
       });
 
       if (!response.ok) {
@@ -479,7 +479,7 @@ export function registerConsolidatedTools(server: McpServer) {
         const schemaUrl = `https://raw.githubusercontent.com/avocado-linux/avocado-config/${schemaVersion}/avocado-config.json`;
 
         const response = await fetch(schemaUrl, {
-          headers: { "User-Agent": "avocado-mcp-server/3.0" },
+          headers: { "User-Agent": "avocado-mcp-server" },
         });
 
         if (!response.ok) {
@@ -494,7 +494,7 @@ export function registerConsolidatedTools(server: McpServer) {
           content: [
             {
               type: "text",
-              text: `# Avocado OS Configuration Schema\n\n**Version:** ${schemaVersion}\n**Source:** ${schemaUrl}\n\nThis schema is **REQUIRED** for validating Avocado OS configurations. Use it to ensure your TOML configurations meet all structural and constraint requirements.\n\n## Key Validation Points\n\n- **Required Properties:** Ensure all required top-level properties are present\n- **Target Validation:** Target names must match schema enum values\n- **Extension Types:** Must be "sysext" or "confext"\n- **Dependencies:** Use exact package names verified through query-repos\n- **Data Types:** All values must match schema type definitions\n\n## Schema Content\n\n\`\`\`json\n${JSON.stringify(schema, null, 2)}\n\`\`\``,
+              text: `# Avocado OS Configuration Schema\n\n**Version:** ${schemaVersion}\n**Source:** ${schemaUrl}\n\nThis schema is **REQUIRED** for validating Avocado OS configurations. Use it to ensure your YAML configurations (avocado.yaml) meet all structural and constraint requirements.\n\n## Key Validation Points\n\n- **Required Properties:** Ensure all required top-level properties are present\n- **Target Validation:** Target names must match schema enum values\n- **Extension Types:** Must be "sysext" or "confext"\n- **Dependencies:** Use exact package names verified through query-repos\n- **Data Types:** All values must match schema type definitions\n\n## Schema Content\n\n\`\`\`json\n${JSON.stringify(schema, null, 2)}\n\`\`\``,
             },
           ],
         };

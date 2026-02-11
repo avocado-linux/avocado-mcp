@@ -1,9 +1,8 @@
 {
   "mcpServers": {
     "avocado-os": {
-      "command": "node",
-      "args": ["./build/index.js"],
-      "cwd": "."
+      "command": "npx",
+      "args": ["-y", "avocado-os-mcp-server"]
     }
   }
 }
