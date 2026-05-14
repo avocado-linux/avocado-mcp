@@ -31,7 +31,7 @@
   ],
   "author": "Avocado Linux",
   "license": "ISC",
-  "description": "MCP server for Avocado OS configuration with essential tools: get-config-schema (required for validation) and query-repos (package searches during configuration generation)",
+  "description": "MCP server for Avocado OS. Helps an AI assistant get a user up and running: pick a target, init a project, search packages, author and validate avocado.yaml, work with references, diagnose build / provision failures.",
   "repository": {
     "type": "git",
     "url": "https://github.com/avocado-linux/avocado-mcp.git"
@@ -47,18 +47,16 @@
     "node": ">=18"
   },
   "devDependencies": {
-    "@modelcontextprotocol/inspector": "^0.15.0",
-    "@types/better-sqlite3": "^7.6.8",
+    "@modelcontextprotocol/inspector": "^0.21.2",
     "@types/node": "^22.10.0",
-    "@types/xml2js": "^0.4.14",
     "prettier": "^3.5.3",
     "typescript": "^5.7.2"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.4.0",
-    "better-sqlite3": "^9.2.2",
-    "bzip2": "^0.1.1",
-    "xml2js": "^0.6.2",
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1",
+    "yaml": "^2.6.0",
     "zod": "^3.25.76"
   }
 }

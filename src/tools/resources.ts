@@ -1,0 +1,60 @@
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import * as gettingStarted from "../resources/getting-started.js";
+import * as hardwareCatalog from "../resources/hardware-catalog.js";
+import * as referencesCatalog from "../resources/references-catalog.js";
+import * as configYamlGuide from "../resources/config-yaml-guide.js";
+import * as extensionsAndRuntimes from "../resources/extensions-and-runtimes.js";
+import * as deviceDebugging from "../resources/device-debugging.js";
+import * as avocadoRuntimeDetails from "../resources/avocado-runtime-details.js";
+import * as tmuxUartBridge from "../resources/tmux-uart-bridge.js";
+
+interface Skill {
+  uri: string;
+  name: string;
+  description: string;
+  content: string;
+}
+
+const SKILLS: Skill[] = [
+  toSkill(gettingStarted),
+  toSkill(hardwareCatalog),
+  toSkill(referencesCatalog),
+  toSkill(configYamlGuide),
+  toSkill(extensionsAndRuntimes),
+  toSkill(deviceDebugging),
+  toSkill(avocadoRuntimeDetails),
+  toSkill(tmuxUartBridge),
+];
+
+function toSkill(mod: {
+  URI: string;
+  NAME: string;
+  DESCRIPTION: string;
+  CONTENT: string;
+}): Skill {
+  return {
+    uri: mod.URI,
+    name: mod.NAME,
+    description: mod.DESCRIPTION,
+    content: mod.CONTENT,
+  };
+}
+
+export function registerSkillResources(server: McpServer): void {
+  for (const skill of SKILLS) {
+    server.resource(
+      skill.name,
+      skill.uri,
+      { description: skill.description, mimeType: "text/markdown" },
+      async () => ({
+        contents: [
+          {
+            uri: skill.uri,
+            text: skill.content,
+            mimeType: "text/markdown",
+          },
+        ],
+      }),
+    );
+  }
+}
