@@ -7,6 +7,7 @@ import * as extensionsAndRuntimes from "../resources/extensions-and-runtimes.js"
 import * as deviceDebugging from "../resources/device-debugging.js";
 import * as avocadoRuntimeDetails from "../resources/avocado-runtime-details.js";
 import * as tmuxUartBridge from "../resources/tmux-uart-bridge.js";
+import * as extensionBuildDebugging from "../resources/extension-build-debugging.js";
 
 interface Skill {
   uri: string;
@@ -24,6 +25,7 @@ const SKILLS: Skill[] = [
   toSkill(deviceDebugging),
   toSkill(avocadoRuntimeDetails),
   toSkill(tmuxUartBridge),
+  toSkill(extensionBuildDebugging),
 ];
 
 function toSkill(mod: {

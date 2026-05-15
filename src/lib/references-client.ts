@@ -222,18 +222,38 @@ export function searchReferences(
   query: string,
   target?: string,
 ): ReferenceEntry[] {
-  const q = query.trim().toLowerCase();
-  const matches = CATALOG.filter((r) => {
+  const tokens = query
+    .toLowerCase()
+    .split(/[^a-z0-9+#.-]+/)
+    .filter((t) => t.length > 0);
+
+  type Scored = { entry: ReferenceEntry; score: number };
+  const scored: Scored[] = [];
+  for (const r of CATALOG) {
     if (target && r.hardware.length > 0 && !r.hardware.includes(target)) {
-      return false;
+      continue;
     }
-    if (!q) return true;
+    if (tokens.length === 0) {
+      scored.push({ entry: r, score: 0 });
+      continue;
+    }
     const haystack = [r.slug, r.title, r.language, r.summary, ...r.tags]
       .join(" ")
       .toLowerCase();
-    return haystack.includes(q);
-  });
-  return matches.sort((a, b) => a.title.localeCompare(b.title));
+    let score = 0;
+    for (const t of tokens) {
+      if (haystack.includes(t)) score++;
+    }
+    // Exact slug match is the strongest signal.
+    if (tokens.includes(r.slug)) score += 10;
+    if (score > 0) scored.push({ entry: r, score });
+  }
+
+  return scored
+    .sort(
+      (a, b) => b.score - a.score || a.entry.title.localeCompare(b.entry.title),
+    )
+    .map((s) => s.entry);
 }
 
 export function getReferenceEntry(slug: string): ReferenceEntry | undefined {

@@ -9,6 +9,10 @@ import {
   listExtensions,
 } from "../lib/yaml-ops.js";
 import { RepoClient } from "../lib/repo-client.js";
+import {
+  searchReferences,
+  type ReferenceEntry,
+} from "../lib/references-client.js";
 
 export function registerProjectTools(
   server: McpServer,
@@ -16,27 +20,45 @@ export function registerProjectTools(
 ): void {
   server.tool(
     "init-project",
-    "Generate a starter avocado.yaml for a target. Includes the dev runtime with SSH + debug tooling, the target's BSP, and placeholder `app` + `config` extensions. After generating, the user runs `avocado build` and `avocado provision` to flash a device.",
+    "Scaffold a new Avocado OS project. ALWAYS searches the reference catalog first — references are pre-built, verified, working projects that dramatically beat starting from scratch. If a reference matches the user's task, returns the `avocado init --reference` CLI command to clone it. Falls back to a minimal from-scratch starter YAML only when no reference fits, or when `forceFromScratch: true`. Pass the user's task in their own words via `task`.",
     {
       target: z
         .string()
         .describe(
           "Target name (must match an entry from list-targets, e.g. 'raspberrypi5').",
         ),
+      task: z
+        .string()
+        .optional()
+        .describe(
+          "Free-text description of what the user wants to build — their own words ('python web app', 'mqtt sensor', 'kiosk dashboard', 'qemu trial run'). Used to search the reference catalog. Strongly recommended; leave blank only if you genuinely have no description to give.",
+        ),
+      forceFromScratch: z
+        .boolean()
+        .optional()
+        .describe(
+          "Skip the reference search and return a blank starter YAML. Use only when the user explicitly wants a from-scratch project or no reference can serve their use case.",
+        ),
       runtimeName: z
         .string()
         .optional()
         .describe(
-          "Name for the initial runtime. Defaults to 'dev'. Most projects keep 'dev' and add 'prod' later.",
+          "Name for the initial runtime (from-scratch path only). Defaults to 'dev'.",
         ),
       extraExtensions: z
         .array(z.string())
         .optional()
         .describe(
-          "Optional list of extra extension names to include in the runtime (e.g. ['monitoring']). Must be names of extensions that exist either in this YAML or in the package repo.",
+          "Extra extension names to include in the runtime (from-scratch path only).",
         ),
     },
-    async ({ target, runtimeName, extraExtensions }) => {
+    async ({
+      target,
+      task,
+      forceFromScratch,
+      runtimeName,
+      extraExtensions,
+    }) => {
       const validTargets = await repoClient.getTargetsConfig();
       if (validTargets && !validTargets[target]) {
         const sample = Object.keys(validTargets).slice(0, 8).join(", ");
@@ -50,12 +72,33 @@ export function registerProjectTools(
         };
       }
 
-      const yaml = buildStarterYaml({ target, runtimeName, extraExtensions });
+      // Reference path — try this first unless explicitly skipped.
+      if (!forceFromScratch) {
+        const matches = task
+          ? searchReferences(task, target)
+          : searchReferences("", target);
+        if (matches.length > 0) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: renderReferenceMatch(target, task, matches),
+              },
+            ],
+          };
+        }
+      }
 
-      // Validate the generated YAML against the schema to catch any drift.
+      // From-scratch path.
+      const yaml = buildStarterYaml({ target, runtimeName, extraExtensions });
       const validation = await validateAvocadoYaml(yaml);
 
-      let out = `# init-project — \`${target}\`\n\n`;
+      let out = `# init-project — \`${target}\` (from scratch)\n\n`;
+      if (forceFromScratch) {
+        out += `_From-scratch path requested explicitly._\n\n`;
+      } else {
+        out += `_No reference matched ${task ? `task "${task}"` : "the target"}. Falling back to a minimal starter._\n\n`;
+      }
       if (validation.ok) {
         out += `✅ Generated YAML validates against the current schema (v ${validation.schemaVersion}).\n\n`;
       } else {
@@ -357,6 +400,47 @@ export function registerProjectTools(
   );
 }
 
+function renderReferenceMatch(
+  target: string,
+  task: string | undefined,
+  matches: ReferenceEntry[],
+): string {
+  const top = matches[0];
+  const rest = matches.slice(1, 5);
+
+  let out = `# init-project — \`${target}\` (reference match)\n\n`;
+  out += task
+    ? `Task: _"${task}"_\n\n`
+    : `(No task provided — listing references compatible with \`${target}\`.)\n\n`;
+  out += `✅ Found ${matches.length} matching reference${matches.length === 1 ? "" : "s"}. References are pre-built and verified; use one instead of scaffolding from scratch unless the user has a strong reason not to.\n\n`;
+
+  out += `## Best fit: \`${top.slug}\`\n\n`;
+  out += `**Title:** ${top.title}  •  **Language:** ${top.language}  •  **Hardware:** ${top.hardware.length ? top.hardware.join(", ") : "generic"}\n\n`;
+  out += `${top.summary}\n\n`;
+  out += `### Scaffold it\n\n`;
+  out += "```bash\n";
+  out += `avocado init -t ${target} --reference ${top.slug} ${top.slug} && cd ${top.slug}\n`;
+  out += "```\n\n";
+  out += `This clones the reference project into \`./${top.slug}/\` and sets \`default_target\` to \`${target}\` in its \`avocado.yaml\`. Then:\n\n`;
+  out += "```bash\n";
+  out += `avocado install -f\n`;
+  out += `avocado build\n`;
+  out += "```\n\n";
+  out += `Call \`get-reference\` with slug \`${top.slug}\` to see its full structure (file tree, \`avocado.yaml\`, overlays, build hooks) before suggesting edits.\n\n`;
+
+  if (rest.length > 0) {
+    out += `## Other matches\n\n`;
+    out += `| Slug | Title | Language | Summary |\n|------|-------|----------|---------|\n`;
+    for (const r of rest) {
+      out += `| \`${r.slug}\` | ${r.title} | ${r.language} | ${r.summary} |\n`;
+    }
+    out += `\n`;
+  }
+
+  out += `_If none of these are a fit, call \`init-project\` again with \`forceFromScratch: true\` to get a blank starter YAML._\n`;
+  return out;
+}
+
 function renderMutationResult(
   toolName: string,
   newYaml: string,
@@ -378,5 +462,6 @@ function renderMutationResult(
     out += `\n`;
   }
   out += "```yaml\n" + newYaml + "```\n";
+  out += `\n**Next:** run \`avocado install\` before the next \`avocado build\` so the new packages/extensions are resolved into the SDK. \`avocado build\` alone won't pick them up.\n`;
   return out;
 }

@@ -38,6 +38,7 @@ Requires Node ≥18. `npx` will fetch the package on first use and cache it.
 
 | Tool                         | Purpose                                                                              |
 | ---------------------------- | ------------------------------------------------------------------------------------ |
+| `environment-check`          | Verify host has `avocado` CLI, Docker daemon, and ≥8 GB free disk space              |
 | `list-targets`               | Every Avocado target currently supported by the package feed                         |
 | `search-packages`            | Substring search across the live RPM feed (optionally scoped to release/channel)     |
 | `describe-package`           | Detail view for one package: version, arch, summary, description                     |
@@ -71,6 +72,7 @@ Background knowledge the LLM reads to ground itself before invoking tools:
 - `avocado://skills/avocado-runtime-details`
 - `avocado://skills/device-debugging`
 - `avocado://skills/tmux-uart-bridge`
+- `avocado://skills/extension-build-debugging`
 
 ### Prompts
 
@@ -78,6 +80,7 @@ Pre-built workflows the user can invoke by name:
 
 - `start-avocado-project` — walks through target pick → init → next-steps for a fresh project.
 - `debug-device` — walks through attaching to a device over UART/tmux and capturing logs.
+- `debug-build-failure` — recovery walkthrough for failed `avocado install` / `avocado build`: known-issues triage, cross-channel package lookup, host/arch checks.
 
 ## Recommended flow
 
