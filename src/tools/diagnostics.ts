@@ -3,6 +3,8 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
   diagnoseProvisionLog,
   diagnoseBuildLog,
+  extractFailingPackages,
+  investigatePackages,
   renderDiagnoses,
 } from "../lib/diagnostics.js";
 import { RepoClient } from "../lib/repo-client.js";
@@ -34,19 +36,45 @@ export function registerDiagnosticsTools(
 
   server.tool(
     "explain-build-error",
-    "Analyze the output of `avocado build` for known failure patterns (package not found, dependency conflicts, schema errors, Docker issues, OOM, etc.) and return a structured diagnosis. Use this when a build failed and the user has pasted the log.",
+    "Analyze the output of `avocado build` or `avocado install` for known failure patterns AND actively probe the package feed. When you pass `targets`, the tool extracts any failing package names from the log and looks them up across both the `edge` and `apollo` channels — turning generic 'package not found' advice into a concrete answer (e.g. 'present on apollo only, switch distro.channel'). Always pass `targets` if you know them; without it the tool falls back to pattern matching only.",
     {
       log: z
         .string()
         .min(1)
         .describe(
-          "Full or partial build log output. Paste verbatim — heuristics scan for known error fingerprints.",
+          "Full or partial build/install log output. Paste verbatim — heuristics scan for known error fingerprints and extract failing package names.",
+        ),
+      targets: z
+        .array(z.string())
+        .optional()
+        .describe(
+          "Target(s) the user was building for (e.g. ['jetson-orin-nano-devkit']). Strongly recommended — enables cross-channel package lookup that often surfaces the actual cause when patterns alone are inconclusive.",
         ),
     },
-    async ({ log }) => {
+    async ({ log, targets }) => {
       const diagnoses = diagnoseBuildLog(log);
+      if (!targets || targets.length === 0) {
+        return {
+          content: [
+            { type: "text", text: renderDiagnoses("build", diagnoses) },
+          ],
+        };
+      }
+      const names = extractFailingPackages(log);
+      const investigations = await investigatePackages(
+        repoClient,
+        names,
+        targets,
+      );
       return {
-        content: [{ type: "text", text: renderDiagnoses("build", diagnoses) }],
+        content: [
+          {
+            type: "text",
+            text: renderDiagnoses("build", diagnoses, investigations, {
+              targets,
+            }),
+          },
+        ],
       };
     },
   );
