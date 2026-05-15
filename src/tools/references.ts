@@ -18,15 +18,7 @@ export function registerReferenceTools(server: McpServer): void {
     {},
     async () => {
       const all = listReferences();
-      return {
-        content: [
-          { type: "text", text: renderList(all) },
-          {
-            type: "text",
-            text: `\n\`\`\`json\n${JSON.stringify(all, null, 2)}\n\`\`\``,
-          },
-        ],
-      };
+      return { content: [{ type: "text", text: renderList(all) }] };
     },
   );
 
@@ -53,10 +45,6 @@ export function registerReferenceTools(server: McpServer): void {
           {
             type: "text",
             text: `# search-references\n\n**Query:** \`${query}\`${target ? `  •  **Target:** \`${target}\`` : ""}\n**Matches:** ${matches.length}\n\n${renderList(matches)}`,
-          },
-          {
-            type: "text",
-            text: `\n\`\`\`json\n${JSON.stringify(matches, null, 2)}\n\`\`\``,
           },
         ],
       };

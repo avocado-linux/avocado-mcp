@@ -34,15 +34,7 @@ export function registerDiscoveryTools(
       }
       out += `\n_Use any of these target strings as the value of \`default_target\` or \`supported_targets\` in \`avocado.yaml\`._`;
 
-      return {
-        content: [
-          { type: "text", text: out },
-          {
-            type: "text",
-            text: `\n\`\`\`json\n${JSON.stringify(config, null, 2)}\n\`\`\``,
-          },
-        ],
-      };
+      return { content: [{ type: "text", text: out }] };
     },
   );
 }
