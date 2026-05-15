@@ -16,10 +16,24 @@ import { registerPrompts } from "./tools/prompts.js";
 const require = createRequire(import.meta.url);
 const packageJson = require("../package.json");
 
-const server = new McpServer({
-  name: "avocado-os",
-  version: packageJson.version,
-});
+const server = new McpServer(
+  {
+    name: "avocado-os",
+    version: packageJson.version,
+  },
+  {
+    instructions: [
+      "Skill resources at avocado://skills/* ground the LLM on Avocado OS",
+      "concepts and canonical workflows. They are NOT in the initial tool list —",
+      "at session start, call ListMcpResourcesTool for this server to discover",
+      "them, then read any whose description matches the user's task (e.g.",
+      "getting-started for a new project, config-yaml-guide before YAML edits,",
+      "references-catalog before recommending an example, device-debugging",
+      "before UART work). Follow each skill's prescribed tool order rather than",
+      "guessing.",
+    ].join(" "),
+  },
+);
 
 const repoClient = new RepoClient();
 
