@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { RepoClient, type SearchResult } from "../lib/repo-client.js";
+import { RepoClient } from "../lib/repo-client.js";
 
 export function registerPackageTools(
   server: McpServer,
@@ -64,15 +64,7 @@ export function registerPackageTools(
           }
           out += `\n`;
         }
-        return {
-          content: [
-            { type: "text", text: out },
-            {
-              type: "text",
-              text: `\n\`\`\`json\n${JSON.stringify(exact, null, 2)}\n\`\`\``,
-            },
-          ],
-        };
+        return { content: [{ type: "text", text: out }] };
       } catch (error) {
         return {
           content: [
@@ -131,15 +123,23 @@ export function registerPackageTools(
             release,
             channel,
           );
+        const trimmed = results.map((r) => ({
+          name: r.name,
+          version: r.version,
+          release: r.release,
+          arch: r.arch,
+          repo: r.repo,
+          summary: r.summary,
+        }));
         return {
           content: [
             {
               type: "text",
-              text: renderSummary(
+              text: renderHeader(
                 query,
                 targets,
                 totalMatches,
-                results,
+                results.length,
                 errors,
                 release,
                 channel,
@@ -147,7 +147,7 @@ export function registerPackageTools(
             },
             {
               type: "text",
-              text: `\n## Full results (JSON)\n\n\`\`\`json\n${JSON.stringify(results, null, 2)}\n\`\`\``,
+              text: `\n\`\`\`json\n${JSON.stringify(trimmed, null, 2)}\n\`\`\`\n\n_Per-result \`description\` is omitted to save context. Use \`describe-package\` for full details on a specific name._`,
             },
           ],
         };
@@ -165,11 +165,11 @@ export function registerPackageTools(
   );
 }
 
-function renderSummary(
+function renderHeader(
   query: string,
   targets: string[],
   totalMatches: number,
-  results: SearchResult[],
+  shown: number,
   errors: { target: string; messages: string[] }[],
   release?: string,
   channel?: string,
@@ -178,28 +178,17 @@ function renderSummary(
   out += `**Query:** \`${query}\`\n`;
   out += `**Targets:** ${targets.map((t) => `\`${t}\``).join(", ")}\n`;
   out += `**Stream:** \`${release ?? "2024"}/${channel ?? "edge"}\`\n`;
-  out += `**Total matches:** ${totalMatches}${results.length < totalMatches ? ` (showing first ${results.length})` : ""}\n\n`;
+  out += `**Total matches:** ${totalMatches}${shown < totalMatches ? ` (showing first ${shown})` : ""}\n`;
 
   if (errors.length > 0) {
-    out += `## Repo errors (non-fatal)\n\n`;
+    out += `\n## Repo errors (non-fatal)\n\n`;
     for (const e of errors) {
       out += `- **${e.target}**: ${e.messages.join("; ")}\n`;
     }
-    out += `\n`;
   }
 
-  if (results.length === 0) {
-    out += `No packages matched. Confirm the target name exists in targets.json and try a broader query.\n`;
-    return out;
-  }
-
-  out += `## Results\n\n`;
-  out += `| Name | Version | Arch | Repo | Summary |\n`;
-  out += `|------|---------|------|------|---------|\n`;
-  for (const r of results) {
-    const ver = r.release ? `${r.version}-${r.release}` : r.version;
-    const summary = r.summary.replace(/\|/g, "\\|").slice(0, 80);
-    out += `| \`${r.name}\` | ${ver} | ${r.arch} | \`${r.repo}\` | ${summary} |\n`;
+  if (shown === 0) {
+    out += `\nNo packages matched. Confirm the target name exists in targets.json and try a broader query.\n`;
   }
   return out;
 }
