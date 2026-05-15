@@ -24,7 +24,7 @@ type AjvCtor = new (opts?: unknown) => {
     errors?: AjvErrorObject[] | null;
   };
 };
-const Ajv = cjsRequire("ajv").default as AjvCtor;
+const Ajv = cjsRequire("ajv/dist/2020").default as AjvCtor;
 const addFormats = cjsRequire("ajv-formats").default as (
   ajv: InstanceType<AjvCtor>,
 ) => InstanceType<AjvCtor>;
