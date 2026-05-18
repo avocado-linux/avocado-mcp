@@ -55,6 +55,14 @@ If you skip this, \`avocado build\` will produce an image with stale package con
 - **CLI docs**: \`docs.peridio.com/developer-reference/avocado-cli\`.
 - **Per-target getting started**: see \`get-provisioning-steps\` for the exact \`avocado provision\` invocation a target needs.
 
+## Building features — start with \`app-development\`
+
+When the user moves past scaffolding into actual feature work (adding libraries, services, configs, app code), read \`avocado://skills/app-development\`. That skill covers:
+
+- **Where every kind of asset lives** in the project layout (source, configs, systemd units, overlays, var seeds).
+- **The feed-first rule for libraries**: \`search-packages\` BEFORE proposing \`pip install\` / \`npm install\` / \`cargo add\` / etc. Feed packages are versioned, security-updatable, and don't bloat the extension. Vendoring is a fallback, not the default.
+- **Language-specific patterns** for Python, Node, Rust, C/C++.
+
 ## Common pitfalls
 
 - **Target name mismatch.** Target strings are case-sensitive and must exactly match an entry in \`targets.json\`. Use \`list-targets\` to verify.

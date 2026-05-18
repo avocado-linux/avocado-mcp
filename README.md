@@ -78,6 +78,7 @@ Background knowledge the LLM reads to ground itself before invoking tools:
 - `avocado://skills/tmux-uart-bridge`
 - `avocado://skills/extension-build-debugging`
 - `avocado://skills/iterative-deployment`
+- `avocado://skills/app-development`
 
 ### Prompts
 

@@ -284,7 +284,7 @@ export function registerProjectTools(
 
   server.tool(
     "add-package-to-extension",
-    "Add a single package to an existing extension's packages map. Verifies the package exists in the repo for one of the project's targets before adding (rejects unknown packages).",
+    "Add a single feed package to an existing extension's packages map. **Use this as the default path for adding ANY library or dependency** — feed packages beat vendored / pip-installed / npm-installed deps on every axis (versioning, security updates, image size, dependency resolution). Verifies the package exists in the live feed for one of the project's targets before adding; rejects unknown packages with a 'did you mean' list. If `search-packages` shows the user's library isn't in the feed, THEN consider vendoring (see `avocado://skills/app-development`).",
     {
       yaml: z.string().describe("Current avocado.yaml content."),
       extension: z
