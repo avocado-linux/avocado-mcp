@@ -139,13 +139,14 @@ export function registerPrompts(server: McpServer): void {
           "Target architecture override. Usually inferred from `default_target` in the YAML or the `AVOCADO_TARGET` env var; only pass this if you need to override.",
         ),
       forceInstall: z
-        .boolean()
+        .string()
         .optional()
         .describe(
-          "If true, run `avocado install -f` unconditionally before building. Default false — the prompt tries `avocado build` first and only runs install if the build fails with a signal that install is needed (missing package, unresolved extension). Set this to true when you KNOW the user has just edited the YAML to add packages/extensions and want to short-circuit the build-fail-retry roundtrip.",
+          "Pass 'true' to run `avocado install -f` unconditionally before building. Default behaviour (any other value, or omitted): try `avocado build` first and only run install if the build fails with a signal that install is needed (missing package, unresolved extension). Set 'true' when you KNOW the user has just edited the YAML to add packages/extensions and want to short-circuit the build-fail-retry roundtrip.",
         ),
     },
-    ({ device, runtime, target, forceInstall }) => {
+    ({ device, runtime, target, forceInstall: forceInstallStr }) => {
+      const forceInstall = forceInstallStr === "true";
       const r = runtime ?? "dev";
       return {
         messages: [
