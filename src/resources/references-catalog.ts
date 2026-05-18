@@ -1,7 +1,7 @@
 export const URI = "avocado://skills/references-catalog";
 export const NAME = "references-catalog";
 export const DESCRIPTION =
-  "Map of available Avocado OS reference projects (working starter apps in C, Python, Rust, Node, Elixir, etc.). Read this when the user wants an example to copy from. Use list-references / search-references / get-reference for live data.";
+  "Map of available Avocado OS reference projects (working starter apps in C, Python, Rust, Node, Elixir, AI, etc.). Read this when the user wants an example to copy from. Use list-references / search-references / get-reference for live data.";
 
 export const CONTENT = `# References catalog
 
