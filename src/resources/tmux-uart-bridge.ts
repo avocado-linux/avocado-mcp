@@ -58,13 +58,60 @@ tmux new-session -d -s avocado-uart 'tio -b 115200 /dev/tty.usbserial-XXX'
 
 \`-d\` starts the session detached. The user can attach in another terminal with \`tmux attach -t avocado-uart\` to watch what Claude is doing.
 
+## First capture: log in if you see a login prompt
+
+The very first thing to do after \`tmux new-session\` is **capture the pane** and look at what's actually on the console before sending diagnostic commands:
+
+\`\`\`bash
+sleep 1
+tmux capture-pane -t avocado-uart -p -S -50
+\`\`\`
+
+Three possibilities:
+
+1. **Login prompt** (e.g. \`avocado-rpi5 login:\`). Send \`root\` and Enter — the \`dev\` runtime ships a passwordless root account:
+   \`\`\`bash
+   tmux send-keys -t avocado-uart 'root' Enter
+   \`\`\`
+   No password prompt should follow. If one does, the device is not running the dev runtime; ask the user for credentials.
+
+2. **Already a shell prompt** (\`#\` or \`<hostname>:~#\`). You're in. Tap Enter once to confirm the prompt is responsive:
+   \`\`\`bash
+   tmux send-keys -t avocado-uart '' Enter
+   \`\`\`
+
+3. **No prompt, just boot output or blank.** Wait a few seconds, capture again. If still nothing after ~10s, capture more lines (\`-S -1000\`) and look for kernel panic / mount failures.
+
+**Never send a diagnostic command before confirming you have a shell prompt.** If the console is at \`login:\`, your \`journalctl ...\` command gets typed as the username and is rejected.
+
 ## Sending a command
 
 \`\`\`bash
-tmux send-keys -t avocado-uart 'journalctl -xeu my-app.service --no-pager' Enter
+tmux send-keys -t avocado-uart 'journalctl -xeu my-app.service --no-pager | tail -50' Enter
 \`\`\`
 
 **Important:** always use \`Enter\` as a separate \`send-keys\` argument (not \`\\n\` inside the string). \`tmux send-keys -t ... 'cmd\\n'\` sends the literal characters \`\\\` and \`n\`, not a newline.
+
+## Token discipline — bound every command you send
+
+UART debugging burns context fast because every line on the console is a token in the next capture. Every command must bound its output:
+
+| Don't | Do | Why |
+|---|---|---|
+| \`journalctl -xe\` | \`journalctl -xe --no-pager \\| tail -50\` | Unbounded journals are huge |
+| \`journalctl -u foo\` | \`journalctl -u foo --no-pager --since '5 min ago' \\| tail -50\` | Time-bound + line-bound |
+| \`dmesg\` | \`dmesg --color=never \\| tail -30\` or \`dmesg \\| grep -i error \\| tail -20\` | Boot dmesg is hundreds of lines |
+| \`systemctl status foo\` | \`systemctl status foo --no-pager -n 20\` | \`-n 20\` caps the log tail systemctl includes |
+| \`cat /var/log/messages\` | \`tail -100 /var/log/messages\` or \`grep -i error /var/log/messages \\| tail -20\` | Files can be megabytes |
+| \`ls -R /\` or \`find /\` | \`ls /etc\`, \`find /var/lib/myapp -maxdepth 2\` | Recursive walks of \`/\` are enormous |
+| \`top\` / \`htop\` / \`less\` / \`vi\` | \`top -bn1 \\| head -20\`, \`ps -ef \\| grep foo\` | Interactive commands don't return |
+| Repeated \`tmux capture-pane -S -5000\` | \`tmux capture-pane -S -200\` first; only widen if you need earlier output | Default to the smallest scrollback window that answers the question |
+
+**Always pipe through \`grep\` once you know what you're looking for.** \`grep -i 'failed\\|error\\|denied'\` beats reading the whole log.
+
+**Always use \`--no-pager\` with systemd tools.** \`journalctl\`, \`systemctl status\`, \`systemctl list-units\` all default to paging when stdout is a tty — over UART they'll stall waiting for spacebar.
+
+**Never use follow mode.** No \`journalctl -f\`, no \`tail -f\`. They don't return; the bridge gets stuck and the only recovery is \`tmux kill-session\`.
 
 ## Reading output
 
@@ -92,6 +139,35 @@ tmux capture-pane -t avocado-uart -p -S -500
 \`\`\`
 
 If you're scripting many commands, generate a unique sentinel per command and grep for it to isolate that command's output.
+
+## Waiting for slow events — \`until\`-loop, NOT \`sleep N\`
+
+Sometimes you need to wait for something that takes time: device boot (15–60 seconds from power-on to login prompt), a service starting after a deploy, a long-running command finishing. **Do NOT use \`sleep 30\` / \`sleep 45\` / \`sleep 60\` to "just wait long enough"** — Claude Code blocks long sleeps and chained shorter sleeps will also be rejected. The replacement is an \`until\`-loop that polls a real condition and exits when the condition is met:
+
+\`\`\`bash
+# Wait for a login prompt or shell prompt to appear in the capture, up to ~60s
+until tmux capture-pane -t avocado-uart -p -S -50 | grep -qE 'login:|root@|# $|\\$ $'; do sleep 2; done
+\`\`\`
+
+\`\`\`bash
+# Wait for a specific sentinel to appear after sending a long-running command
+tmux send-keys -t avocado-uart "long-command; echo '===DONE_$RANDOM==='" Enter
+SENTINEL='===DONE_'   # use the exact $RANDOM value you generated above
+until tmux capture-pane -t avocado-uart -p -S -500 | grep -q "$SENTINEL"; do sleep 2; done
+tmux capture-pane -t avocado-uart -p -S -500
+\`\`\`
+
+\`\`\`bash
+# Wait for a systemd unit to become active on the device (poll via UART)
+until tmux send-keys -t avocado-uart 'systemctl is-active my-app.service' Enter; \\
+      sleep 1; \\
+      tmux capture-pane -t avocado-uart -p -S -20 | grep -qE '^active$'; \\
+      do sleep 2; done
+\`\`\`
+
+Run these via the **Monitor** tool when your host (e.g. Claude Code) exposes it — Monitor watches a streaming command and notifies you when the \`until\`-loop exits, so you don't burn turns polling. If Monitor isn't available, run the loop as a normal Bash command; it will block until the condition is met, then return.
+
+Short \`sleep 1\` or \`sleep 2\` between sending a command and capturing its output is fine — those are synchronization beats, not waits. The rule is: **if you're tempted to write \`sleep 10\` or more, replace it with an \`until\`-loop on a real condition.**
 
 ## Gotchas
 

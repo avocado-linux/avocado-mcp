@@ -29,8 +29,9 @@ Avocado OS is a Yocto-based embedded Linux distribution. A working project consi
    - **A from-scratch starter YAML** when no reference fits (or when called with \`forceFromScratch: true\`). Use \`add-extension\` / \`add-package-to-extension\` to extend it. Schema-first, package-verified.
 4. **Install packages.** The user runs \`avocado install\` (or \`avocado install -f\` on a fresh scaffold) to resolve and stage all packages declared in \`avocado.yaml\` into the SDK. This is a separate step from build.
 5. **Build.** The user runs \`avocado build\` locally. The CLI pulls the SDK container, compiles, and produces a system image from the already-staged packages.
-6. **Provision.** The user runs \`avocado provision -r dev\` (with the right \`--profile\` for the target — usually \`sd\` for an SD card). This flashes the image to media.
+6. **Provision (first time only).** The user runs \`avocado provision -r dev\` (with the right \`--profile\` for the target — usually \`sd\` for an SD card). This flashes the image to media.
 7. **Boot the device** with the provisioned media. Default root password is empty in the \`dev\` runtime.
+8. **Iterate with \`avocado deploy\`.** After the device is up and on the network, subsequent edits don't need a reflash. Run \`avocado install -f && avocado build && avocado deploy -r dev -d <device-ip>\` to OTA changes in seconds. **Offer this to the user proactively** — see \`avocado://skills/iterative-deployment\` for the full flow.
 
 ## \`avocado install\` vs \`avocado build\` — when to re-run what
 

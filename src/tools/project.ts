@@ -473,6 +473,7 @@ function renderMutationResult(
     out += `\n`;
   }
   out += "```yaml\n" + newYaml + "```\n";
-  out += `\n**Next:** run \`avocado install\` before the next \`avocado build\` so the new packages/extensions are resolved into the SDK. \`avocado build\` alone won't pick them up.\n`;
+  out += `\n**Next:** this YAML edit added/changed packages or extensions, so \`avocado install -f\` IS needed before the next \`avocado build\` — \`build\` won't pick the new package set up on its own. Run \`avocado install -f --no-tui && avocado build --no-tui\`.\n`;
+  out += `\n**Fast iteration option:** if the user's device is already running and on the network, you can push these changes without reflashing media. After install + build, run \`avocado deploy -r <runtime> -d <device-ip> --no-tui\` to OTA the update in seconds. The \`/build-and-deploy\` prompt automates the whole sequence — pass \`forceInstall: true\` since you know install IS needed for this edit. See \`avocado://skills/iterative-deployment\` for the full flow. **Offer this proactively** — most users don't know it exists.\n`;
   return out;
 }

@@ -90,6 +90,10 @@ app-compile.sh: line 3: syntax error: unexpected "("
 
 **Fix:** either rewrite in POSIX shell, or set \`#!/bin/bash\` AND declare \`bash\` under \`sdk.packages\`.
 
+## Read \`avocado build\`'s output directly — not its internals
+
+The hook script's stdout/stderr is captured by the \`avocado\` CLI and surfaced through its own output. Run \`avocado build\` (or \`avocado install -f\`) as a foreground Bash command, wait for it to finish, and read the printed log. Do NOT inspect the SDK container directly (no \`docker logs\`, no \`docker ps\`, no backgrounding the build). The CLI is the orchestrator and its stdout/stderr is the contract; the SDK container is an implementation detail that may change. Pipe the captured output into \`explain-build-error\` if the diagnosis isn't obvious.
+
 ## Triage order when a hook fails
 
 1. **Identify the hook** — the error log path shows \`app-clean.sh\`, \`app-compile.sh\`, or \`app-install.sh\`. That tells you whether the failure was in cleanup, compile, or staging.

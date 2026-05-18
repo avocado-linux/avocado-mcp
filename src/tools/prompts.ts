@@ -10,7 +10,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 export function registerPrompts(server: McpServer): void {
   server.prompt(
     "debug-device",
-    "Debug a running Avocado OS device. Defaults to a UART-over-tmux session (matches the getting-started flow's required USB-to-UART adapter), falls back to SSH for steady-state work.",
+    "Debug a running Avocado OS device. **Always starts with UART over a tmux-driven serial session.** SSH is a fallback for steady-state work after UART confirms the device is healthy enough to use it. Do NOT skip UART because the user mentioned an IP — an IP only means the device claimed to be on the network, not that it booted cleanly or that services are healthy.",
     {
       target: z
         .string()
@@ -34,18 +34,36 @@ export function registerPrompts(server: McpServer): void {
             text: [
               `Help me debug my Avocado OS device.${target ? ` Target: \`${target}\`.` : ""}${symptom ? ` Symptom: ${symptom}.` : ""}`,
               "",
+              "**Critical rule — read first:** UART is the default debug channel. Even if I mentioned an IP, an SSH session, or a `journalctl` snippet, **start with UART**. SSH is unsafe to rely on for diagnostics — it requires the device to have booted AND networking to be up AND sshd to be running AND DNS/route to be sane. Any of those can be the bug you're trying to diagnose. UART shows you the truth from boot onward. Only switch to SSH if I explicitly opt out of UART, or after UART has confirmed the device is healthy enough that SSH is reliable.",
+              "",
+              "**Serial parameters are canonical, not negotiable.** 115200 baud, 8N1, no flow control is the default for every Avocado target. `get-device-connection-info` returns the exact values and any per-target caveats. Do NOT ask me to confirm baud/parity/data-bits — read the tool output and use it directly.",
+              "",
+              "**Login handling on a fresh UART session.** If `tmux capture-pane` shows a `login:` prompt, send `root` then Enter — the `dev` runtime has a passwordless root account. If you already see a `#` prompt, you're in; don't re-login. Do NOT send diagnostic commands before checking for a login prompt — they'll be typed as the username and fail.",
+              "",
+              "**Conserve tokens aggressively when reading from the UART session.** Every captured line costs context. Strict rules:",
+              "  - **Always bound `journalctl`** with `--no-pager` AND a tail/since constraint. `journalctl -xeu my-app.service --no-pager | tail -50` or `journalctl -p err -b --no-pager --since '5 min ago'`. Never run unbounded.",
+              "  - **Always bound `dmesg`** with `| tail -30` (or `| grep -i error | tail -20` if symptom-targeted).",
+              "  - **Pipe through `grep` whenever you know what you're looking for.** `grep -i 'failed\\|error\\|denied'` beats reading the whole log.",
+              "  - **`tmux capture-pane -S -200` is the default scrollback window.** Only go higher if you specifically need earlier output and know how many lines back. Don't reflexively use `-S -5000`.",
+              "  - **Never run interactive commands.** No `vi`, `nano`, `htop`, `top`, `less`. They don't return. Use `top -bn1 | head -20` if you need a process snapshot.",
+              "  - **Use `systemctl status <unit> --no-pager -n 20`** to cap the log tail systemctl includes.",
+              "  - **Don't `cat` large files.** Use `head -N`, `tail -N`, or `grep <pattern>`.",
+              "  - **Don't `ls -R` or `find /`.** Target a specific directory.",
+              "  - **Never use `sleep N` with N ≥ 10 to wait for slow things** (boot, service start, long commands). Claude Code blocks long sleeps. Use an `until`-loop on a real condition: `until tmux capture-pane -t avocado-uart -p -S -50 | grep -qE 'login:|root@|# $'; do sleep 2; done`. If the Monitor tool is available, run the loop through it so you're notified on exit instead of blocking a turn. Short `sleep 1` / `sleep 2` between send-keys and capture is fine (synchronization beat, not a wait).",
+              "",
               "Please follow this flow:",
               "",
-              "1. Read the `avocado://skills/device-debugging` resource to understand the two channels (UART default, SSH alternative).",
-              "2. Read `avocado://skills/avocado-runtime-details` so you know what tools the device actually has (BusyBox vs GNU, systemd is full, etc.).",
-              "3. Default to UART. Read `avocado://skills/tmux-uart-bridge` for the exact pattern.",
-              "4. Call `detect-serial-ports`. This returns BOTH the candidate ports AND which serial terminal emulators (`tio`, `picocom`, `minicom`) are installed. If none is installed, stop and ask the user to install one (recommend `tio`) — tmux alone cannot talk to a serial device.",
-              "5. Call `get-device-connection-info` for the target's baud / pinout / credentials.",
-              "6. Call `get-tmux-uart-snippet` with the chosen `emulator` (pick whichever is installed; preference tio > picocom > minicom) and run the returned `tmux new-session` command in Bash to bridge the console.",
-              "7. Send the standard diagnostic battery into the session and capture results: `systemctl --failed`, `journalctl -p err -b --no-pager | tail -50`, `dmesg --color=never | tail -30`, and anything tailored to the symptom.",
-              "8. If the user later wants more comfortable interactive work and confirms the device has an IP, switch to SSH (`ssh root@<host> '<command>'` via Bash directly — no MCP tool needed).",
+              "1. Read the `avocado://skills/device-debugging` resource (UART-first rationale + when SSH is appropriate).",
+              "2. Read `avocado://skills/tmux-uart-bridge` for the exact tmux-over-emulator pattern.",
+              "3. Read `avocado://skills/avocado-runtime-details` so you know what tools the device actually has (BusyBox vs GNU, systemd is full, etc.).",
+              "4. Call `detect-serial-ports`. This returns BOTH the candidate ports AND which serial terminal emulators (`tio`, `picocom`, `minicom`) are installed. If none is installed, stop and ask me to install one (recommend `tio`) — tmux alone cannot talk to a serial device.",
+              "5. Call `get-device-connection-info` to get the target's exact serial parameters (baud, voltage, pinout) and credentials. Use these as-is.",
+              "6. Call `get-tmux-uart-snippet` with the chosen `emulator` (preference tio > picocom > minicom) and run the returned `tmux new-session` command in Bash to bridge the console.",
+              "7. Send the standard diagnostic battery into the session and capture results: `systemctl --failed`, `systemctl status <suspect-unit> --no-pager -n 30`, `journalctl -xeu <suspect-unit> --no-pager -b | tail -100`, `journalctl -p err -b --no-pager | tail -50`, `dmesg --color=never | tail -30`, and anything tailored to the symptom.",
+              "8. **If on-device logs don't explain the symptom, iterate on the project itself.** You have full edit access to the app source under `app/` in the user's project. Common moves: escalate log level to DEBUG (Python `logging.basicConfig`, Rust `RUST_LOG=debug` via the systemd unit, Node `LOG_LEVEL=debug`), add targeted log statements at suspect lines, or change the systemd unit's `ExecStart` to pass `--verbose`. Then rebuild + redeploy with the `/build-and-deploy` prompt (or `avocado build --no-tui && avocado deploy -r dev -d <ip> --no-tui` directly), restart the unit on the device, reproduce the symptom, and re-read the logs. See `avocado://skills/device-debugging` for per-language recipes. **Always clean up debug logging** before declaring the fix done.",
+              "9. **Only after** the above confirms the device is reachable + healthy enough, AND if I want more comfortable interactive work, switch to SSH (`ssh root@<host> '<command>'` via Bash directly — no MCP tool needed).",
               "",
-              "Summarise findings clearly, with next-step suggestions, after running the diagnostics.",
+              "Summarise findings clearly, with next-step suggestions, after running the diagnostics. If you added debug logging during the session, note what you added and where so I can review or revert.",
             ].join("\n"),
           },
         },
@@ -81,7 +99,7 @@ export function registerPrompts(server: McpServer): void {
               "",
               "Please walk me through recovery:",
               "",
-              "1. If I haven't pasted the log yet, ask for it now.",
+              "1. If I haven't pasted the log yet, ask for it now. **If I have a log file from a prior failed run** (e.g. `/tmp/avocado-install.log` or `/tmp/avocado-build.log`), read it with `Read` or `tail -200`. Don't re-run `avocado install` / `avocado build` just to capture a log — they're slow and noisy. Use what's already on disk.",
               "2. Call `explain-build-error` with the log AND `targets` set to mine. The tool will: (a) match against pattern fingerprints, (b) extract failing package names and look them up across both `edge` and `apollo` channels.",
               "3. **If the result includes any `Hook script:` pattern, branch HERE — this is a user-code failure, not an Avocado bug.** Read `avocado://skills/extension-build-debugging`. Then: (a) Read the failing hook file (path is in the error) at the indicated line. (b) Call `get-reference-file` on a closely related reference's same hook (e.g. `python-flask/app-install.sh`) to compare patterns. (c) Apply the fix from the skill's failure-mode table. Do NOT continue with SDK / cross-channel investigation — those don't apply to hook failures.",
               "4. If the package investigation says 'present on both channels' or 'only on edge' AND the log mentions `libc` / `GLIBC` / SONAMEs, this points at host-arch / arch-metadata. Run `uname -m` and `sw_vers` (or `lsb_release -a`) via Bash to capture my host details, then advise on host swap (e.g. x86_64 Linux for aarch64-broken paths).",
@@ -96,6 +114,97 @@ export function registerPrompts(server: McpServer): void {
         },
       ],
     }),
+  );
+
+  server.prompt(
+    "build-and-deploy",
+    "Build the current Avocado OS project and push it to a running device — fully automated. Optimised loop: tries `avocado build` first; only falls back to `avocado install -f` if the build fails with a missing-package signal. Then `avocado deploy -r <runtime> -d <device>` and on-device verification. This is the canonical iteration loop after the first provision; the user shouldn't need to copy-paste commands.",
+    {
+      device: z
+        .string()
+        .optional()
+        .describe(
+          "Device address as `[user@]host[:port]` (e.g. '192.168.1.42', 'root@avocado-rpi5.local', '10.0.0.5:2222'). If omitted, ask the user before proceeding.",
+        ),
+      runtime: z
+        .string()
+        .optional()
+        .describe(
+          "Runtime name from `avocado.yaml`'s `runtimes:` map. Defaults to 'dev' if not provided. Inspect the YAML to confirm the runtime exists before running.",
+        ),
+      target: z
+        .string()
+        .optional()
+        .describe(
+          "Target architecture override. Usually inferred from `default_target` in the YAML or the `AVOCADO_TARGET` env var; only pass this if you need to override.",
+        ),
+      forceInstall: z
+        .boolean()
+        .optional()
+        .describe(
+          "If true, run `avocado install -f` unconditionally before building. Default false — the prompt tries `avocado build` first and only runs install if the build fails with a signal that install is needed (missing package, unresolved extension). Set this to true when you KNOW the user has just edited the YAML to add packages/extensions and want to short-circuit the build-fail-retry roundtrip.",
+        ),
+    },
+    ({ device, runtime, target, forceInstall }) => {
+      const r = runtime ?? "dev";
+      return {
+        messages: [
+          {
+            role: "user",
+            content: {
+              type: "text",
+              text: [
+                `Build and deploy my Avocado OS project to ${device ? `\`${device}\`` : "my device"}.${target ? ` Target override: \`${target}\`.` : ""}`,
+                "",
+                "**Do this fully automated** — don't just print commands for me to run. Use your Bash tool to execute each step and report progress between them.",
+                "",
+                "**Collect and filter the `avocado` CLI's own output. Do not inspect its internals.** The `avocado` CLI (`install` / `build` / `deploy`) is the orchestrator and the single source of truth for what happened: it prints the meaningful result — success, failure, specific package errors — to its own stdout/stderr. Run the `avocado ...` command, wait for it to exit, and read the exit code + what it printed. Whatever internal mechanism the CLI uses to do the work (today: a Docker SDK container; in the future: possibly something else) is an implementation detail that's NOT part of your contract with it. Never try to peek into the SDK container, never tail Docker logs, never `docker logs` / `docker ps` / `docker exec` to second-guess the CLI. Those approaches are racy, noisy, and will break when the implementation changes.",
+                "",
+                "**Always pass `--no-tui`** to `avocado install` / `avocado build` / `avocado deploy` when running under Bash with captured output. The default TUI renders status spinners, redraws, and ANSI escape sequences that turn a captured log file into garbage. `--no-tui` produces line-oriented stdout that `tail` and `grep` actually work on. Only omit the flag if a human is running the command directly in their own terminal — never when the LLM is collecting output.",
+                "",
+                "**Filter the noise — `avocado install` and `avocado build` are extremely verbose.** Hundreds of lines of package resolution, downloads, compile output. Pulling the full output into your context burns tokens you don't need. Use this pattern for every `avocado install` / `avocado build` invocation:",
+                "",
+                "```bash",
+                "# Capture full output to a file, surface only what matters",
+                "avocado install -f --no-tui > /tmp/avocado-install.log 2>&1",
+                "INSTALL_RC=$?",
+                'echo "exit: $INSTALL_RC"',
+                "tail -40 /tmp/avocado-install.log",
+                "echo '---errors---'",
+                "grep -iE 'error|failed|nothing provides|broken' /tmp/avocado-install.log | tail -40 || true",
+                "```",
+                "",
+                "Read those three slices (exit code, tail, grepped errors). The full log stays on disk at `/tmp/avocado-install.log` (and `/tmp/avocado-build.log` for build) and you only need to load more if the diagnosis isn't obvious. If `explain-build-error` needs more context, pass it the file contents — don't re-run the build.",
+                "",
+                "1. Read `avocado://skills/iterative-deployment` for the full mechanics if you haven't already.",
+                device
+                  ? `2. Confirm the device at \`${device}\` is reachable: \`ping -c 1\` (timeout 2s) and \`ssh -o ConnectTimeout=5 -o BatchMode=yes root@${device.replace(/^[^@]+@/, "").replace(/:.*$/, "")} true\` (the second one is the load-bearing check — \`avocado deploy\` needs sshd). If unreachable, stop and tell me what failed; don't keep going.`
+                  : `2. Ask me for the device IP / hostname if I haven't provided one. Then confirm it's reachable: \`ping -c 1\` (timeout 2s) and \`ssh -o ConnectTimeout=5 -o BatchMode=yes root@<host> true\`. If unreachable, stop and tell me what failed.`,
+                `3. Verify the project's \`avocado.yaml\` exists in CWD and that the \`${r}\` runtime is declared under \`runtimes:\` (use \`list-yaml-extensions\` or read the file directly). If the runtime isn't there, ask me which runtime to use.`,
+                forceInstall
+                  ? `4. **Install forced.** Run \`avocado install -f --no-tui\` with the redirect-to-file pattern above. Status: \`✅ install succeeded\` or \`❌ install failed (exit N)\`. If failed, surface the top errors, pass the log to \`explain-build-error\` with my target, and STOP.`
+                  : `4. **Skip install — start with build.** \`avocado install\` is the slow part of the loop and is NOT needed when only source files / overlays / hook scripts have changed. The default is to skip it. Only run install if step 5 (build) tells us it's needed.`,
+                `5. Run \`avocado build --no-tui\` with the redirect-to-file pattern. Status: \`✅ build succeeded — image at <path if shown>\` or \`❌ build failed (exit N)\`.
+
+   **If build failed, decide:** does the grepped error look like a missing-package / unresolved-extension / "needs install" signal? Specifically: \`nothing provides X\`, \`no package matching\`, \`package X not found\`, \`unable to find a match\`, or an explicit CLI message asking the user to run \`avocado install\`?
+
+   - **If yes (install needed):** tell the user \`🔄 build failed because of a missing dependency — running install and retrying\`, then run \`avocado install -f --no-tui > /tmp/avocado-install.log 2>&1\`. Report install ✅/❌. If install succeeded, re-run \`avocado build --no-tui\` and report build ✅/❌ again. If the retried build still fails, surface to \`explain-build-error\` and STOP — don't proceed to deploy.
+   - **If no (real build error):** pass the log to \`explain-build-error\` with my target and STOP — running install won't help. Don't proceed to deploy.`,
+                `6. Run \`avocado deploy -r ${r} ${device ? `-d ${device}` : "-d <device>"}${target ? ` -t ${target}` : ""} --no-tui\`. The deploy is staged via a local HTTP server and SSH-triggered on the device. Status: \`✅ deploy succeeded — pushed runtime '${r}' to <device>\` or \`❌ deploy failed (exit N)\`. If it failed mid-stream, name the stage that failed (TUF metadata generation, HTTP server bind, SSH to device, \`avocadoctl runtime add\` on device).`,
+                `7. **Verify on the device.** Use whatever channel is already established (UART tmux session or SSH). Targeted check: \`systemctl is-active <relevant-unit>\`, \`rpm -q <newly-added-package>\`, or whatever fits the change just deployed. Bound your output (\`--no-pager -n 20\`, \`| tail -20\`) per the token-discipline rules in \`avocado://skills/tmux-uart-bridge\`. Status: \`✅ <unit> active\` / \`❌ <unit> failed: <reason>\`.`,
+                `8. Final summary paragraph: confirm build ✅/❌ (and install ✅/❌ if it was run), deploy ✅/❌, on-device verification ✅/❌. Call out anything the user should test manually next.`,
+                "",
+                "**Status reporting is not optional.** After every \`avocado\` command (install, build, deploy), and after on-device verification, you must surface a one-line ✅/❌ status to the user before moving on. The user is watching for these to know whether to stay attentive or step away. A silent run that just ends with a summary at step 8 is a regression — fix it.",
+                "",
+                "**Failure handling:** stop at the first failed step. Don't paper over an install failure by deploying anyway; don't paper over a deploy failure by claiming success. If something breaks, surface the actual error and the diagnostic tool to use next.",
+              ]
+                .filter((s) => s !== "")
+                .join("\n"),
+            },
+          },
+        ],
+      };
+    },
   );
 
   server.prompt(
@@ -127,7 +236,7 @@ export function registerPrompts(server: McpServer): void {
               "5. Call `init-project` with the chosen `target` AND `task` (my task in my own words). The tool will search the reference catalog first and prefer a matching reference — that's almost always faster than from-scratch. If a reference is shown with ⚠️ unlisted compatibility for my target, surface that warning to me; references not tested on my hardware may need extra debugging. If `init-project` returns a reference scaffold command, also call `get-reference` for that slug so you understand what it sets up before suggesting edits.",
               "6. Call `get-provisioning-steps` so I know exactly which `avocado provision` invocation to run for my target.",
               "",
-              "Finish by giving me the exact commands I should run next: `avocado install` (resolves packages, required before build), then `avocado build`, then the provisioning command. Explain what each does and what to expect.",
+              "Finish by giving me the exact commands I should run next: `avocado install` (resolves packages, required before build), then `avocado build`, then the provisioning command. Explain what each does and what to expect. **Also tell me** about the faster iteration loop for after the first provision: once the device is on the network, `avocado deploy -r dev -d <device-ip>` pushes subsequent changes in seconds without re-flashing — see `avocado://skills/iterative-deployment`.",
             ].join("\n"),
           },
         },
