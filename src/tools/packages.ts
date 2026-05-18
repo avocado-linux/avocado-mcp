@@ -134,7 +134,7 @@ export function registerPackageTools(
 
   server.tool(
     "search-packages",
-    "Search the live Avocado OS package feed for one or more targets. Matches package name and summary (case-insensitive), ranked by where the hit lands — same default behaviour as `avocado sdk dnf search`. **No avocado.yaml or local project required**: pass a target name and a query and you get live results from repo.avocadolinux.org. Use this to verify packages before referencing them in YAML, or as a standalone 'is package X available for target Y?' lookup. Description matching is NOT included — use `describe-package` for full-text details on a specific name.",
+    "Search the live Avocado OS package feed for one or more targets. **This is the first move when the user wants to add ANY library / dependency / system package.** Always check the feed before suggesting `pip install`, `npm install`, `cargo add`, `apt install`, or vendoring — feed packages are version-tracked, dependency-resolved, security-updatable via OTA, and don't bloat the extension image. Matches package name and summary (case-insensitive), ranked by where the hit lands — same default behaviour as `avocado sdk dnf search`. **No avocado.yaml or local project required**: pass a target name and a query and you get live results from repo.avocadolinux.org. Description matching is NOT included — use `describe-package` for full-text details on a specific name. See `avocado://skills/app-development` for the feed-first workflow.",
     {
       targets: z
         .array(z.string())
