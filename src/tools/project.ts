@@ -10,9 +10,10 @@ import {
 } from "../lib/yaml-ops.js";
 import { RepoClient } from "../lib/repo-client.js";
 import {
-  searchReferences,
-  type ReferenceEntry,
+  searchReferencesScored,
+  type ScoredReference,
 } from "../lib/references-client.js";
+import { resolveTarget } from "../lib/target-resolver.js";
 
 export function registerProjectTools(
   server: McpServer,
@@ -61,22 +62,23 @@ export function registerProjectTools(
     }) => {
       const validTargets = await repoClient.getTargetsConfig();
       if (validTargets && !validTargets[target]) {
-        const sample = Object.keys(validTargets).slice(0, 8).join(", ");
-        return {
-          content: [
-            {
-              type: "text",
-              text: `# init-project failed\n\nTarget \`${target}\` is not in targets.json. Examples of valid targets: ${sample}. Run \`list-targets\` for the full list.`,
-            },
-          ],
-        };
+        const allTargets = Object.keys(validTargets);
+        const fuzzy = resolveTarget(target, allTargets).slice(0, 5);
+        let body = `# init-project failed\n\n❌ \`${target}\` is **not a supported Avocado OS target**. The MCP only operates on targets that exist in the live feed.\n\n`;
+        if (fuzzy.length > 0) {
+          body += `**Did you mean:** ${fuzzy.map((t) => `\`${t}\``).join(", ")}?\n\n`;
+        }
+        body += `**Supported targets (${allTargets.length}):** ${allTargets
+          .sort()
+          .map((t) => `\`${t}\``)
+          .join(", ")}\n\n`;
+        body += `If the user's hardware isn't on this list, **tell them it's not currently supported** — don't try to substitute a "close enough" target without their explicit confirmation. Use \`list-targets({ query: "..." })\` to search by user-supplied hardware names.`;
+        return { content: [{ type: "text", text: body }] };
       }
 
       // Reference path — try this first unless explicitly skipped.
       if (!forceFromScratch) {
-        const matches = task
-          ? searchReferences(task, target)
-          : searchReferences("", target);
+        const matches = searchReferencesScored(task ?? "", target);
         if (matches.length > 0) {
           return {
             content: [
@@ -403,41 +405,50 @@ export function registerProjectTools(
 function renderReferenceMatch(
   target: string,
   task: string | undefined,
-  matches: ReferenceEntry[],
+  matches: ScoredReference[],
 ): string {
-  const top = matches[0];
-  const rest = matches.slice(1, 5);
+  function compatibilityBadge(c: ScoredReference["compatibility"]): string {
+    if (c === "listed") return `✅ listed for \`${target}\``;
+    if (c === "generic") return "🟢 generic (any target)";
+    return `⚠️ unlisted for \`${target}\``;
+  }
 
-  let out = `# init-project — \`${target}\` (reference match)\n\n`;
+  const candidates = matches.slice(0, 8);
+
+  let out = `# init-project — \`${target}\` (reference candidates)\n\n`;
   out += task
     ? `Task: _"${task}"_\n\n`
-    : `(No task provided — listing references compatible with \`${target}\`.)\n\n`;
-  out += `✅ Found ${matches.length} matching reference${matches.length === 1 ? "" : "s"}. References are pre-built and verified; use one instead of scaffolding from scratch unless the user has a strong reason not to.\n\n`;
+    : `(No task provided — listing references with summaries.)\n\n`;
+  out += `Found **${matches.length}** candidate reference${matches.length === 1 ? "" : "s"} matching the query. **Do NOT auto-pick the first one.** The MCP ranks by query-token relevance only — it does NOT know which candidate is the best fit for the user's actual task. **You must read each candidate's getting_started.md before picking** — that's where authors document what the reference actually does, what hardware they've tested it on, and what trade-offs they made.\n\n`;
 
-  out += `## Best fit: \`${top.slug}\`\n\n`;
-  out += `**Title:** ${top.title}  •  **Language:** ${top.language}  •  **Hardware:** ${top.hardware.length ? top.hardware.join(", ") : "generic"}\n\n`;
-  out += `${top.summary}\n\n`;
-  out += `### Scaffold it\n\n`;
+  out += `## Selection workflow\n\n`;
+  out += `1. Review the candidates below (title + summary + compatibility tag).\n`;
+  out += `2. For each plausible candidate, call \`get-reference-file({ slug: "<slug>", path: "getting_started.md" })\` and read it.\n`;
+  out += `3. Pick the candidate that best matches the user's task. **Compatibility tags are informational, not prescriptive** — an unlisted reference may still work after BSP edits; a listed one may be over-specialised for the task. Use the getting_started content to decide.\n`;
+  out += `4. Tell the user which one you picked and why before running the scaffold command.\n\n`;
+
+  out += `## Candidates\n\n`;
+  out += `| Slug | Title | Language | Compatibility | Summary |\n|------|-------|----------|---------------|---------|\n`;
+  for (const c of candidates) {
+    out += `| \`${c.entry.slug}\` | ${c.entry.title} | ${c.entry.language} | ${compatibilityBadge(c.compatibility)} | ${c.entry.summary} |\n`;
+  }
+  out += `\n`;
+
+  out += `## Compatibility tag meanings\n\n`;
+  out += `- **✅ listed** — reference authors tested it on this target. Lowest risk.\n`;
+  out += `- **🟢 generic** — reference has no hardware list; works on any target with a valid BSP.\n`;
+  out += `- **⚠️ unlisted** — reference targets *other* hardware, not this one. May still work but isn't tested for \`${target}\`. **Tell the user up front** if you pick one of these.\n\n`;
+
+  out += `## Once you've picked a candidate\n\n`;
+  out += `Replace \`<slug>\` with your chosen reference's slug from the table:\n\n`;
   out += "```bash\n";
-  out += `avocado init -t ${target} --reference ${top.slug} ${top.slug} && cd ${top.slug}\n`;
-  out += "```\n\n";
-  out += `This clones the reference project into \`./${top.slug}/\` and sets \`default_target\` to \`${target}\` in its \`avocado.yaml\`. Then:\n\n`;
-  out += "```bash\n";
+  out += `avocado init --target ${target} --reference <slug> <slug> && cd <slug>\n`;
   out += `avocado install -f\n`;
   out += `avocado build\n`;
   out += "```\n\n";
-  out += `Call \`get-reference\` with slug \`${top.slug}\` to see its full structure (file tree, \`avocado.yaml\`, overlays, build hooks) before suggesting edits.\n\n`;
+  out += `The first command clones the reference project into \`./<slug>/\` and sets \`default_target\` to \`${target}\` in its \`avocado.yaml\`.\n\n`;
 
-  if (rest.length > 0) {
-    out += `## Other matches\n\n`;
-    out += `| Slug | Title | Language | Summary |\n|------|-------|----------|---------|\n`;
-    for (const r of rest) {
-      out += `| \`${r.slug}\` | ${r.title} | ${r.language} | ${r.summary} |\n`;
-    }
-    out += `\n`;
-  }
-
-  out += `_If none of these are a fit, call \`init-project\` again with \`forceFromScratch: true\` to get a blank starter YAML._\n`;
+  out += `_If after reading getting_started.md none of these fit, call \`init-project\` again with \`forceFromScratch: true\` to get a blank starter YAML._\n`;
   return out;
 }
 

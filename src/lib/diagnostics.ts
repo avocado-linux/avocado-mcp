@@ -277,7 +277,23 @@ export async function investigatePackages(
   return Promise.all(tasks);
 }
 
-function renderInvestigation(inv: PackageInvestigation): string {
+const ARCH_MISMATCH_FINGERPRINT =
+  /\bGLIBC[_\d.]+|\blibc\.so\.\d+\(GLIBC|SONAME|\bILP32\b/;
+
+const ARCH_MISMATCH_WORKAROUND = [
+  `**Vetted workarounds (in order of reliability):**`,
+  ``,
+  `1. **Switch to an x86_64 Linux host** to run \`avocado install\` / \`avocado build\`. This is the single most reliable fix when the SDK feed's aarch64 metadata is broken. Native Linux x86_64 or an Intel-CPU Mac both work; Apple Silicon + Rosetta 2 does NOT work.`,
+  `2. **Try \`distro.channel: apollo\`** in your \`avocado.yaml\` and re-run \`avocado install\`. Even if the package shows "not found" above, sometimes the apollo feed has a different package layout — worth one attempt.`,
+  `3. **Pin to an older release** by setting \`distro.release: 2023\` (or similar) — only if the user knows a prior release worked for this hardware. Sometimes the regression is recent.`,
+  ``,
+  `**Do NOT** suggest \`--sdk-arch\`, \`--platform\`, or any other \`avocado install\` flag for arch override — no such flag exists. Verify any flag with \`avocado install --help\` before recommending.`,
+].join("\n");
+
+function renderInvestigation(
+  inv: PackageInvestigation,
+  archMismatchSuspected: boolean,
+): string {
   const edgeLine = inv.edgeError
     ? `error — ${inv.edgeError}`
     : inv.edge.length > 0
@@ -294,13 +310,23 @@ function renderInvestigation(inv: PackageInvestigation): string {
   out += `- **apollo / 2024:** ${apolloLine}\n\n`;
 
   if (inv.edge.length > 0 && inv.apollo.length > 0) {
-    out += `Present on both channels — the error is likely a broken transitive dep or arch-specific metadata, not a missing top-level package. Check host arch (\`uname -m\`); if the error mentions \`libc\`/\`GLIBC\`/SONAMEs, an upstream metadata bug on this arch is the usual culprit. Workarounds: try the other channel anyway (\`distro.channel\`), or use a host whose arch matches the SDK image.\n`;
+    out += `Present on both channels — the error is likely a broken transitive dep or arch-specific metadata, not a missing top-level package.\n`;
+    if (archMismatchSuspected) {
+      out += `\nThe log fingerprints as an **arch / SDK metadata mismatch** (mentions \`libc\` / \`GLIBC\` / SONAMEs). ${ARCH_MISMATCH_WORKAROUND}\n`;
+    } else {
+      out += `Check host arch (\`uname -m\`); if the error mentions \`libc\`/\`GLIBC\`/SONAMEs, an upstream metadata bug on this arch is the usual culprit.\n`;
+    }
   } else if (
     inv.edge.length > 0 &&
     inv.apollo.length === 0 &&
     !inv.apolloError
   ) {
-    out += `Only on edge. Switching channel is not an option here. If install fails, the package itself exists — the cause is upstream (broken transitive dep, arch mismatch). Check host arch (\`uname -m\`); if the log mentions \`libc\`/\`GLIBC\`/SONAMEs, an upstream metadata bug for this arch is the usual culprit.\n`;
+    out += `Only on edge. Switching channel is not an option for this package. If install fails, the package itself exists — the cause is upstream.\n`;
+    if (archMismatchSuspected) {
+      out += `\nThe log fingerprints as an **arch / SDK metadata mismatch** (mentions \`libc\` / \`GLIBC\` / SONAMEs). ${ARCH_MISMATCH_WORKAROUND}\n`;
+    } else {
+      out += `Check host arch (\`uname -m\`); if the log mentions \`libc\`/\`GLIBC\`/SONAMEs, an upstream metadata bug for this arch is the usual culprit.\n`;
+    }
   } else if (inv.apollo.length > 0 && inv.edge.length === 0 && !inv.edgeError) {
     out += `Only on apollo. Set \`distro.channel: apollo\` in your \`avocado.yaml\` and re-run \`avocado install\`.\n`;
   } else if (!inv.edgeError && !inv.apolloError) {
@@ -333,9 +359,11 @@ export function renderDiagnoses(
   kind: "build" | "provision",
   diagnoses: Diagnosis[],
   investigations?: PackageInvestigation[],
-  investigationContext?: { targets: string[] },
+  investigationContext?: { targets: string[]; rawLog?: string },
 ): string {
-  let out = `# diagnose-${kind}-log\n\n`;
+  const headerName =
+    kind === "build" ? "explain-build-error" : "diagnose-provision-log";
+  let out = `# ${headerName}\n\n`;
 
   if (diagnoses.length === 0) {
     out += `No known failure pattern matched. The log may contain a novel error. Common things to check manually:\n\n`;
@@ -359,10 +387,13 @@ export function renderDiagnoses(
   }
 
   if (kind === "build" && investigations && investigations.length > 0) {
+    const archMismatchSuspected = investigationContext?.rawLog
+      ? ARCH_MISMATCH_FINGERPRINT.test(investigationContext.rawLog)
+      : false;
     out += `## Package investigation (across channels)\n\n`;
     out += `_Queried targets: ${investigationContext?.targets.map((t) => `\`${t}\``).join(", ") ?? "(none)"}._\n\n`;
     for (const inv of investigations) {
-      out += renderInvestigation(inv);
+      out += renderInvestigation(inv, archMismatchSuspected);
     }
   } else if (
     kind === "build" &&

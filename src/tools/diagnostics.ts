@@ -72,6 +72,7 @@ export function registerDiagnosticsTools(
             type: "text",
             text: renderDiagnoses("build", diagnoses, investigations, {
               targets,
+              rawLog: log,
             }),
           },
         ],
@@ -113,7 +114,18 @@ export function registerDiagnosticsTools(
       }
 
       const profile = guessProfile(target);
+      const isQemu = target.startsWith("qemu");
       let out = `# Provisioning \`${target}\`\n\n`;
+
+      if (!isQemu) {
+        out += `## ⚠️  HARDWARE REQUIRED: USB-to-UART adapter\n\n`;
+        out += `Provisioning AND debugging an Avocado OS device requires a **USB-to-UART adapter wired into the device's debug UART**. This is a hard prerequisite — without it the user cannot see boot output, cannot recover from boot failures, and cannot drive the device for diagnostics. **Before recommending any provision command, confirm the user has the adapter connected.**\n\n`;
+        out += `If the user doesn't have an adapter, point them at \`avocado://skills/device-debugging\` and \`avocado://skills/tmux-uart-bridge\` for setup, or suggest they start with a QEMU target instead (\`qemuarm64\`, \`qemux86-64\`) which doesn't need physical hardware.\n\n`;
+      } else {
+        out += `## QEMU target — no UART adapter needed\n\n`;
+        out += `\`${target}\` runs in a VM; the serial console comes directly to the launching terminal. See the \`qemu-quickstart\` reference for the full flow.\n\n`;
+      }
+
       out += `**Profile:** \`${profile.profile}\`\n`;
       out += `**Media:** ${profile.media}\n`;
       out += `**Host OS supported:** ${profile.hostOs.join(", ")}\n`;

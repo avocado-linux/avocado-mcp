@@ -1,0 +1,277 @@
+/**
+ * BM25-ish full-text search over the docs corpus.
+ *
+ * Approach:
+ *   1. Tokenize query and each doc (lowercase, split on non-word, drop short
+ *      tokens and a small English stoplist).
+ *   2. Build document statistics on demand (corpus is small enough — ~140
+ *      docs, ~10k unique tokens — that we don't bother persisting an index).
+ *   3. Score with classic BM25 (k1=1.5, b=0.75) over a weighted bag-of-words:
+ *      title × 5, description × 3, path × 2, body × 1.
+ *   4. For top hits, return a line-anchored excerpt around the first match.
+ *
+ * Why not Elastic / lunr / FlexSearch: 140 docs is tiny; any of those adds
+ * setup, dependencies, persistence concerns. A few hundred lines of TS beats
+ * pulling a vendor.
+ */
+
+import { listDocs, fetchDocContent, type DocEntry } from "./docs-client.js";
+
+interface DocVec {
+  entry: DocEntry;
+  /** weighted term-frequency counts */
+  tf: Map<string, number>;
+  /** total weighted term count (denominator for BM25 normalization) */
+  length: number;
+  /** raw body for excerpt rendering */
+  body: string;
+}
+
+interface IndexState {
+  indexedAt: number;
+  docs: DocVec[];
+  /** Document Frequency per term — number of docs containing each token. */
+  df: Map<string, number>;
+  /** Average doc length (weighted), for BM25 normalization. */
+  avgLength: number;
+}
+
+const STOPWORDS = new Set([
+  "a",
+  "an",
+  "and",
+  "are",
+  "as",
+  "at",
+  "be",
+  "by",
+  "for",
+  "from",
+  "has",
+  "have",
+  "he",
+  "in",
+  "is",
+  "it",
+  "its",
+  "of",
+  "on",
+  "or",
+  "she",
+  "that",
+  "the",
+  "this",
+  "to",
+  "was",
+  "were",
+  "will",
+  "with",
+  "you",
+  "your",
+  "i",
+  "we",
+  "they",
+  "them",
+  "us",
+  "but",
+  "not",
+  "no",
+  "if",
+  "do",
+  "does",
+  "did",
+  "would",
+  "could",
+  "should",
+  "may",
+  "can",
+  "into",
+  "than",
+  "then",
+  "so",
+  "such",
+  "also",
+  "via",
+  "etc",
+]);
+
+const TITLE_WEIGHT = 5;
+const DESC_WEIGHT = 3;
+const PATH_WEIGHT = 2;
+const BODY_WEIGHT = 1;
+
+const K1 = 1.5;
+const B = 0.75;
+const INDEX_TTL_MS = 30 * 60 * 1000; // refresh index every 30 min at most
+
+let indexCache: IndexState | null = null;
+let pendingIndex: Promise<IndexState> | null = null;
+
+function tokenize(text: string): string[] {
+  if (!text) return [];
+  const out: string[] = [];
+  for (const raw of text.toLowerCase().split(/[^\w]+/)) {
+    if (!raw) continue;
+    if (raw.length < 2) continue;
+    if (STOPWORDS.has(raw)) continue;
+    out.push(raw);
+  }
+  return out;
+}
+
+function addWeighted(
+  tf: Map<string, number>,
+  text: string,
+  weight: number,
+): number {
+  let added = 0;
+  for (const tok of tokenize(text)) {
+    tf.set(tok, (tf.get(tok) ?? 0) + weight);
+    added += weight;
+  }
+  return added;
+}
+
+async function buildIndex(): Promise<IndexState> {
+  const docs = await listDocs();
+  const vecs: DocVec[] = [];
+  const df = new Map<string, number>();
+
+  for (const d of docs) {
+    let body = "";
+    try {
+      body = await fetchDocContent(d);
+    } catch {
+      body = "";
+    }
+    const tf = new Map<string, number>();
+    let length = 0;
+    length += addWeighted(tf, d.title, TITLE_WEIGHT);
+    length += addWeighted(tf, d.description, DESC_WEIGHT);
+    length += addWeighted(tf, d.sitePath, PATH_WEIGHT);
+    length += addWeighted(tf, body, BODY_WEIGHT);
+
+    // DF: count distinct tokens once per doc
+    const seen = new Set<string>();
+    for (const tok of tf.keys()) {
+      if (!seen.has(tok)) {
+        df.set(tok, (df.get(tok) ?? 0) + 1);
+        seen.add(tok);
+      }
+    }
+    vecs.push({ entry: d, tf, length, body });
+  }
+
+  const total = vecs.reduce((acc, v) => acc + v.length, 0);
+  const avgLength = vecs.length > 0 ? total / vecs.length : 0;
+  return { indexedAt: Date.now(), docs: vecs, df, avgLength };
+}
+
+async function getIndex(): Promise<IndexState> {
+  const now = Date.now();
+  if (indexCache && now - indexCache.indexedAt < INDEX_TTL_MS) {
+    return indexCache;
+  }
+  if (pendingIndex) return pendingIndex;
+  pendingIndex = (async () => {
+    const idx = await buildIndex();
+    indexCache = idx;
+    pendingIndex = null;
+    return idx;
+  })();
+  return pendingIndex;
+}
+
+export interface SearchHit {
+  entry: DocEntry;
+  score: number;
+  excerpt: string;
+}
+
+export async function searchDocs(
+  query: string,
+  opts?: { section?: DocEntry["section"]; maxResults?: number },
+): Promise<SearchHit[]> {
+  const tokens = tokenize(query);
+  if (tokens.length === 0) return [];
+
+  const idx = await getIndex();
+  const N = idx.docs.length;
+  if (N === 0) return [];
+
+  // Precompute IDF per query token.
+  const idf = new Map<string, number>();
+  for (const tok of tokens) {
+    const n = idx.df.get(tok) ?? 0;
+    // BM25 idf with +1 smoothing — never negative for our small corpus.
+    idf.set(tok, Math.log(1 + (N - n + 0.5) / (n + 0.5)));
+  }
+
+  const scored: SearchHit[] = [];
+  for (const v of idx.docs) {
+    if (opts?.section && v.entry.section !== opts.section) continue;
+
+    let score = 0;
+    for (const tok of tokens) {
+      const tf = v.tf.get(tok);
+      if (!tf) continue;
+      const w = idf.get(tok) ?? 0;
+      const norm =
+        idx.avgLength > 0 ? 1 - B + B * (v.length / idx.avgLength) : 1;
+      score += w * ((tf * (K1 + 1)) / (tf + K1 * norm));
+    }
+    if (score <= 0) continue;
+    scored.push({
+      entry: v.entry,
+      score,
+      excerpt: makeExcerpt(v.body, tokens),
+    });
+  }
+
+  scored.sort((a, b) => b.score - a.score);
+  const max = opts?.maxResults ?? 5;
+  return scored.slice(0, max);
+}
+
+/**
+ * Produce a short excerpt around the first line containing any query token.
+ * Falls back to the first 200 chars of the body when no match is found
+ * (the doc scored on title/path/desc but the body doesn't contain the literal tokens).
+ */
+function makeExcerpt(body: string, tokens: string[]): string {
+  if (!body) return "";
+  // Strip frontmatter for readability.
+  let text = body;
+  if (text.startsWith("---")) {
+    const end = text.indexOf("\n---", 4);
+    if (end !== -1) text = text.slice(end + 4).replace(/^\r?\n/, "");
+  }
+  const lines = text.split(/\r?\n/);
+  const re = new RegExp(
+    `\\b(${tokens.map((t) => escapeRe(t)).join("|")})`,
+    "i",
+  );
+  for (let i = 0; i < lines.length; i++) {
+    if (re.test(lines[i])) {
+      const start = Math.max(0, i - 1);
+      const end = Math.min(lines.length, i + 3);
+      return lines
+        .slice(start, end)
+        .join(" ")
+        .replace(/\s+/g, " ")
+        .slice(0, 280)
+        .trim();
+    }
+  }
+  return text.replace(/\s+/g, " ").slice(0, 200).trim();
+}
+
+function escapeRe(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** For tests / external invalidation. */
+export function clearSearchIndex(): void {
+  indexCache = null;
+  pendingIndex = null;
+}

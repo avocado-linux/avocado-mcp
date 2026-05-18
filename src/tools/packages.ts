@@ -1,6 +1,49 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { RepoClient } from "../lib/repo-client.js";
+import { resolveTarget } from "../lib/target-resolver.js";
+
+async function validateTargets(
+  repoClient: RepoClient,
+  targets: string[],
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  const config = await repoClient.getTargetsConfig();
+  if (!config) {
+    return {
+      ok: false,
+      message: `Could not fetch targets.json from repo.avocadolinux.org to validate target names. Check network and try again.`,
+    };
+  }
+  const all = Object.keys(config);
+  const unknown = targets.filter((t) => !config[t]);
+  if (unknown.length === 0) return { ok: true };
+  const lines: string[] = [];
+  for (const u of unknown) {
+    const fuzzy = resolveTarget(u, all).slice(0, 3);
+    if (fuzzy.length > 0) {
+      lines.push(
+        `- \`${u}\` is not a supported target. Did you mean: ${fuzzy.map((t) => `\`${t}\``).join(", ")}?`,
+      );
+    } else {
+      lines.push(`- \`${u}\` is not a supported target.`);
+    }
+  }
+  return {
+    ok: false,
+    message: [
+      `❌ Unsupported target(s):`,
+      ``,
+      ...lines,
+      ``,
+      `**Supported targets (${all.length}):** ${all
+        .sort()
+        .map((t) => `\`${t}\``)
+        .join(", ")}`,
+      ``,
+      `Only these targets are valid. Use \`list-targets({ query: "..." })\` to search.`,
+    ].join("\n"),
+  };
+}
 
 export function registerPackageTools(
   server: McpServer,
@@ -29,6 +72,17 @@ export function registerPackageTools(
         ),
     },
     async ({ targets, name, release, channel }) => {
+      const targetCheck = await validateTargets(repoClient, targets);
+      if (!targetCheck.ok) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `# describe-package failed\n\n${targetCheck.message}`,
+            },
+          ],
+        };
+      }
       try {
         const { results } = await repoClient.searchPackages(
           targets,
@@ -114,6 +168,17 @@ export function registerPackageTools(
         ),
     },
     async ({ targets, query, limit, release, channel }) => {
+      const targetCheck = await validateTargets(repoClient, targets);
+      if (!targetCheck.ok) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `# search-packages failed\n\n${targetCheck.message}`,
+            },
+          ],
+        };
+      }
       try {
         const { totalMatches, results, errors } =
           await repoClient.searchPackages(

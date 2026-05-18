@@ -115,7 +115,10 @@ export function buildStarterYaml(opts: {
   lines.push(`    extensions:`);
   lines.push(`      - avocado-ext-dev`);
   lines.push(`      - avocado-ext-sshd-dev`);
-  lines.push(`      - avocado-bsp-${target}`);
+  // BSP extension uses Jinja templating so a single avocado.yaml works for
+  // every target in `supported_targets`. `{{ avocado.target }}` resolves at
+  // build time to the active target slug (e.g. `avocado-bsp-raspberrypi5`).
+  lines.push(`      - avocado-bsp-{{ avocado.target }}`);
   lines.push(`      - config`);
   lines.push(`      - app`);
   for (const e of extraExt) lines.push(`      - ${e}`);
@@ -133,7 +136,9 @@ export function buildStarterYaml(opts: {
   lines.push(`      type: package`);
   lines.push(`      version: "*"`);
   lines.push(``);
-  lines.push(`  avocado-bsp-${target}:`);
+  // Same templating as in the runtime extension list — the extension key
+  // must match the entry above.
+  lines.push(`  avocado-bsp-{{ avocado.target }}:`);
   lines.push(`    source:`);
   lines.push(`      type: package`);
   lines.push(`      version: "*"`);
