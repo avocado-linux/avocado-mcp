@@ -17,14 +17,15 @@ Avocado OS is a Yocto-based embedded Linux distribution. A working project consi
 - **Docker Desktop** (macOS or Linux). The CLI runs all builds inside the SDK container.
 - **The avocado CLI** installed (\`curl -fsSL https://connect.peridio.com/install.sh | sh\` on macOS or Linux).
 - **~8 GB free disk space** for the SDK container, builds, and image artifacts.
-- **A microSD card / USB drive / NVMe** appropriate to the target's provisioning profile (most targets use SD).
+- **A USB-to-UART adapter** wired into the device's debug UART. **HARD REQUIREMENT** for every non-QEMU target — provisioning and debugging both go through the serial console. Without it, the user can't see boot output, can't recover from failures, and can't diagnose anything on the device. The only exception is QEMU targets (\`qemuarm64\`, \`qemux86-64\`) which run in a VM and don't need physical hardware. If the user doesn't have an adapter, recommend starting with QEMU first.
+- **A microSD card / USB drive / NVMe** appropriate to the target's provisioning profile (most targets use SD). Not needed for QEMU.
 
 ## The happy path
 
 1. **Verify the host.** Run \`environment-check\` first. If the CLI, Docker, or disk space aren't ready, fix that before anything else — every later step assumes the CLI is on PATH.
 2. **Pick a target.** Use \`list-targets\` to see what's supported. Each entry has a \`target\` string the user puts in their \`avocado.yaml\`.
 3. **Scaffold the project.** Call \`init-project\` with the chosen \`target\` and \`task\` (the user's task in their own words — e.g. "python web app", "mqtt sensor", "qemu trial run"). The tool searches the reference catalog first and prefers a matching reference whenever one fits — references are pre-built, verified, working projects, and they save substantial time vs. building YAML from scratch. The tool returns either:
-   - **A reference scaffold command** (\`avocado init -t <target> --reference <slug> <slug> && cd <slug>\`) when a reference matches. Read the reference with \`get-reference\` to understand what it sets up before suggesting edits.
+   - **A reference scaffold command** (\`avocado init --target <target> --reference <slug> <slug> && cd <slug>\`) when a reference matches. Read the reference with \`get-reference\` to understand what it sets up before suggesting edits.
    - **A from-scratch starter YAML** when no reference fits (or when called with \`forceFromScratch: true\`). Use \`add-extension\` / \`add-package-to-extension\` to extend it. Schema-first, package-verified.
 4. **Install packages.** The user runs \`avocado install\` (or \`avocado install -f\` on a fresh scaffold) to resolve and stage all packages declared in \`avocado.yaml\` into the SDK. This is a separate step from build.
 5. **Build.** The user runs \`avocado build\` locally. The CLI pulls the SDK container, compiles, and produces a system image from the already-staged packages.

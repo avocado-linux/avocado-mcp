@@ -1,9 +1,11 @@
+import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { statfs } from "fs/promises";
 import { homedir } from "os";
 import { RepoClient } from "../lib/repo-client.js";
+import { resolveTarget } from "../lib/target-resolver.js";
 
 const execFileP = promisify(execFile);
 
@@ -89,9 +91,16 @@ export function registerDiscoveryTools(
 
   server.tool(
     "list-targets",
-    "List every Avocado OS hardware target currently supported by the package feed. Returns the target string (used in avocado.yaml), and the list of repodata directories backing each target. Always consult this before assuming a target name — the canonical list is fetched live from repo.avocadolinux.org.",
-    {},
-    async () => {
+    "List Avocado OS hardware targets from the live package feed. Pass `query` to narrow down — strongly recommended when the user has named hardware in their own words (e.g. 'rpi4', 'pi 5', 'jetson orin', 'intel x86'). The query does fuzzy-matching against the canonical slug; an exact match shortcuts to a single row. Without `query`, returns the full list.",
+    {
+      query: z
+        .string()
+        .optional()
+        .describe(
+          "Free-text hardware identifier in the user's words. Examples: 'raspberry pi 4', 'rpi4', 'jetson orin nano', 'imx8mp'. Token-based fuzzy match against the canonical slug. Returns top matches; exact match returns just that row.",
+        ),
+    },
+    async ({ query }) => {
       const config = await repoClient.getTargetsConfig();
       if (!config) {
         return {
@@ -104,11 +113,25 @@ export function registerDiscoveryTools(
         };
       }
 
-      const entries = Object.entries(config).sort(([a], [b]) =>
-        a.localeCompare(b),
-      );
+      const allTargets = Object.keys(config);
+      const entries = (
+        query
+          ? resolveTarget(query, allTargets).map(
+              (t) => [t, config[t]] as [string, string[]],
+            )
+          : Object.entries(config)
+      ).sort(([a], [b]) => a.localeCompare(b));
 
-      let out = `# list-targets\n\n**Total:** ${entries.length} targets\n\n`;
+      let out = `# list-targets\n\n`;
+      if (query) {
+        out += `**Query:** \`${query}\`  •  **Matches:** ${entries.length} of ${allTargets.length}\n\n`;
+        if (entries.length === 0) {
+          out += `_No targets matched._ Drop the \`query\` arg to see the full list.`;
+          return { content: [{ type: "text", text: out }] };
+        }
+      } else {
+        out += `**Total:** ${entries.length} targets\n\n`;
+      }
       out += `| Target | Repodata directories |\n`;
       out += `|--------|----------------------|\n`;
       for (const [target, repos] of entries) {

@@ -10,6 +10,7 @@ import { registerReferenceTools } from "./tools/references.js";
 import { registerProjectTools } from "./tools/project.js";
 import { registerDiagnosticsTools } from "./tools/diagnostics.js";
 import { registerDebuggingTools } from "./tools/debugging.js";
+import { registerDocsTools } from "./tools/docs.js";
 import { registerSkillResources } from "./tools/resources.js";
 import { registerPrompts } from "./tools/prompts.js";
 
@@ -49,6 +50,7 @@ registerPackageTools(server, repoClient);
 registerProjectTools(server, repoClient);
 registerDiagnosticsTools(server, repoClient);
 registerDebuggingTools(server);
+registerDocsTools(server);
 
 async function main() {
   const transport = new StdioServerTransport();

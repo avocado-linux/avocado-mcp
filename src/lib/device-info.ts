@@ -186,14 +186,51 @@ export function getDeviceConnectionInfo(target: string): DeviceConnectionInfo {
   return base;
 }
 
+export type SerialEmulator = "tio" | "picocom" | "minicom";
+
+export const SUPPORTED_EMULATORS: SerialEmulator[] = [
+  "tio",
+  "picocom",
+  "minicom",
+];
+
+export function emulatorInvocation(
+  emulator: SerialEmulator,
+  portPath: string,
+  baud: number,
+): string {
+  switch (emulator) {
+    case "tio":
+      return `tio -b ${baud} ${portPath}`;
+    case "picocom":
+      return `picocom -b ${baud} ${portPath}`;
+    case "minicom":
+      // -o skips the modem init string; without it minicom sends AT
+      // commands to the target on startup and the session can fail.
+      return `minicom -b ${baud} -D ${portPath} -o`;
+  }
+}
+
+export function emulatorInstallHint(emulator: SerialEmulator): string {
+  switch (emulator) {
+    case "tio":
+      return "macOS: `brew install tio`  •  Debian/Ubuntu: `sudo apt install tio`";
+    case "picocom":
+      return "macOS: `brew install picocom`  •  Debian/Ubuntu: `sudo apt install picocom`";
+    case "minicom":
+      return "macOS: `brew install minicom`  •  Debian/Ubuntu: `sudo apt install minicom`";
+  }
+}
+
 export function buildTmuxSnippet(
   portPath: string,
   baud: number,
+  emulator: SerialEmulator = "tio",
   sessionName = "avocado-uart",
 ): string {
   return [
     `# 1. Start a detached tmux session with the serial console`,
-    `tmux new-session -d -s ${sessionName} 'tio -b ${baud} ${portPath}'`,
+    `tmux new-session -d -s ${sessionName} '${emulatorInvocation(emulator, portPath, baud)}'`,
     ``,
     `# 2. (optional) attach yourself in another terminal to watch:`,
     `#    tmux attach -t ${sessionName}`,

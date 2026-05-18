@@ -56,6 +56,9 @@ Requires Node ≥18. `npx` will fetch the package on first use and cache it.
 | `diagnose-provision-log`     | Analyze `avocado provision` output for known failure patterns                        |
 | `explain-build-error`        | Analyze `avocado build` output for known failure patterns                            |
 | `get-provisioning-steps`     | Per-target provisioning steps (profile, media, commands, caveats)                    |
+| `search-docs`                | Full-text BM25 search across the Peridio + Avocado docs at `docs.peridio.com`        |
+| `get-doc`                    | Fetch a full documentation page by slug, URL, or repo path                           |
+| `list-docs`                  | Catalog of every docs page (titles + URLs), optionally filtered by section           |
 | `detect-serial-ports`        | List USB serial adapters on the host (macOS / Linux) for UART debugging              |
 | `get-device-connection-info` | Show recommended baud/parity for a target plus the tmux session name to use          |
 | `get-tmux-uart-snippet`      | Emit copy-paste tmux commands for attaching to a UART and streaming/capturing output |
@@ -69,6 +72,7 @@ Background knowledge the LLM reads to ground itself before invoking tools:
 - `avocado://skills/references-catalog`
 - `avocado://skills/config-yaml-guide`
 - `avocado://skills/extensions-and-runtimes`
+- `avocado://skills/filesystem-model`
 - `avocado://skills/avocado-runtime-details`
 - `avocado://skills/device-debugging`
 - `avocado://skills/tmux-uart-bridge`
@@ -162,8 +166,9 @@ The server reads from public HTTPS endpoints only:
 - **`repo.avocadolinux.org`** — RPM repodata (targets manifest, `repomd.xml`, `primary.xml.gz`). Used by `list-targets`, `search-packages`, `describe-package`, `add-package-to-extension`. Defaults to release `2024`, channel `edge` (matching the current docs site); both are overridable per-call.
 - **`github.com/avocado-linux/avocado-config`** — JSON Schema for `avocado.yaml`. Used by `get-config-schema`, `validate-yaml`, every YAML-mutation tool.
 - **`github.com/avocado-linux/references`** — full source of every reference project. Used by `get-reference` and `get-reference-file` (fetched via `raw.githubusercontent.com` + GitHub trees API).
+- **`github.com/peridio/docs`** — the Docusaurus source for `docs.peridio.com`. Used by `search-docs`, `get-doc`, and `list-docs`. Trees API for the manifest (cached 1 h), `raw.githubusercontent.com` for content (cached on disk by blob SHA, no TTL — content-addressable).
 
-Caches under `~/.cache/avocado-mcp/` (override with `$AVOCADO_MCP_CACHE_DIR` or `$XDG_CACHE_HOME`).
+Caches under `~/.cache/avocado-mcp/` (override with `$AVOCADO_MCP_CACHE_DIR` or `$XDG_CACHE_HOME`). Set `GITHUB_TOKEN` for higher GitHub API rate limits if you'll be using the references / docs tools heavily.
 
 ## Documentation
 

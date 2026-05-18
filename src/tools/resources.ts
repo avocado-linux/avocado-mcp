@@ -4,6 +4,7 @@ import * as hardwareCatalog from "../resources/hardware-catalog.js";
 import * as referencesCatalog from "../resources/references-catalog.js";
 import * as configYamlGuide from "../resources/config-yaml-guide.js";
 import * as extensionsAndRuntimes from "../resources/extensions-and-runtimes.js";
+import * as filesystemModel from "../resources/filesystem-model.js";
 import * as deviceDebugging from "../resources/device-debugging.js";
 import * as avocadoRuntimeDetails from "../resources/avocado-runtime-details.js";
 import * as tmuxUartBridge from "../resources/tmux-uart-bridge.js";
@@ -22,6 +23,7 @@ const SKILLS: Skill[] = [
   toSkill(referencesCatalog),
   toSkill(configYamlGuide),
   toSkill(extensionsAndRuntimes),
+  toSkill(filesystemModel),
   toSkill(deviceDebugging),
   toSkill(avocadoRuntimeDetails),
   toSkill(tmuxUartBridge),

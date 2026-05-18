@@ -218,25 +218,55 @@ export function listReferences(): ReferenceEntry[] {
   return [...CATALOG].sort((a, b) => a.title.localeCompare(b.title));
 }
 
+/**
+ * Compatibility of a reference relative to a target.
+ *  - "generic": reference hardware list is empty — works on any target.
+ *  - "listed": reference explicitly lists the target as supported.
+ *  - "unlisted": reference lists OTHER hardware but not this target. Surface
+ *    it anyway with a warning — it may still work but isn't tested for this target.
+ */
+export type ReferenceCompatibility = "generic" | "listed" | "unlisted";
+
+export interface ScoredReference {
+  entry: ReferenceEntry;
+  compatibility: ReferenceCompatibility;
+}
+
 export function searchReferences(
   query: string,
   target?: string,
 ): ReferenceEntry[] {
+  return searchReferencesScored(query, target).map((s) => s.entry);
+}
+
+export function searchReferencesScored(
+  query: string,
+  target?: string,
+): ScoredReference[] {
   const tokens = query
     .toLowerCase()
     .split(/[^a-z0-9+#.-]+/)
     .filter((t) => t.length > 0);
 
-  type Scored = { entry: ReferenceEntry; score: number };
+  type Scored = {
+    entry: ReferenceEntry;
+    score: number;
+    compatibility: ReferenceCompatibility;
+  };
   const scored: Scored[] = [];
   for (const r of CATALOG) {
-    if (target && r.hardware.length > 0 && !r.hardware.includes(target)) {
-      continue;
-    }
+    // Compatibility is informational only — surfaced so the LLM knows whether
+    // the reference's authors tested it on this target. Does NOT affect ordering.
+    let compatibility: ReferenceCompatibility;
+    if (r.hardware.length === 0) compatibility = "generic";
+    else if (target && r.hardware.includes(target)) compatibility = "listed";
+    else compatibility = "unlisted";
+
     if (tokens.length === 0) {
-      scored.push({ entry: r, score: 0 });
+      scored.push({ entry: r, score: 0, compatibility });
       continue;
     }
+
     const haystack = [r.slug, r.title, r.language, r.summary, ...r.tags]
       .join(" ")
       .toLowerCase();
@@ -244,16 +274,16 @@ export function searchReferences(
     for (const t of tokens) {
       if (haystack.includes(t)) score++;
     }
-    // Exact slug match is the strongest signal.
     if (tokens.includes(r.slug)) score += 10;
-    if (score > 0) scored.push({ entry: r, score });
+
+    if (score > 0) scored.push({ entry: r, score, compatibility });
   }
 
   return scored
     .sort(
       (a, b) => b.score - a.score || a.entry.title.localeCompare(b.entry.title),
     )
-    .map((s) => s.entry);
+    .map(({ entry, compatibility }) => ({ entry, compatibility }));
 }
 
 export function getReferenceEntry(slug: string): ReferenceEntry | undefined {

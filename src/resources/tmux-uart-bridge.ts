@@ -1,35 +1,59 @@
 export const URI = "avocado://skills/tmux-uart-bridge";
 export const NAME = "tmux-uart-bridge";
 export const DESCRIPTION =
-  "The canonical pattern for letting Claude drive a UART serial console: a tmux session running `tio` that Claude controls via `tmux send-keys` and `tmux capture-pane`. Read this before invoking get-tmux-uart-snippet or trying to debug a device over UART.";
+  "The canonical pattern for letting Claude drive a UART serial console: a tmux session running a serial terminal emulator (`tio`, `picocom`, or `minicom`) that Claude controls via `tmux send-keys` and `tmux capture-pane`. **Two prerequisites:** tmux AND an emulator — tmux alone cannot talk to a serial device. Read this before invoking get-tmux-uart-snippet or trying to debug a device over UART.";
 
 export const CONTENT = `# Driving a UART console through tmux
 
-Claude's Bash tool runs commands that return and exit — it can't sit inside an interactive \`tio\` session and type. The pattern that works:
+## Two prerequisites — both required
 
-1. **The user starts a detached tmux session** with \`tio\` running inside, attached to the serial port.
+\`tmux\` is a session multiplexer. **It does NOT speak to serial devices.** You also need a serial terminal emulator that opens the port and handles the line discipline. The whole stack:
+
+| Layer | Tool | Role |
+|-------|------|------|
+| Outer | \`tmux\` | Detachable, scriptable session Claude can \`send-keys\` to and \`capture-pane\` from |
+| Inner | \`tio\` / \`picocom\` / \`minicom\` | Actually opens \`/dev/tty*\`, talks to the UART |
+
+Without an emulator, \`tmux new-session -d -s avocado-uart\` just gives you an empty shell — no serial console.
+
+## Picking an emulator
+
+Use the first one already installed on the host (per \`detect-serial-ports\`). If none are installed, recommend \`tio\` — it has the cleanest output for \`tmux capture-pane\`.
+
+| Emulator | Install | Notes |
+|----------|---------|-------|
+| \`tio\` (preferred) | macOS: \`brew install tio\` • Debian/Ubuntu: \`sudo apt install tio\` | Modern, scriptable, no funky terminal control sequences. Best fit for \`capture-pane\`. |
+| \`picocom\` | macOS: \`brew install picocom\` • Debian/Ubuntu: \`sudo apt install picocom\` | Very common on Linux; works fine inside tmux. Exit via Ctrl-A Ctrl-X (irrelevant in our flow — we tear the session down with \`tmux kill-session\`). |
+| \`minicom\` | macOS: \`brew install minicom\` • Debian/Ubuntu: \`sudo apt install minicom\` | Heavyweight, menu-driven, but works. Always pass \`-o\` to skip its modem init string, otherwise it sends AT commands to your target on startup. |
+
+### Why not \`screen\`?
+
+\`screen /dev/ttyUSB0 115200\` does open the port and you *can* type into it. But under tmux automation it's the wrong tool:
+
+- **Ctrl-A binding conflict.** \`screen\`'s prefix is Ctrl-A; if the user has remapped \`tmux\` from Ctrl-B to Ctrl-A (common), keystrokes Claude sends collide.
+- **Terminal control sequences** (line drawing, status bar) pollute \`capture-pane\` output — you get escape junk mixed with the device's actual stdout.
+- **Awkward teardown.** \`Ctrl-A k\` then \`y\` to exit, vs. our flow which just \`tmux kill-session\`s.
+
+Install one of \`tio\` / \`picocom\` / \`minicom\` instead.
+
+## The interaction model
+
+Claude's Bash tool runs commands that return and exit — it can't sit inside an interactive emulator session and type. The pattern:
+
+1. **The user starts a detached tmux session** with the emulator running inside, attached to the serial port.
 2. **Claude sends commands** with \`tmux send-keys -t <session> '<cmd>' Enter\`.
 3. **Claude reads output** with \`tmux capture-pane -t <session> -p -S -<lines>\`.
 
 Both \`send-keys\` and \`capture-pane\` are one-shot and stateless — perfect for the Bash tool.
 
-## One-time install (host machine)
-
-\`\`\`bash
-# macOS
-brew install tmux tio
-
-# Debian/Ubuntu
-sudo apt install tmux tio
-\`\`\`
-
-\`tio\` is the cross-platform replacement for \`screen\` / \`minicom\` — simpler, scriptable, no funky terminal control sequences.
-
 ## Setup (run once per device session)
 
 \`\`\`bash
-# Replace /dev/tty.usbserial-XXX with the actual port from detect-serial-ports
+# Replace /dev/tty.usbserial-XXX with the actual port from detect-serial-ports.
+# Use whichever emulator detect-serial-ports reports as installed.
 tmux new-session -d -s avocado-uart 'tio -b 115200 /dev/tty.usbserial-XXX'
+# or: 'picocom -b 115200 /dev/tty.usbserial-XXX'
+# or: 'minicom -b 115200 -D /dev/tty.usbserial-XXX -o'
 \`\`\`
 
 \`-d\` starts the session detached. The user can attach in another terminal with \`tmux attach -t avocado-uart\` to watch what Claude is doing.

@@ -1,19 +1,60 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { execFile } from "child_process";
+import { promisify } from "util";
 import {
   detectSerialPorts,
   getDeviceConnectionInfo,
   buildTmuxSnippet,
+  emulatorInstallHint,
+  SUPPORTED_EMULATORS,
+  type SerialEmulator,
 } from "../lib/device-info.js";
+
+const execFileP = promisify(execFile);
+
+async function whichBinary(name: string): Promise<boolean> {
+  try {
+    await execFileP("which", [name], { timeout: 2000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function detectInstalledEmulators(): Promise<
+  Record<SerialEmulator, boolean>
+> {
+  const checks = await Promise.all(
+    SUPPORTED_EMULATORS.map(async (e) => [e, await whichBinary(e)] as const),
+  );
+  return Object.fromEntries(checks) as Record<SerialEmulator, boolean>;
+}
 
 export function registerDebuggingTools(server: McpServer): void {
   server.tool(
     "detect-serial-ports",
-    "Scan /dev for USB-to-UART adapter device nodes (tty.usbserial-*, tty.SLAB_*, ttyUSB*, ttyACM*). Returns candidate port paths the user might want to attach `tio` to. Call this before `get-tmux-uart-snippet` so you can fill in the right port path.",
+    "Scan /dev for USB-to-UART adapter device nodes (tty.usbserial-*, tty.SLAB_*, ttyUSB*, ttyACM*) AND check which serial terminal emulators are installed on the host (`tio`, `picocom`, `minicom`). Driving a UART through tmux requires BOTH a port AND an emulator — `tmux` alone cannot talk to a serial device. Call this before `get-tmux-uart-snippet` so you can confirm both halves are in place.",
     {},
     async () => {
-      const ports = await detectSerialPorts();
+      const [ports, emulators] = await Promise.all([
+        detectSerialPorts(),
+        detectInstalledEmulators(),
+      ]);
       let out = `# detect-serial-ports\n\n`;
+      out += `## Serial terminal emulators (required — tmux alone is not enough)\n\n`;
+      out += `| Emulator | Installed | Install command |\n|---------|-----------|------------------|\n`;
+      for (const e of SUPPORTED_EMULATORS) {
+        out += `| \`${e}\` | ${emulators[e] ? "✅" : "❌"} | ${emulatorInstallHint(e)} |\n`;
+      }
+      const anyInstalled = SUPPORTED_EMULATORS.some((e) => emulators[e]);
+      if (!anyInstalled) {
+        out += `\n**No serial emulator is installed.** \`tmux\` alone cannot talk to a UART. Ask the user to install one of the above (\`tio\` is recommended — cleanest output for \`tmux capture-pane\`) before continuing.\n\n`;
+      } else {
+        const which = SUPPORTED_EMULATORS.filter((e) => emulators[e]);
+        out += `\n✅ Installed: ${which.map((e) => `\`${e}\``).join(", ")}. Use the strongest available (preference: \`tio\` > \`picocom\` > \`minicom\`) when calling \`get-tmux-uart-snippet\`.\n\n`;
+      }
+      out += `## Detected serial ports\n\n`;
       if (ports.length === 0) {
         out += `No USB-serial adapters detected under \`/dev\`.\n\n`;
         out += `Likely causes:\n`;
@@ -88,7 +129,7 @@ export function registerDebuggingTools(server: McpServer): void {
 
   server.tool(
     "get-tmux-uart-snippet",
-    "Generate the exact bash commands to bridge a UART serial console to Claude through a detached tmux session. Returns the `tmux new-session`, `tmux send-keys`, and `tmux capture-pane` snippets pre-filled with the user's port and target's baud rate. Run this after `detect-serial-ports` and `get-device-connection-info`.",
+    "Generate the exact bash commands to bridge a UART serial console to Claude through a detached tmux session. **Requires BOTH `tmux` AND a serial terminal emulator** (`tio`, `picocom`, or `minicom`) — `tmux` alone cannot talk to a serial device. Call `detect-serial-ports` first to confirm which emulators are installed. Returns the `tmux new-session`, `tmux send-keys`, and `tmux capture-pane` snippets pre-filled with the user's port, target's baud rate, and chosen emulator.",
     {
       portPath: z
         .string()
@@ -100,6 +141,12 @@ export function registerDebuggingTools(server: McpServer): void {
         .describe(
           "Target name. Used to look up the correct baud rate (almost always 115200).",
         ),
+      emulator: z
+        .enum(["tio", "picocom", "minicom"])
+        .optional()
+        .describe(
+          "Serial terminal emulator to drive. Defaults to 'tio' (recommended — cleanest output for tmux capture-pane). Pick whichever is installed on the host per detect-serial-ports. `screen` is NOT supported — its Ctrl-A binding collides with tmux and its terminal control sequences pollute capture-pane output.",
+        ),
       sessionName: z
         .string()
         .optional()
@@ -107,9 +154,10 @@ export function registerDebuggingTools(server: McpServer): void {
           "Optional tmux session name. Defaults to 'avocado-uart'. Use a different name only if you already have an avocado-uart session for another device.",
         ),
     },
-    async ({ portPath, target, sessionName }) => {
+    async ({ portPath, target, emulator, sessionName }) => {
       const info = getDeviceConnectionInfo(target);
       const session = sessionName ?? "avocado-uart";
+      const chosen: SerialEmulator = emulator ?? "tio";
 
       // Sanity check: warn if the target is QEMU, which has no physical port.
       if (target.startsWith("qemu")) {
@@ -123,12 +171,23 @@ export function registerDebuggingTools(server: McpServer): void {
         };
       }
 
-      const snippet = buildTmuxSnippet(portPath, info.serial.baud, session);
+      const snippet = buildTmuxSnippet(
+        portPath,
+        info.serial.baud,
+        chosen,
+        session,
+      );
 
-      let out = `# get-tmux-uart-snippet — \`${target}\` on \`${portPath}\`\n\n`;
-      out += `## Prerequisites\n\nMake sure \`tmux\` and \`tio\` are installed on the host:\n\n`;
+      let out = `# get-tmux-uart-snippet — \`${target}\` on \`${portPath}\` (via \`${chosen}\`)\n\n`;
+      out += `## Prerequisites — BOTH required\n\n`;
+      out += `Driving a UART through tmux needs two pieces. \`tmux\` is a session multiplexer; it does NOT speak to serial devices. The emulator (\`${chosen}\` here) is what actually opens the port. Confirm both are installed:\n\n`;
       out += "```bash\n";
-      out += `# macOS\nbrew install tmux tio\n\n# Debian/Ubuntu\nsudo apt install tmux tio\n`;
+      out += `which tmux ${chosen}    # both lines must return a path\n`;
+      out += "```\n\n";
+      out += `Install commands if either is missing:\n\n`;
+      out += "```bash\n";
+      out += `# tmux — macOS: brew install tmux  •  Debian/Ubuntu: sudo apt install tmux\n`;
+      out += `# ${chosen} — ${emulatorInstallHint(chosen)}\n`;
       out += "```\n\n";
       out += `## Bridge setup + usage\n\n`;
       out += "```bash\n" + snippet + "\n```\n\n";
@@ -137,6 +196,7 @@ export function registerDebuggingTools(server: McpServer): void {
       out += `- Always use \`--no-pager\` with journalctl over this bridge.\n`;
       out += `- Never run \`journalctl -f\` or interactive editors (\`vi\`, \`htop\`) — they won't return.\n`;
       out += `- Capture more lines than you think you need; async kernel output pollutes the buffer.\n`;
+      out += `- Don't substitute \`screen\` for the emulator: Ctrl-A binding collides with tmux and its control sequences break \`capture-pane\` output.\n`;
       out += `- For details and patterns (sentinels for slicing output, etc.), read \`avocado://skills/tmux-uart-bridge\`.\n`;
 
       return { content: [{ type: "text", text: out }] };
