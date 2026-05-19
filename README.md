@@ -85,9 +85,11 @@ Background knowledge the LLM reads to ground itself before invoking tools:
 Pre-built workflows the user can invoke by name:
 
 - `start-avocado-project` — walks through target pick → init → next-steps for a fresh project.
-- `debug-device` — walks through attaching to a device over UART/tmux and capturing logs.
+- `debug-device` — walks through attaching to a device over UART/tmux and capturing logs (the default debug channel).
+- `debug-device-ssh` — peer to `debug-device` for the case when the device is already known healthy and on the network. Passwordless root in the dev runtime.
 - `debug-build-failure` — recovery walkthrough for failed `avocado install` / `avocado build`: known-issues triage, cross-channel package lookup, host/arch checks.
-- `build-and-deploy` — fully automated `avocado install -f && avocado build && avocado deploy` to a running device, with verification. The canonical iteration loop after first provision.
+- `provision-device` — fully automated first-time flash: env check → target validation → per-target caveats → build → provision → physical handoff → first-boot UART verification.
+- `build-and-deploy` — fully automated `avocado build && avocado deploy` (with conditional `install` on missing-package errors) to a running device, with verification. The canonical iteration loop after first provision.
 
 ## Recommended flow
 

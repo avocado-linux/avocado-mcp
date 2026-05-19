@@ -20,8 +20,9 @@ If any hook exits non-zero, the build halts and the log shows the failing path +
 ## Environment available inside hooks
 
 - Hooks run **inside the SDK container** (\`docker.io/avocadolinux/sdk:<release>-<channel>\`), NOT on the host. \`uname\` reports the container, not the host.
-- **\`$DESTDIR\`** — the staging root the install hook must write under. Treat it as the device's \`/\`. \`cp myapp $DESTDIR/usr/bin/myapp\` → ends up at \`/usr/bin/myapp\` on the device.
-- **\`$CC\`, \`$CXX\`, \`$AR\`, \`$LD\`, \`$PKG_CONFIG_PATH\`** — point at the SDK's cross-toolchain. Use these in Makefiles / configure scripts, NEVER call \`gcc\` directly.
+- **\`$AVOCADO_BUILD_EXT_SYSROOT\`** — the staging root the install hook must write under. Treat it as the device's \`/\`. \`cp myapp "$AVOCADO_BUILD_EXT_SYSROOT/usr/bin/myapp"\` → ends up at \`/usr/bin/myapp\` on the device. **There is no \`$DESTDIR\` in the hook environment** — that's a Yocto convention not exposed by the Avocado SDK. Cross-check against any working reference's \`*-install.sh\` (e.g. \`get-reference-file({slug: "nodejs-dashboard", path: "app-install.sh"})\`) if uncertain.
+- **\`$OECORE_TARGET_SYSROOT\`, \`$OECORE_TARGET_ARCH\`, \`$OECORE_NATIVE_SYSROOT\`** — OE/Yocto SDK sysroot paths and the target arch string. Useful when a compile hook needs to find target headers (\`$OECORE_TARGET_SYSROOT/usr/include\`) or pick the right cross-compiler.
+- **\`$CC\`, \`$CXX\`, \`$AR\`, \`$LD\`, \`$PKG_CONFIG_PATH\`** — pre-set by the SDK to the cross-toolchain. Use these in Makefiles / configure scripts, NEVER call the host's \`gcc\` directly.
 - **\`/bin/sh\`** is \`dash\` / \`ash\` on most SDK images, not bash. Avoid bashisms unless the script's shebang is explicitly \`#!/bin/bash\` AND bash is listed under \`sdk.packages\`.
 - The hook's working directory is the extension's app directory (where the hook lives).
 
@@ -52,13 +53,13 @@ sdk:
 app-install.sh: line 7: cannot create regular file '/usr/bin/myapp': Permission denied
 \`\`\`
 
-**Cause:** the hook tried to write outside \`$DESTDIR\`. The build container runs unprivileged; \`/usr/bin\` etc. are read-only.
+**Cause:** the hook tried to write outside \`$AVOCADO_BUILD_EXT_SYSROOT\`. The build container runs unprivileged; \`/usr/bin\` etc. are read-only.
 
-**Fix:** prefix every install path with \`$DESTDIR\`. The path you want on the final device (\`/usr/bin/foo\`) becomes \`$DESTDIR/usr/bin/foo\` during the build.
+**Fix:** prefix every install path with \`$AVOCADO_BUILD_EXT_SYSROOT\`. The path you want on the final device (\`/usr/bin/foo\`) becomes \`$AVOCADO_BUILD_EXT_SYSROOT/usr/bin/foo\` during the build. **Do NOT use \`$DESTDIR\` — it's not set in the Avocado hook environment.** If you forget the variable name, read any reference's \`*-install.sh\` (e.g. \`nodejs-dashboard/app-install.sh\`, \`rust-vitals/rust-install.sh\`) to confirm.
 
 \`\`\`bash
-install -d $DESTDIR/usr/bin
-install -m 0755 build/myapp $DESTDIR/usr/bin/myapp
+install -d "$AVOCADO_BUILD_EXT_SYSROOT/usr/bin"
+install -m 0755 build/myapp "$AVOCADO_BUILD_EXT_SYSROOT/usr/bin/myapp"
 \`\`\`
 
 ### 3. \`No such file or directory\` for a source / artifact

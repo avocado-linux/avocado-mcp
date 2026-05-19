@@ -1,7 +1,7 @@
 export const URI = "avocado://skills/tmux-uart-bridge";
 export const NAME = "tmux-uart-bridge";
 export const DESCRIPTION =
-  "The canonical pattern for letting Claude drive a UART serial console: a tmux session running a serial terminal emulator (`tio`, `picocom`, or `minicom`) that Claude controls via `tmux send-keys` and `tmux capture-pane`. **Two prerequisites:** tmux AND an emulator — tmux alone cannot talk to a serial device. Read this before invoking get-tmux-uart-snippet or trying to debug a device over UART.";
+  "The canonical pattern for letting Claude drive a UART serial console: a tmux session running a serial terminal emulator (`tio`, `picocom`, or `minicom`) that Claude controls via `tmux send-keys` and `tmux capture-pane`. **Two prerequisites:** tmux AND an emulator — tmux alone cannot talk to a serial device. **Read this any time you are about to write a `tmux` command involving `avocado-uart` (or any UART session)** — even if you're constructing the command from memory rather than via `get-tmux-uart-snippet`. Covers session setup, the login-as-root step, the `send-keys` / `capture-pane` pattern, token-discipline rules for bounded captures, and the `until`-loop replacement for `sleep N`.";
 
 export const CONTENT = `# Driving a UART console through tmux
 

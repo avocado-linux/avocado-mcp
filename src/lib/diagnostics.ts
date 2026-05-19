@@ -85,9 +85,9 @@ const BUILD_PATTERNS: Pattern[] = [
     label: "Hook script: permission denied",
     match: /app-(install|compile)\.sh[^\n]*: [^\n]*Permission denied/i,
     cause:
-      "An install/compile hook tried to write outside its staging area. The SDK runs hooks unprivileged inside the build container; only `$DESTDIR` is writable.",
+      "An install/compile hook tried to write outside its staging area. The SDK runs hooks unprivileged inside the build container; only `$AVOCADO_BUILD_EXT_SYSROOT` is writable.",
     suggestion:
-      "Prefix EVERY install path with `$DESTDIR`. `install -d $DESTDIR/etc/myapp`, not `install -d /etc/myapp`. The path you intend for the device (e.g. `/usr/bin/foo`) becomes `$DESTDIR/usr/bin/foo` during the build. See `avocado://skills/extension-build-debugging` for the full lifecycle.",
+      'Prefix EVERY install path with `$AVOCADO_BUILD_EXT_SYSROOT`. `install -d "$AVOCADO_BUILD_EXT_SYSROOT/etc/myapp"`, not `install -d /etc/myapp`. The path you intend for the device (e.g. `/usr/bin/foo`) becomes `$AVOCADO_BUILD_EXT_SYSROOT/usr/bin/foo` during the build. Do NOT use `$DESTDIR` — it\'s not set in the Avocado hook environment. See `avocado://skills/extension-build-debugging` for the full lifecycle.',
   },
   {
     label: "Hook script: shell error",
