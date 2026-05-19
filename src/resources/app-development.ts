@@ -48,7 +48,7 @@ my-project/
 ├── avocado.yaml              # The config — runtimes, extensions, packages
 ├── app-clean.sh              # (Optional) clean stale build state
 ├── app-compile.sh            # (Optional) compile your app code in the SDK
-├── app-install.sh            # (Optional) stage compiled artifacts into \$DESTDIR
+├── app-install.sh            # (Optional) stage compiled artifacts into \$AVOCADO_BUILD_EXT_SYSROOT
 └── app/                      # Your application
     ├── server.py             # or server.js, main.rs, main.c, ...
     ├── package.json          # or requirements.txt, Cargo.toml, Makefile, ...
@@ -94,8 +94,8 @@ The two most common mistakes:
 2. **Search the feed for the user's target.** \`search-packages({ targets: ["<target>"], query: "<name-or-keyword>" })\`. Try a few synonyms — package names vary (\`paho-mqtt\` vs \`python3-paho-mqtt\` vs \`mosquitto-clients\`).
 3. **If a feed match exists:** verify the exact name with \`describe-package\` and add it via \`add-package-to-extension\` (or hand-edit and re-run \`avocado install\`). Done.
 4. **If no feed match:** tell the user it isn't in the feed and propose the vendoring approach. Two flavours:
-   - **Language package manager in build hook.** For Python: \`pip install --target=\$DESTDIR/usr/lib/python3.<x>/site-packages <pkg>\` in \`app-install.sh\`. For Node: \`npm ci --omit=dev\` then copy \`node_modules/\` into overlay. For Rust: \`cargo build --release\` then copy the binary.
-   - **Vendor into overlay.** \`git clone\` or download release, build at hook time, install artifacts into \`\$DESTDIR\` under the right overlay paths.
+   - **Language package manager in build hook.** For Python: \`pip install --target="$AVOCADO_BUILD_EXT_SYSROOT/usr/lib/python3.<x>/site-packages" <pkg>\` in \`app-install.sh\`. For Node: \`npm ci --omit=dev\` then copy \`node_modules/\` into overlay. For Rust: \`cargo build --release\` then copy the binary.
+   - **Vendor into overlay.** \`git clone\` or download release, build at hook time, install artifacts into \`$AVOCADO_BUILD_EXT_SYSROOT\` under the right overlay paths.
 5. **Verify on device after deploy.** \`rpm -q <pkg>\` for feed packages; \`which <bin>\` or runtime smoke for vendored.
 
 The \`add-package-to-extension\` tool enforces step 2 automatically — it rejects packages not in the feed with a "did you mean" suggestion list — so use it whenever possible.
@@ -106,13 +106,13 @@ The \`add-package-to-extension\` tool enforces step 2 automatically — it rejec
 
 - Feed convention: many Python packages are exposed as system packages prefixed \`python3-\` (e.g. \`python3-paho-mqtt\`, \`python3-flask\`). Some keep upstream names (\`paho-mqtt\`).
 - Always \`search-packages\` with the bare upstream name AND \`python3-\` prefixed.
-- If pip-installing in a hook: \`pip install --no-cache-dir --target="$DESTDIR/usr/lib/python3.13/site-packages" <pkg>\` (adjust python3.<x> to match the SDK's Python).
+- If pip-installing in a hook: \`pip install --no-cache-dir --target="$AVOCADO_BUILD_EXT_SYSROOT/usr/lib/python3.13/site-packages" <pkg>\` (adjust python3.<x> to match the SDK's Python).
 - \`nativesdk-uv\` is in the feed for fast pip installs in hooks.
 
 ### Node.js
 
 - Feed convention: \`nodejs-<name>\` for system npm packages, plus standalone packages.
-- Vendoring path: \`app-install.sh\` runs \`npm ci --omit=dev --prefix \$DESTDIR/usr/lib/myapp\`, then your service runs \`node /usr/lib/myapp/server.js\`.
+- Vendoring path: \`app-install.sh\` runs \`npm ci --omit=dev --prefix "$AVOCADO_BUILD_EXT_SYSROOT/usr/lib/myapp"\`, then your service runs \`node /usr/lib/myapp/server.js\`.
 - For npm packages with native extensions: requires the SDK's Node + headers (\`nativesdk-nodejs\`, \`nativesdk-nodejs-npm\`).
 
 ### Rust

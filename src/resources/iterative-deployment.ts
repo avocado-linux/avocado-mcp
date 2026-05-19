@@ -5,6 +5,25 @@ export const DESCRIPTION =
 
 export const CONTENT = `# Iterative deployment — push edits to a running device
 
+## Prerequisite — the device MUST already be provisioned
+
+\`avocado deploy\` is **sideloading**, not first-time setup. It pushes a runtime update over SSH + HTTP to an Avocado OS install that is already running. If the user hasn't flashed media and booted the device at least once, \`deploy\` cannot work — there is no OS for it to update.
+
+**Before recommending or running \`avocado deploy\` (or the \`/build-and-deploy\` prompt), confirm with the user:**
+
+> "Has this device already been provisioned with Avocado OS, or is this its first time? If it's been provisioned and you have its IP, I can sideload an iterative update. If it's never been provisioned, we need to do the first-time flash via \`/provision-device\` — that's the one-time setup with media (SD / USB / NVMe) and UART verification."
+
+Route based on the answer:
+
+| User's situation | What to do |
+|---|---|
+| Never provisioned this device | \`/provision-device\` first. Then come back to deploy. |
+| Provisioned previously, device on the network, IP known | \`/build-and-deploy\` (this skill). |
+| Provisioned previously, device not on the network / unreachable | Diagnose with \`/debug-device\` (UART) — sshd may have crashed, network may be down, /var may be full. Once reachable, resume deploy. |
+| Not sure if it's been provisioned | Ask. Don't guess. If the device has never booted or you don't see Avocado OS logs on UART, it hasn't been provisioned. |
+
+## What deploy actually is
+
 \`avocado deploy\` is the fast iteration loop for an Avocado device that is **already running and on the network**. It's the difference between "edit, rebuild, re-flash an SD card, reboot, test" (minutes) and "edit, rebuild, push, test" (seconds).
 
 **You — the coding agent — should proactively offer this as an option** whenever:

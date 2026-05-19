@@ -31,7 +31,18 @@ Avocado OS is a Yocto-based embedded Linux distribution. A working project consi
 5. **Build.** The user runs \`avocado build\` locally. The CLI pulls the SDK container, compiles, and produces a system image from the already-staged packages.
 6. **Provision (first time only).** The user runs \`avocado provision -r dev\` (with the right \`--profile\` for the target — usually \`sd\` for an SD card). This flashes the image to media.
 7. **Boot the device** with the provisioned media. Default root password is empty in the \`dev\` runtime.
-8. **Iterate with \`avocado deploy\`.** After the device is up and on the network, subsequent edits don't need a reflash. Run \`avocado install -f && avocado build && avocado deploy -r dev -d <device-ip>\` to OTA changes in seconds. **Offer this to the user proactively** — see \`avocado://skills/iterative-deployment\` for the full flow.
+8. **Iterate with \`avocado deploy\`.** After the device is up and on the network, subsequent edits don't need a reflash. Run \`avocado build && avocado deploy -r dev -d <device-ip>\` to OTA changes in seconds. **\`deploy\` is sideloading — it requires the device to have been provisioned at least once.** See \`avocado://skills/iterative-deployment\` for the full flow.
+
+## Provision vs deploy — when to use which
+
+These are NOT interchangeable. Get this wrong and the user wastes 5+ minutes flashing media when they could've pushed in seconds, or worse, tries to deploy to a device that has no OS yet.
+
+| Situation | Command | Prompt |
+|---|---|---|
+| Device has never been flashed with Avocado OS | \`avocado provision -r dev\` (with profile per target) | \`/provision-device\` |
+| Device has Avocado OS, is on the network, you have its IP | \`avocado deploy -r dev -d <ip>\` | \`/build-and-deploy\` |
+
+**Always ask the user up front when they want to push work to a device:** _"Has this device been provisioned with Avocado before, or is this the first time?"_ Route to \`/provision-device\` or \`/build-and-deploy\` based on the answer. Don't assume.
 
 ## \`avocado install\` vs \`avocado build\` — when to re-run what
 

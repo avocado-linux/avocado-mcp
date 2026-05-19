@@ -1,7 +1,7 @@
 export const URI = "avocado://skills/filesystem-model";
 export const NAME = "filesystem-model";
 export const DESCRIPTION =
-  "The Avocado filesystem model: root is immutable (assembled from sysext/confext extension images), /var is the only writable partition (persistent across OTAs). The single most important architectural fact to know before authoring an extension — anything that needs to be writable at runtime cannot live in the read-only sysext. Also covers seeding /var content at build time (`var_files`, `docker_images`) vs. creating it at first-boot. Read this BEFORE authoring app extensions, before adding any service that writes to disk, and any time the user asks 'where do I put X?'";
+  "The Avocado filesystem model: root is immutable (assembled from sysext/confext extension images), /var is the only writable partition (persistent across OTAs). The single most important architectural fact to know before authoring an extension — anything that needs to be writable at runtime cannot live in the read-only sysext. Also covers seeding /var content at build time (`var_files`, `docker_images`) vs. creating it at first-boot. **Read this BEFORE: authoring app extensions, adding any service that writes to disk, debugging any 'read-only filesystem' / 'permission denied' / 'EROFS' error on a running device, suggesting a write path under /etc or /usr at runtime, or any time the user asks 'where do I put X?'.**";
 
 export const CONTENT = `# Filesystem model — root-immutable, /var-writable
 
