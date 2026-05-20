@@ -49,27 +49,56 @@ export function registerPackageTools(
   server: McpServer,
   repoClient: RepoClient,
 ): void {
-  server.tool(
+  server.registerTool(
     "describe-package",
-    "Show detail for a single package by exact name across one or more targets: version, arch, summary, description, and which repo provides it. Use this to confirm a package exists before referencing it in avocado.yaml, OR to answer 'does package X exist for target Y?' as a standalone question — no project required.",
     {
-      targets: z
-        .array(z.string())
-        .min(1)
-        .describe("Target names to look up the package in."),
-      name: z.string().describe("Exact package name."),
-      release: z
-        .string()
-        .optional()
-        .describe(
-          "Release year. Defaults to '2024'. Only override if you're targeting an older or experimental stream.",
+      title: "Describe one Avocado package",
+      description:
+        "Show detail for a single package by exact name across one or more targets: version, arch, summary, description, and which repo provides it. Use this to confirm a package exists before referencing it in avocado.yaml, OR to answer 'does package X exist for target Y?' as a standalone question — no project required.",
+      inputSchema: {
+        targets: z
+          .array(z.string())
+          .min(1)
+          .describe("Target names to look up the package in."),
+        name: z.string().describe("Exact package name."),
+        release: z
+          .string()
+          .optional()
+          .describe(
+            "Release year. Defaults to '2024'. Only override if you're targeting an older or experimental stream.",
+          ),
+        channel: z
+          .string()
+          .optional()
+          .describe(
+            "Release channel. Defaults to 'edge'. Other valid values today: 'apollo'.",
+          ),
+      },
+      outputSchema: {
+        name: z.string(),
+        found: z.boolean(),
+        results: z.array(
+          z.object({
+            repo: z.string(),
+            version: z.string(),
+            release: z.string().optional(),
+            arch: z.string(),
+            summary: z.string(),
+            description: z.string().optional(),
+          }),
         ),
-      channel: z
-        .string()
-        .optional()
-        .describe(
-          "Release channel. Defaults to 'edge'. Other valid values today: 'apollo'.",
-        ),
+        nearest: z
+          .array(z.string())
+          .optional()
+          .describe("If no exact match, top-N near package names."),
+      },
+      annotations: {
+        title: "Describe one Avocado package",
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
     },
     async ({ targets, name, release, channel }) => {
       const targetCheck = await validateTargets(repoClient, targets);
@@ -81,6 +110,8 @@ export function registerPackageTools(
               text: `# describe-package failed\n\n${targetCheck.message}`,
             },
           ],
+          structuredContent: { name, found: false, results: [] },
+          isError: true,
         };
       }
       try {
@@ -105,6 +136,12 @@ export function registerPackageTools(
                 }`,
               },
             ],
+            structuredContent: {
+              name,
+              found: false,
+              results: [],
+              nearest: near.map((r) => r.name),
+            },
           };
         }
         let out = `# describe-package — \`${name}\`\n\n`;
@@ -118,7 +155,21 @@ export function registerPackageTools(
           }
           out += `\n`;
         }
-        return { content: [{ type: "text", text: out }] };
+        return {
+          content: [{ type: "text", text: out }],
+          structuredContent: {
+            name,
+            found: true,
+            results: exact.map((p) => ({
+              repo: p.repo,
+              version: p.version,
+              release: p.release,
+              arch: p.arch,
+              summary: p.summary,
+              description: p.description,
+            })),
+          },
+        };
       } catch (error) {
         return {
           content: [
@@ -127,45 +178,82 @@ export function registerPackageTools(
               text: `# describe-package failed\n\n❌ ${error}`,
             },
           ],
+          structuredContent: { name, found: false, results: [] },
+          isError: true,
         };
       }
     },
   );
 
-  server.tool(
+  const packageResultSchema = z.object({
+    name: z.string(),
+    version: z.string(),
+    release: z.string(),
+    arch: z.string(),
+    repo: z.string(),
+    summary: z.string(),
+  });
+
+  server.registerTool(
     "search-packages",
-    "Search the live Avocado OS package feed for one or more targets. **This is the first move when the user wants to add ANY library / dependency / system package.** Always check the feed before suggesting `pip install`, `npm install`, `cargo add`, `apt install`, or vendoring — feed packages are version-tracked, dependency-resolved, security-updatable via OTA, and don't bloat the extension image. Matches package name and summary (case-insensitive), ranked by where the hit lands — same default behaviour as `avocado sdk dnf search`. **No avocado.yaml or local project required**: pass a target name and a query and you get live results from repo.avocadolinux.org. Description matching is NOT included — use `describe-package` for full-text details on a specific name. See `avocado://skills/app-development` for the feed-first workflow.",
     {
-      targets: z
-        .array(z.string())
-        .min(1)
-        .describe(
-          "Target names (e.g. ['raspberrypi5', 'jetson-orin-nano-devkit']). Must match entries from list-targets. Pass one or more.",
+      title: "Search Avocado package feed",
+      description:
+        "Search the live Avocado OS package feed for one or more targets. **This is the first move when the user wants to add ANY library / dependency / system package.** Always check the feed before suggesting `pip install`, `npm install`, `cargo add`, `apt install`, or vendoring — feed packages are version-tracked, dependency-resolved, security-updatable via OTA, and don't bloat the extension image. Matches package name and summary (case-insensitive), ranked by where the hit lands — same default behaviour as `avocado sdk dnf search`. **No avocado.yaml or local project required**: pass a target name and a query and you get live results from repo.avocadolinux.org. Description matching is NOT included — use `describe-package` for full-text details on a specific name. See `avocado://skills/app-development` for the feed-first workflow.",
+      inputSchema: {
+        targets: z
+          .array(z.string())
+          .min(1)
+          .describe(
+            "Target names (e.g. ['raspberrypi5', 'jetson-orin-nano-devkit']). Must match entries from list-targets. Pass one or more.",
+          ),
+        query: z
+          .string()
+          .min(1)
+          .describe(
+            "Free-text search. Matches packages whose name or summary contains this text (case-insensitive). Examples: 'openssh', 'kernel-module-gpio', 'gstreamer', 'python3'.",
+          ),
+        limit: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe("Maximum results to return. Default 50."),
+        release: z
+          .string()
+          .optional()
+          .describe(
+            "Release year. Defaults to '2024'. Only override if you're targeting an older or experimental stream.",
+          ),
+        channel: z
+          .string()
+          .optional()
+          .describe(
+            "Release channel. Defaults to 'edge'. Other valid values today: 'apollo'.",
+          ),
+      },
+      outputSchema: {
+        query: z.string(),
+        targets: z.array(z.string()),
+        release: z.string(),
+        channel: z.string(),
+        totalMatches: z.number().int(),
+        shown: z.number().int(),
+        results: z.array(packageResultSchema),
+        errors: z.array(
+          z.object({
+            target: z.string(),
+            messages: z.array(z.string()),
+          }),
         ),
-      query: z
-        .string()
-        .min(1)
-        .describe(
-          "Free-text search. Matches packages whose name or summary contains this text (case-insensitive). Examples: 'openssh', 'kernel-module-gpio', 'gstreamer', 'python3'.",
-        ),
-      limit: z
-        .number()
-        .int()
-        .positive()
-        .optional()
-        .describe("Maximum results to return. Default 50."),
-      release: z
-        .string()
-        .optional()
-        .describe(
-          "Release year. Defaults to '2024'. Only override if you're targeting an older or experimental stream.",
-        ),
-      channel: z
-        .string()
-        .optional()
-        .describe(
-          "Release channel. Defaults to 'edge'. Other valid values today: 'apollo'.",
-        ),
+      },
+      annotations: {
+        title: "Search Avocado package feed",
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
     },
     async ({ targets, query, limit, release, channel }) => {
       const targetCheck = await validateTargets(repoClient, targets);
@@ -177,6 +265,17 @@ export function registerPackageTools(
               text: `# search-packages failed\n\n${targetCheck.message}`,
             },
           ],
+          structuredContent: {
+            query,
+            targets,
+            release: release ?? "2024",
+            channel: channel ?? "edge",
+            totalMatches: 0,
+            shown: 0,
+            results: [],
+            errors: [],
+          },
+          isError: true,
         };
       }
       try {
@@ -215,6 +314,16 @@ export function registerPackageTools(
               text: `\n\`\`\`json\n${JSON.stringify(trimmed, null, 2)}\n\`\`\`\n\n_Per-result \`description\` is omitted to save context. Use \`describe-package\` for full details on a specific name._`,
             },
           ],
+          structuredContent: {
+            query,
+            targets,
+            release: release ?? "2024",
+            channel: channel ?? "edge",
+            totalMatches,
+            shown: results.length,
+            results: trimmed,
+            errors,
+          },
         };
       } catch (error) {
         return {
@@ -224,6 +333,17 @@ export function registerPackageTools(
               text: `# search-packages failed\n\n❌ ${error}\n\n## Troubleshooting\n\n1. **Check the target name.** It must match an entry in https://repo.avocadolinux.org/2024/edge/targets.json.\n2. **Check connectivity.** The server must reach repo.avocadolinux.org.\n3. **Try a simpler query.** The search is a plain substring match against name + summary.`,
             },
           ],
+          structuredContent: {
+            query,
+            targets,
+            release: release ?? "2024",
+            channel: channel ?? "edge",
+            totalMatches: 0,
+            shown: 0,
+            results: [],
+            errors: [],
+          },
+          isError: true,
         };
       }
     },

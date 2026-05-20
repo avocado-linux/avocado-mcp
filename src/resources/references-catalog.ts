@@ -1,7 +1,7 @@
 export const URI = "avocado://skills/references-catalog";
 export const NAME = "references-catalog";
 export const DESCRIPTION =
-  "Map of available Avocado OS reference projects (working starter apps in C, Python, Rust, Node, Elixir, AI, etc.). Read this when the user wants an example to copy from. Use list-references / search-references / get-reference for live data.";
+  "Map of available Avocado OS reference projects (working starter apps in C, Python, Rust, Node, Elixir, AI, etc.). Read this when the user wants an example to copy from. Use `search-references` (omit `query` to browse the full catalog, pass `query` to rank by relevance) and `get-reference` / `get-reference-file` for live data.";
 
 export const CONTENT = `# References catalog
 
@@ -37,10 +37,9 @@ The \`overlay/\` tree is the most important thing to understand: anything under 
 
 ## How to surface a reference to the user
 
-1. \`list-references\` (no args) shows the full catalog with one-liner descriptions.
-2. \`search-references\` narrows by free-text or target.
-3. \`get-reference\` returns the project bundle: file tree, full \`avocado.yaml\`, README, getting-started, build-hook list, and overlay layout summary.
-4. \`get-reference-file\` reads any specific file (app source, overlay configs, build scripts) — use this when you need to see the actual code, not just the structure.
+1. \`search-references\` — call with no \`query\` to browse the full catalog, or with a \`query\` (and optional \`target\`) to get ranked matches.
+2. \`get-reference\` returns the project bundle: file tree, full \`avocado.yaml\`, README, getting-started, build-hook list, and overlay layout summary.
+3. \`get-reference-file\` reads any specific file (app source, overlay configs, build scripts) — use this when you need to see the actual code, not just the structure.
 
 ## Important caveats
 
