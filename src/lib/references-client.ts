@@ -430,7 +430,7 @@ export async function fetchReferenceProject(
   const entry = getReferenceEntry(slug);
   if (!entry) {
     throw new Error(
-      `Unknown reference "${slug}". Use list-references to see the catalog.`,
+      `Unknown reference "${slug}". Use search-references (with no query) to see the catalog.`,
     );
   }
   const files = await fetchReferenceTree(slug);

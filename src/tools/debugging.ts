@@ -32,10 +32,36 @@ async function detectInstalledEmulators(): Promise<
 }
 
 export function registerDebuggingTools(server: McpServer): void {
-  server.tool(
+  server.registerTool(
     "detect-serial-ports",
-    "Scan /dev for USB-to-UART adapter device nodes (tty.usbserial-*, tty.SLAB_*, ttyUSB*, ttyACM*) AND check which serial terminal emulators are installed on the host (`tio`, `picocom`, `minicom`). Driving a UART through tmux requires BOTH a port AND an emulator — `tmux` alone cannot talk to a serial device. Call this before `get-tmux-uart-snippet` so you can confirm both halves are in place.",
-    {},
+    {
+      title: "Detect USB-to-UART adapters + emulators",
+      description:
+        "Scan /dev for USB-to-UART adapter device nodes (tty.usbserial-*, tty.SLAB_*, ttyUSB*, ttyACM*) AND check which serial terminal emulators are installed on the host (`tio`, `picocom`, `minicom`). Driving a UART through tmux requires BOTH a port AND an emulator — `tmux` alone cannot talk to a serial device. Call this before `get-tmux-uart-snippet` so you can confirm both halves are in place.",
+      inputSchema: {},
+      outputSchema: {
+        ports: z.array(
+          z.object({
+            path: z.string(),
+            confidence: z.enum(["likely", "possible"]),
+            reason: z.string(),
+          }),
+        ),
+        emulators: z.object({
+          tio: z.boolean(),
+          picocom: z.boolean(),
+          minicom: z.boolean(),
+        }),
+        anyEmulatorInstalled: z.boolean(),
+      },
+      annotations: {
+        title: "Detect USB-to-UART adapters + emulators",
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
+    },
     async () => {
       const [ports, emulators] = await Promise.all([
         detectSerialPorts(),
@@ -85,19 +111,48 @@ export function registerDebuggingTools(server: McpServer): void {
             text: `\n\`\`\`json\n${JSON.stringify(ports, null, 2)}\n\`\`\``,
           },
         ],
+        structuredContent: {
+          ports,
+          emulators,
+          anyEmulatorInstalled: SUPPORTED_EMULATORS.some((e) => emulators[e]),
+        },
       };
     },
   );
 
-  server.tool(
+  server.registerTool(
     "get-device-connection-info",
-    "Get the serial-console connection parameters (baud, voltage, parity, data bits, stop bits) and default login credentials for a given Avocado target, plus per-target wiring caveats (Jetson pinout, RS-232 vs TTL, etc.). Call this once you know the user's target so you can configure the serial bridge correctly.",
     {
-      target: z
-        .string()
-        .describe(
-          "Target name (e.g. 'raspberrypi5', 'jetson-orin-nano-devkit').",
-        ),
+      title: "Get UART parameters + credentials for a target",
+      description:
+        "Get the serial-console connection parameters (baud, voltage, parity, data bits, stop bits) and default login credentials for a given Avocado target, plus per-target wiring caveats (Jetson pinout, RS-232 vs TTL, etc.). Call this once you know the user's target so you can configure the serial bridge correctly.",
+      inputSchema: {
+        target: z
+          .string()
+          .describe(
+            "Target name (e.g. 'raspberrypi5', 'jetson-orin-nano-devkit').",
+          ),
+      },
+      outputSchema: {
+        target: z.string(),
+        serial: z.object({
+          baud: z.number().int(),
+          voltage: z.string(),
+          parity: z.string(),
+          dataBits: z.number().int(),
+          stopBits: z.number().int(),
+        }),
+        defaultUser: z.string(),
+        defaultPasswordNote: z.string(),
+        caveats: z.array(z.string()),
+      },
+      annotations: {
+        title: "Get UART parameters + credentials for a target",
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
     },
     async ({ target }) => {
       const info = getDeviceConnectionInfo(target);
@@ -123,36 +178,48 @@ export function registerDebuggingTools(server: McpServer): void {
             text: `\n\`\`\`json\n${JSON.stringify(info, null, 2)}\n\`\`\``,
           },
         ],
+        structuredContent: { ...info },
       };
     },
   );
 
-  server.tool(
+  server.registerTool(
     "get-tmux-uart-snippet",
-    "Generate the exact bash commands to bridge a UART serial console to Claude through a detached tmux session. **Requires BOTH `tmux` AND a serial terminal emulator** (`tio`, `picocom`, or `minicom`) — `tmux` alone cannot talk to a serial device. Call `detect-serial-ports` first to confirm which emulators are installed. Returns the `tmux new-session`, `tmux send-keys`, and `tmux capture-pane` snippets pre-filled with the user's port, target's baud rate, and chosen emulator.",
     {
-      portPath: z
-        .string()
-        .describe(
-          "Full path to the serial port (from detect-serial-ports), e.g. '/dev/tty.usbserial-AB0123' or '/dev/ttyUSB0'.",
-        ),
-      target: z
-        .string()
-        .describe(
-          "Target name. Used to look up the correct baud rate (almost always 115200).",
-        ),
-      emulator: z
-        .enum(["tio", "picocom", "minicom"])
-        .optional()
-        .describe(
-          "Serial terminal emulator to drive. Defaults to 'tio' (recommended — cleanest output for tmux capture-pane). Pick whichever is installed on the host per detect-serial-ports. `screen` is NOT supported — its Ctrl-A binding collides with tmux and its terminal control sequences pollute capture-pane output.",
-        ),
-      sessionName: z
-        .string()
-        .optional()
-        .describe(
-          "Optional tmux session name. Defaults to 'avocado-uart'. Use a different name only if you already have an avocado-uart session for another device.",
-        ),
+      title: "Get tmux+UART bridge commands",
+      description:
+        "Generate the exact bash commands to bridge a UART serial console to Claude through a detached tmux session. **Requires BOTH `tmux` AND a serial terminal emulator** (`tio`, `picocom`, or `minicom`) — `tmux` alone cannot talk to a serial device. Call `detect-serial-ports` first to confirm which emulators are installed. Returns the `tmux new-session`, `tmux send-keys`, and `tmux capture-pane` snippets pre-filled with the user's port, target's baud rate, and chosen emulator.",
+      inputSchema: {
+        portPath: z
+          .string()
+          .describe(
+            "Full path to the serial port (from detect-serial-ports), e.g. '/dev/tty.usbserial-AB0123' or '/dev/ttyUSB0'.",
+          ),
+        target: z
+          .string()
+          .describe(
+            "Target name. Used to look up the correct baud rate (almost always 115200).",
+          ),
+        emulator: z
+          .enum(["tio", "picocom", "minicom"])
+          .optional()
+          .describe(
+            "Serial terminal emulator to drive. Defaults to 'tio' (recommended — cleanest output for tmux capture-pane). Pick whichever is installed on the host per detect-serial-ports. `screen` is NOT supported — its Ctrl-A binding collides with tmux and its terminal control sequences pollute capture-pane output.",
+          ),
+        sessionName: z
+          .string()
+          .optional()
+          .describe(
+            "Optional tmux session name. Defaults to 'avocado-uart'. Use a different name only if you already have an avocado-uart session for another device.",
+          ),
+      },
+      annotations: {
+        title: "Get tmux+UART bridge commands",
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
     },
     async ({ portPath, target, emulator, sessionName }) => {
       const info = getDeviceConnectionInfo(target);

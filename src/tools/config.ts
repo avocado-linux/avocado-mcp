@@ -3,16 +3,27 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { fetchSchema } from "../lib/schema-client.js";
 
 export function registerConfigTools(server: McpServer): void {
-  server.tool(
+  server.registerTool(
     "get-config-schema",
-    "REQUIRED: Acquire the JSON schema for Avocado OS configurations. This schema is essential for validating all Avocado configurations and must be obtained before generating any configuration files.",
     {
-      version: z
-        .string()
-        .optional()
-        .describe(
-          "Git tag/version to fetch (e.g., 'v1.0.0', 'main'). If not provided, fetches the latest version from main branch",
-        ),
+      title: "Get the avocado.yaml JSON schema",
+      description:
+        "REQUIRED: Acquire the JSON schema for Avocado OS configurations. This schema is essential for validating all Avocado configurations and must be obtained before generating any configuration files.",
+      inputSchema: {
+        version: z
+          .string()
+          .optional()
+          .describe(
+            "Git tag/version to fetch (e.g., 'v1.0.0', 'main'). If not provided, fetches the latest version from main branch",
+          ),
+      },
+      annotations: {
+        title: "Get the avocado.yaml JSON schema",
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
     },
     async ({ version }) => {
       try {

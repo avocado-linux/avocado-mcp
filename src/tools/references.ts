@@ -11,55 +11,112 @@ import {
   type ReferenceProject,
 } from "../lib/references-client.js";
 
-export function registerReferenceTools(server: McpServer): void {
-  server.tool(
-    "list-references",
-    "List the catalog of Avocado OS reference projects (working starter projects in C, Python, Rust, Node, Elixir, etc.). Returns slug + title + language + a one-line summary for each. Use this when the user wants to see what examples exist or pick one to copy from.",
-    {},
-    async () => {
-      const all = listReferences();
-      return { content: [{ type: "text", text: renderList(all) }] };
-    },
-  );
+const referenceEntrySchema = z.object({
+  slug: z.string(),
+  title: z.string(),
+  language: z.string(),
+  summary: z.string(),
+  hardware: z.array(z.string()),
+  tags: z.array(z.string()),
+});
 
-  server.tool(
+export function registerReferenceTools(server: McpServer): void {
+  server.registerTool(
     "search-references",
-    "Search the reference catalog by free text (matches against slug, title, language, summary, and tags). Optionally filter to references known to work on a specific target.",
     {
-      query: z
-        .string()
-        .describe(
-          "Free-text search. Examples: 'python', 'gpio', 'gstreamer', 'kiosk'.",
-        ),
-      target: z
-        .string()
-        .optional()
-        .describe(
-          "Optional target to filter by (e.g. 'raspberrypi5'). Only matches references whose 'hardware' list either contains this target or is empty (generic).",
-        ),
+      title: "Browse or search Avocado references",
+      description:
+        "Browse or search the catalog of Avocado OS reference projects (working starter projects in C, Python, Rust, Node, Elixir, etc.). With NO `query`, returns the full catalog as a browseable list. With `query`, returns ranked matches against slug, title, language, summary, and tags. Optionally filter by target. Use this whenever the user wants to see what examples exist, find one matching their task, or copy from one.",
+      inputSchema: {
+        query: z
+          .string()
+          .optional()
+          .describe(
+            "Free-text search. Omit to list the full catalog. Examples: 'python', 'gpio', 'gstreamer', 'kiosk', 'mqtt'.",
+          ),
+        target: z
+          .string()
+          .optional()
+          .describe(
+            "Optional target to filter by (e.g. 'raspberrypi5'). Only matches references whose 'hardware' list either contains this target or is empty (generic).",
+          ),
+      },
+      outputSchema: {
+        mode: z
+          .enum(["browse", "search"])
+          .describe("'browse' if no query, 'search' if query supplied."),
+        query: z.string().optional(),
+        target: z.string().optional(),
+        total: z.number().int(),
+        references: z.array(referenceEntrySchema),
+      },
+      annotations: {
+        title: "Browse or search Avocado references",
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
     },
     async ({ query, target }) => {
-      const matches = searchReferences(query, target);
+      const q = query?.trim() ?? "";
+      if (q.length === 0) {
+        // Catalog-browse mode
+        const all = target ? searchReferences("", target) : listReferences();
+        let out = `# search-references — catalog\n\n`;
+        out += `**Total:** ${all.length}${target ? `  •  **Target filter:** \`${target}\`` : ""}\n\n`;
+        out += renderList(all);
+        return {
+          content: [{ type: "text", text: out }],
+          structuredContent: {
+            mode: "browse" as const,
+            target,
+            total: all.length,
+            references: all,
+          },
+        };
+      }
+
+      // Ranked-search mode
+      const matches = searchReferences(q, target);
       return {
         content: [
           {
             type: "text",
-            text: `# search-references\n\n**Query:** \`${query}\`${target ? `  •  **Target:** \`${target}\`` : ""}\n**Matches:** ${matches.length}\n\n${renderList(matches)}`,
+            text: `# search-references\n\n**Query:** \`${q}\`${target ? `  •  **Target:** \`${target}\`` : ""}\n**Matches:** ${matches.length}\n\n${renderList(matches)}`,
           },
         ],
+        structuredContent: {
+          mode: "search" as const,
+          query: q,
+          target,
+          total: matches.length,
+          references: matches,
+        },
       };
     },
   );
 
-  server.tool(
+  server.registerTool(
     "get-reference",
-    "Fetch the full project bundle for a reference: file tree, `avocado.yaml`, README, getting-started guide, and a summary of build hooks and overlay layout. Use this after the user picks a reference via list-references or search-references. Files large or specific to a single concern (e.g. `app/server.js`) are NOT included by default — fetch them with `get-reference-file` if needed.",
     {
-      slug: z
-        .string()
-        .describe(
-          "Reference slug from the catalog. Examples: 'python-flask', 'rust-vitals', 'c-gpio', 'nodejs-dashboard'.",
-        ),
+      title: "Get full reference project bundle",
+      description:
+        "Fetch the full project bundle for a reference: file tree, `avocado.yaml`, README, getting-started guide, and a summary of build hooks and overlay layout. Use this after the user picks a reference via `search-references`. Files large or specific to a single concern (e.g. `app/server.js`) are NOT included by default — fetch them with `get-reference-file` if needed.",
+      inputSchema: {
+        slug: z
+          .string()
+          .describe(
+            "Reference slug from the catalog. Examples: 'python-flask', 'rust-vitals', 'c-gpio', 'nodejs-dashboard'.",
+          ),
+      },
+      annotations: {
+        title: "Get full reference project bundle",
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
     },
     async ({ slug }) => {
       try {
@@ -69,9 +126,10 @@ export function registerReferenceTools(server: McpServer): void {
             content: [
               {
                 type: "text",
-                text: `Unknown reference "${slug}". Run \`list-references\` to see the catalog.`,
+                text: `Unknown reference "${slug}". Run \`search-references\` to see the catalog.`,
               },
             ],
+            isError: true,
           };
         }
         const project = await fetchReferenceProject(slug);
@@ -81,28 +139,40 @@ export function registerReferenceTools(server: McpServer): void {
           content: [
             {
               type: "text",
-              text: `# get-reference failed\n\n❌ ${error}\n\nTry again or verify the slug with \`list-references\`.`,
+              text: `# get-reference failed\n\n❌ ${error}\n\nTry again or verify the slug with \`search-references\`.`,
             },
           ],
+          isError: true,
         };
       }
     },
   );
 
-  server.tool(
+  server.registerTool(
     "get-reference-file",
-    "Fetch a single file from a reference project by relative path. Use this to read app source, overlay files (systemd units, configs), or build scripts after `get-reference` has shown you the file tree. Bounded to 1 MB per file.",
     {
-      slug: z
-        .string()
-        .describe(
-          "Reference slug (e.g. 'nodejs-dashboard'). Must match an entry from list-references.",
-        ),
-      path: z
-        .string()
-        .describe(
-          "Path within the reference, relative to its root. Examples: 'app/server.js', 'app/overlay/usr/lib/systemd/system/app.service', 'app-install.sh'.",
-        ),
+      title: "Get a single file from a reference",
+      description:
+        "Fetch a single file from a reference project by relative path. Use this to read app source, overlay files (systemd units, configs), or build scripts after `get-reference` has shown you the file tree. Bounded to 1 MB per file.",
+      inputSchema: {
+        slug: z
+          .string()
+          .describe(
+            "Reference slug (e.g. 'nodejs-dashboard'). Must match an entry from search-references.",
+          ),
+        path: z
+          .string()
+          .describe(
+            "Path within the reference, relative to its root. Examples: 'app/server.js', 'app/overlay/usr/lib/systemd/system/app.service', 'app-install.sh'.",
+          ),
+      },
+      annotations: {
+        title: "Get a single file from a reference",
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
     },
     async ({ slug, path }) => {
       try {
@@ -112,9 +182,10 @@ export function registerReferenceTools(server: McpServer): void {
             content: [
               {
                 type: "text",
-                text: `Unknown reference "${slug}". Run \`list-references\` to see the catalog.`,
+                text: `Unknown reference "${slug}". Run \`search-references\` to see the catalog.`,
               },
             ],
+            isError: true,
           };
         }
         const content = await fetchReferenceFile(slug, path);
@@ -134,6 +205,7 @@ export function registerReferenceTools(server: McpServer): void {
               text: `# get-reference-file failed\n\n❌ ${error}\n\nUse \`get-reference\` first to see what files exist for this slug.`,
             },
           ],
+          isError: true,
         };
       }
     },

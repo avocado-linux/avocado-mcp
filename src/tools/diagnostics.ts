@@ -13,16 +13,37 @@ export function registerDiagnosticsTools(
   server: McpServer,
   repoClient: RepoClient,
 ): void {
-  server.tool(
+  const diagnosisSchema = z.object({
+    label: z.string(),
+    excerpt: z.string(),
+    cause: z.string(),
+    suggestion: z.string(),
+  });
+
+  server.registerTool(
     "diagnose-provision-log",
-    "Analyze the output of `avocado provision` for known failure patterns (auto-mount, missing device, USB issues, permission errors, etc.) and return a structured diagnosis. Use this when a provision failed and the user has pasted the log.",
     {
-      log: z
-        .string()
-        .min(1)
-        .describe(
-          "Full or partial provision log output. Paste verbatim — heuristics scan for known error fingerprints.",
-        ),
+      title: "Diagnose an avocado provision log",
+      description:
+        "Analyze the output of `avocado provision` for known failure patterns (auto-mount, missing device, USB issues, permission errors, etc.) and return a structured diagnosis. Use this when a provision failed and the user has pasted the log.",
+      inputSchema: {
+        log: z
+          .string()
+          .min(1)
+          .describe(
+            "Full or partial provision log output. Paste verbatim — heuristics scan for known error fingerprints.",
+          ),
+      },
+      outputSchema: {
+        diagnoses: z.array(diagnosisSchema),
+      },
+      annotations: {
+        title: "Diagnose an avocado provision log",
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
     },
     async ({ log }) => {
       const diagnoses = diagnoseProvisionLog(log);
@@ -30,26 +51,59 @@ export function registerDiagnosticsTools(
         content: [
           { type: "text", text: renderDiagnoses("provision", diagnoses) },
         ],
+        structuredContent: { diagnoses },
       };
     },
   );
 
-  server.tool(
+  server.registerTool(
     "explain-build-error",
-    "Analyze the output of `avocado build` or `avocado install` for known failure patterns AND actively probe the package feed. When you pass `targets`, the tool extracts any failing package names from the log and looks them up across both the `edge` and `apollo` channels — turning generic 'package not found' advice into a concrete answer (e.g. 'present on apollo only, switch distro.channel'). Always pass `targets` if you know them; without it the tool falls back to pattern matching only.",
     {
-      log: z
-        .string()
-        .min(1)
-        .describe(
-          "Full or partial build/install log output. Paste verbatim — heuristics scan for known error fingerprints and extract failing package names.",
-        ),
-      targets: z
-        .array(z.string())
-        .optional()
-        .describe(
-          "Target(s) the user was building for (e.g. ['jetson-orin-nano-devkit']). Strongly recommended — enables cross-channel package lookup that often surfaces the actual cause when patterns alone are inconclusive.",
-        ),
+      title: "Diagnose an avocado build/install log",
+      description:
+        "Analyze the output of `avocado build` or `avocado install` for known failure patterns AND actively probe the package feed. When you pass `targets`, the tool extracts any failing package names from the log and looks them up across both the `edge` and `apollo` channels — turning generic 'package not found' advice into a concrete answer (e.g. 'present on apollo only, switch distro.channel'). Always pass `targets` if you know them; without it the tool falls back to pattern matching only.",
+      inputSchema: {
+        log: z
+          .string()
+          .min(1)
+          .describe(
+            "Full or partial build/install log output. Paste verbatim — heuristics scan for known error fingerprints and extract failing package names.",
+          ),
+        targets: z
+          .array(z.string())
+          .optional()
+          .describe(
+            "Target(s) the user was building for (e.g. ['jetson-orin-nano-devkit']). Strongly recommended — enables cross-channel package lookup that often surfaces the actual cause when patterns alone are inconclusive.",
+          ),
+      },
+      outputSchema: {
+        diagnoses: z.array(diagnosisSchema),
+        investigations: z
+          .array(
+            z.object({
+              name: z.string(),
+              edge: z.array(
+                z.object({ repo: z.string(), version: z.string() }),
+              ),
+              apollo: z.array(
+                z.object({ repo: z.string(), version: z.string() }),
+              ),
+              edgeError: z.string().optional(),
+              apolloError: z.string().optional(),
+            }),
+          )
+          .optional()
+          .describe(
+            "Per-package cross-channel lookup. Only populated when `targets` was supplied.",
+          ),
+      },
+      annotations: {
+        title: "Diagnose an avocado build/install log",
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
     },
     async ({ log, targets }) => {
       const diagnoses = diagnoseBuildLog(log);
@@ -58,6 +112,7 @@ export function registerDiagnosticsTools(
           content: [
             { type: "text", text: renderDiagnoses("build", diagnoses) },
           ],
+          structuredContent: { diagnoses },
         };
       }
       const names = extractFailingPackages(log);
@@ -76,19 +131,31 @@ export function registerDiagnosticsTools(
             }),
           },
         ],
+        structuredContent: { diagnoses, investigations },
       };
     },
   );
 
-  server.tool(
+  server.registerTool(
     "get-provisioning-steps",
-    "Return the per-target provisioning steps for a given target (which profile to use, which media to flash, the exact `avocado provision` command, and per-target caveats like linuxAutoMount or tegraflash recovery mode). Look this up before telling a user how to provision.",
     {
-      target: z
-        .string()
-        .describe(
-          "Target name (must match an entry from list-targets, e.g. 'raspberrypi5').",
-        ),
+      title: "Get per-target provisioning steps",
+      description:
+        "Return the per-target provisioning steps for a given target (which profile to use, which media to flash, the exact `avocado provision` command, and per-target caveats like linuxAutoMount or tegraflash recovery mode). Look this up before telling a user how to provision.",
+      inputSchema: {
+        target: z
+          .string()
+          .describe(
+            "Target name (must match an entry from list-targets, e.g. 'raspberrypi5').",
+          ),
+      },
+      annotations: {
+        title: "Get per-target provisioning steps",
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
     },
     async ({ target }) => {
       const validTargets = await repoClient.getTargetsConfig();
