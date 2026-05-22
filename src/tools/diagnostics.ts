@@ -199,11 +199,30 @@ export function registerDiagnosticsTools(
       if (profile.warnings.length > 0) {
         out += `**Warnings:** ${profile.warnings.join(", ")}\n`;
       }
+      const profileArg =
+        profile.profile !== "default" ? ` --profile ${profile.profile}` : "";
+      const provisionCmd = `avocado provision -r dev${profileArg}`;
+
       out += `\n## Steps\n\n`;
-      out += "```bash\n";
-      out += `avocado build\n`;
-      out += `avocado provision -r dev${profile.profile !== "default" ? ` --profile ${profile.profile}` : ""}\n`;
-      out += "```\n\n";
+      if (isQemu) {
+        out += `For QEMU targets, there's no provision-to-media step — launch the VM directly:\n\n`;
+        out += "```bash\n";
+        out += `avocado build --no-tui\n`;
+        out += `avocado sdk run -iE vm dev\n`;
+        out += "```\n\n";
+      } else {
+        out += `**For a HUMAN running these in their own terminal:**\n\n`;
+        out += "```bash\n";
+        out += `avocado build --no-tui\n`;
+        out += `${provisionCmd} --no-tui\n`;
+        out += "```\n\n";
+        out += `**For an LLM running via the Bash tool (NO interactive terminal):** \`avocado provision\` shells out to \`docker run -it\` internally and fails under a non-TTY harness with \`the input device is not a TTY\`. **\`--no-tui\` does NOT fix this** — \`--no-tui\` only controls Avocado's own output rendering, not Docker's TTY requirement. Wrap with \`script -q /dev/null\` to provide a pseudo-TTY:\n\n`;
+        out += "```bash\n";
+        out += `avocado build --no-tui > /tmp/avocado-build.log 2>&1\n`;
+        out += `script -q /dev/null ${provisionCmd} --no-tui > /tmp/avocado-provision.log 2>&1\n`;
+        out += "```\n\n";
+        out += `**This wrapper is required for every \`avocado provision\` call you make via Bash.** Without it the provision exits immediately with the TTY error; passing \`--no-tui\` alone is not sufficient.\n\n`;
+      }
       if (profile.notes.length > 0) {
         out += `## Notes\n\n`;
         for (const n of profile.notes) out += `- ${n}\n`;

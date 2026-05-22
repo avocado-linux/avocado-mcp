@@ -138,6 +138,26 @@ The only legitimate reason to inspect the host's container runtime directly is i
 
 \`avocado install\`, \`avocado build\`, and \`avocado deploy\` default to a TUI: status spinners, screen redraws, ANSI escapes. That format is fine for a human watching a terminal but it turns a captured log file into garbage that \`grep\` and \`tail\` can't parse. **When you (the LLM) are capturing output to a file, always pass \`--no-tui\`.** It produces clean line-oriented stdout. Only omit it if a human is running the command directly in their own terminal.
 
+### \`avocado provision\` needs a pseudo-TTY — wrap with \`script\`
+
+This is a separate issue from \`--no-tui\` and **the most common reason \`avocado provision\` fails when an LLM runs it via Bash**:
+
+\`\`\`
+the input device is not a TTY
+\`\`\`
+
+\`avocado provision\` shells out to \`docker run -it\` internally — the \`-t\` flag requires a TTY allocated for the container. The Bash tool runs commands without a TTY, so the call fails immediately. **\`--no-tui\` does NOT fix this** — \`--no-tui\` only affects Avocado's own output rendering, not Docker's TTY requirement.
+
+The fix is to wrap with \`script -q /dev/null\`, which provides a pseudo-TTY:
+
+\`\`\`bash
+script -q /dev/null avocado provision -r dev --no-tui > /tmp/avocado-provision.log 2>&1
+\`\`\`
+
+\`script\` is in coreutils on Linux and util-linux on macOS — it's almost always already installed. \`-q\` suppresses its banner; \`/dev/null\` discards its typescript file (we already have the redirect to \`/tmp/avocado-provision.log\`).
+
+**Rule:** every \`avocado provision\` invocation you make from Bash needs the wrapper. \`avocado build\`, \`avocado install\`, \`avocado deploy\` do NOT need it (they don't shell out to \`docker run -it\` the same way).
+
 ### Filtering noise — required pattern for install/build
 
 \`avocado install\` and \`avocado build\` produce hundreds of lines (package resolution, downloads, compile output). Loading all of that into context burns tokens. The required pattern:
