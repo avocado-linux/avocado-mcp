@@ -23,6 +23,15 @@ interface Pattern {
 
 const PROVISION_PATTERNS: Pattern[] = [
   {
+    label: "Non-TTY harness — needs `script` wrapper",
+    match:
+      /the input device is not a TTY|stdin is not a (?:terminal|tty)|inappropriate ioctl for device|cannot enable tty/i,
+    cause:
+      "`avocado provision` shells out to `docker run -it` internally, which requires a TTY allocated for the container. When you (the LLM) run it via a non-interactive Bash tool, that TTY doesn't exist and the command exits immediately. `--no-tui` does NOT fix this — it only controls Avocado's own output rendering, not Docker's `-it` requirement.",
+    suggestion:
+      "Wrap the command with `script -q /dev/null` to provide a pseudo-TTY: `script -q /dev/null avocado provision -r <runtime> [--profile <prof>] --no-tui > /tmp/avocado-provision.log 2>&1`. This is the standard workaround when running interactive-Docker-shelling CLIs from a non-interactive harness. Re-run with the wrapper and the TTY error should disappear.",
+  },
+  {
     label: "Device auto-mounted by host OS",
     match: /(automount|auto-mounted|gvfs|udisks)/i,
     cause:

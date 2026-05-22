@@ -121,11 +121,14 @@ export function registerProjectTools(
           .join("\n");
         out += `\n\n`;
       }
+      const rt = runtimeName ?? "dev";
       out += `Save the YAML below as \`avocado.yaml\` at your project root, then:\n\n`;
-      out +=
-        "```bash\navocado install\navocado build\navocado provision -r " +
-        (runtimeName ?? "dev") +
-        "\n```\n\n";
+      out += "```bash\n";
+      out += `avocado install -f --no-tui\n`;
+      out += `avocado build --no-tui\n`;
+      out += `# avocado provision needs a TTY — when running via Bash (no terminal), wrap with script:\n`;
+      out += `script -q /dev/null avocado provision -r ${rt} --no-tui\n`;
+      out += "```\n\n";
       out += `## avocado.yaml\n\n\`\`\`yaml\n${yaml}\`\`\``;
 
       return { content: [{ type: "text", text: out }] };
