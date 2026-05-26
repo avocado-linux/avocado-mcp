@@ -172,6 +172,131 @@ export function diagnoseBuildLog(log: string): Diagnosis[] {
 }
 
 /**
+ * Generic, domain-agnostic shape extraction for any failure log.
+ *
+ * Pulls structured signals that may be useful even when no `Pattern` in our
+ * curated lists matched. The LLM uses whichever fields are relevant — nothing
+ * here prescribes a fix or claims to understand the failure.
+ */
+export interface LogShape {
+  hasErrors: boolean;
+  exitCode: number | null;
+  errorLines: string[];
+  filePaths: string[];
+  commands: string[];
+}
+
+const ERROR_LINE_RE =
+  /^(?:.{0,200})(?:\bERROR\b|\berror:|\bFailed\b|\bfatal:|\bFatal:|\bpanic:?|\bTraceback\b|\bAssertion|\bsegfault\b|\bsegmentation fault\b)/i;
+const EXIT_CODE_RE = /\b(?:exit(?: code|ed with)?|returned)\s*[:=]?\s*(\d+)/i;
+const FILE_PATH_RE =
+  /(?:^|[\s'"`(])((?:\/[A-Za-z0-9._+\-/]+|[A-Za-z]:\\[A-Za-z0-9._+\-\\]+))(?=[\s'"`):,;]|$)/g;
+const COMMAND_RE = /^\s*\$\s+(.+?)$|^\+ (.+?)$|^Running:\s+(.+?)$/m;
+
+/** Conservative file-path filter — drop obviously-not-useful paths. */
+function isInterestingPath(p: string): boolean {
+  if (p.length < 4 || p.length > 256) return false;
+  // Drop pure /dev/null, /tmp/random scratch, /proc/, very common log dirs
+  if (/^\/dev\/null$/.test(p)) return false;
+  if (/^\/proc\//.test(p)) return false;
+  // Anchor to anything that looks like a project/source/SDK path
+  return /\/(?:src|app|opt|usr|etc|var|home|workspace|build|sysroots?|extensions?|runtimes?|target|sdk)\//i.test(
+    p,
+  );
+}
+
+/**
+ * Extract generic signals from a log. Safe to call on any string; returns
+ * empty arrays when nothing applies. Bounds output sizes so a giant log
+ * doesn't blow up downstream context.
+ */
+export function extractLogShape(log: string): LogShape {
+  const errorLines: string[] = [];
+  const filePathsSeen = new Set<string>();
+  const commands: string[] = [];
+  let exitCode: number | null = null;
+
+  // Scan once, line by line.
+  const lines = log.split(/\r?\n/);
+  for (const raw of lines) {
+    const line = raw.length > 400 ? raw.slice(0, 400) + " …(truncated)" : raw;
+    if (ERROR_LINE_RE.test(line) && errorLines.length < 20) {
+      errorLines.push(line.trim());
+    }
+    const cmdMatch = line.match(COMMAND_RE);
+    if (cmdMatch && commands.length < 5) {
+      const cmd = (cmdMatch[1] || cmdMatch[2] || cmdMatch[3] || "").trim();
+      if (cmd.length > 0 && cmd.length < 300) commands.push(cmd);
+    }
+  }
+
+  // Exit code: last occurrence wins.
+  const exitMatches = Array.from(log.matchAll(new RegExp(EXIT_CODE_RE, "gi")));
+  if (exitMatches.length > 0) {
+    const last = exitMatches[exitMatches.length - 1]!;
+    const n = Number(last[1]);
+    if (Number.isFinite(n)) exitCode = n;
+  }
+
+  // File paths: scan whole log, dedupe, filter.
+  for (const m of log.matchAll(FILE_PATH_RE)) {
+    const p = m[1];
+    if (!p) continue;
+    if (filePathsSeen.size >= 15) break;
+    if (isInterestingPath(p)) filePathsSeen.add(p);
+  }
+
+  return {
+    hasErrors: errorLines.length > 0,
+    exitCode,
+    errorLines,
+    filePaths: Array.from(filePathsSeen),
+    commands,
+  };
+}
+
+/**
+ * Render a fallback diagnosis when no curated pattern matched but the log
+ * clearly contains error signals. Tells the LLM honestly that we don't
+ * recognize this failure class, then routes it to productive next steps.
+ */
+export function renderFallbackDiagnosis(
+  kind: "build" | "provision",
+  shape: LogShape,
+): string {
+  let out = `## ⚠️ No known failure pattern matched\n\n`;
+  out += `The log contains error signals that don't match any fingerprint the MCP currently recognizes for ${kind} failures. The MCP is honest about this rather than silently returning an empty diagnosis. Below is what the log *does* contain — use it to drive the next step yourself.\n\n`;
+
+  if (shape.exitCode !== null) {
+    out += `**Exit code:** \`${shape.exitCode}\`\n\n`;
+  }
+
+  if (shape.commands.length > 0) {
+    out += `**Failing command (heuristic):**\n\n\`\`\`\n${shape.commands.slice(-1)[0]}\n\`\`\`\n\n`;
+  }
+
+  if (shape.errorLines.length > 0) {
+    const shown = shape.errorLines.slice(0, 10);
+    out += `**Error lines extracted from the log** (first ${shown.length}):\n\n\`\`\`\n${shown.join("\n")}\n\`\`\`\n\n`;
+  }
+
+  if (shape.filePaths.length > 0) {
+    out += `**File paths mentioned in the log** (the LLM can \`Read\` these if relevant):\n\n`;
+    for (const p of shape.filePaths.slice(0, 10)) out += `- \`${p}\`\n`;
+    out += `\n`;
+  }
+
+  out += `**Suggested next steps** (in order, stop when you find a useful lead):\n\n`;
+  out += `1. **\`search-docs\`** with a short, distinctive substring of the error line — usually the verbatim message text without paths or numbers. The Avocado docs site indexes failure modes and CLI behaviour.\n`;
+  out += `2. **\`search-packages\` / \`describe-package\`** if any error line names what looks like a package, library, or binary.\n`;
+  out += `3. **\`get-reference-file\`** to compare the failing component against a working reference's analogous file (e.g. \`avocado.yaml\`, a hook script, an overlay file).\n`;
+  out += `4. **\`Read\` the file paths** listed above if they look like project / extension / SDK files (NOT host-only paths).\n`;
+  out += `5. **Report the error** to the user with the extracted lines verbatim — don't fabricate a cause from training-data priors. Ask the user if they recognize the failure class.\n`;
+  out += `\n**Do not interpret an empty pattern list as "the build is fine."** The log has errors; we just don't have a curated diagnosis for this one yet. If this failure class is one you see often, file it at \`src/lib/diagnostics.ts\` so future runs get a curated fingerprint.\n`;
+  return out;
+}
+
+/**
  * Pull package names that the log accuses of being missing / unsatisfiable.
  * Conservative: only the well-known fingerprints from DNF / Avocado install.
  * Captured strings may be full NVRA (name-version-release.arch); we strip
@@ -375,15 +500,34 @@ export function renderDiagnoses(
   let out = `# ${headerName}\n\n`;
 
   if (diagnoses.length === 0) {
-    out += `No known failure pattern matched. The log may contain a novel error. Common things to check manually:\n\n`;
-    if (kind === "build") {
-      out += `- Is every package in your YAML in the repo? Run \`search-packages\`.\n`;
-      out += `- Does your YAML validate? Run \`validate-yaml\`.\n`;
-      out += `- Is Docker running with enough memory (≥8 GB)?\n`;
+    // Generic fallback — extract what we can from the log shape itself.
+    const shape = investigationContext?.rawLog
+      ? extractLogShape(investigationContext.rawLog)
+      : null;
+
+    if (shape && shape.hasErrors) {
+      // Log has clear error signals but no curated pattern matched.
+      out += renderFallbackDiagnosis(kind, shape);
+    } else if (shape && !shape.hasErrors) {
+      // No patterns AND no error signals — the log might genuinely be fine,
+      // or the user pasted something other than a failure log. Say so.
+      out += `_No known failure pattern matched, and the log doesn't contain obvious error signals (\`ERROR\`, \`error:\`, \`Failed\`, \`fatal:\`, \`Traceback\`, etc.)._\n\n`;
+      out += `Possibilities:\n\n`;
+      out += `- The build/provision actually succeeded. Check the exit code on the original command.\n`;
+      out += `- Only a partial log was pasted — re-paste the section containing the failure.\n`;
+      out += `- The failure is silent (process killed by OOM with no error message; check \`dmesg | grep -i "killed process"\`).\n`;
     } else {
-      out += `- Is the target media plugged in and detected? \`lsblk\` / \`diskutil list\`.\n`;
-      out += `- Is auto-mount disabled on your host?\n`;
-      out += `- For Jetson: is the device in recovery mode?\n`;
+      // No rawLog supplied (older callers / fallback). Generic checks.
+      out += `No known failure pattern matched. The log may contain a novel error. Common things to check manually:\n\n`;
+      if (kind === "build") {
+        out += `- Is every package in your YAML in the repo? Run \`search-packages\`.\n`;
+        out += `- Does your YAML validate? Run \`validate-yaml\`.\n`;
+        out += `- Is Docker running with enough memory (≥8 GB)?\n`;
+      } else {
+        out += `- Is the target media plugged in and detected? \`lsblk\` / \`diskutil list\`.\n`;
+        out += `- Is auto-mount disabled on your host?\n`;
+        out += `- For Jetson: is the device in recovery mode?\n`;
+      }
     }
   } else {
     out += `Found **${diagnoses.length}** likely issue(s):\n\n`;
