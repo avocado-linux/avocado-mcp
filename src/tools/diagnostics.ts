@@ -4,6 +4,7 @@ import {
   diagnoseProvisionLog,
   diagnoseBuildLog,
   extractFailingPackages,
+  extractLogShape,
   investigatePackages,
   renderDiagnoses,
 } from "../lib/diagnostics.js";
@@ -20,12 +21,36 @@ export function registerDiagnosticsTools(
     suggestion: z.string(),
   });
 
+  const logShapeSchema = z.object({
+    hasErrors: z
+      .boolean()
+      .describe(
+        "True when the log contains generic error signals (ERROR, error:, Failed, fatal:, Traceback, etc.). Even when no curated pattern matched, `hasErrors=true` means the log is a failure, not a success.",
+      ),
+    exitCode: z.number().int().nullable(),
+    errorLines: z
+      .array(z.string())
+      .describe(
+        "Up to 20 lines containing error signals, in source order. Useful as a fallback excerpt when no curated pattern matched.",
+      ),
+    filePaths: z
+      .array(z.string())
+      .describe(
+        "Project / extension / SDK file paths mentioned in the log. Candidate targets for `Read` to investigate further.",
+      ),
+    commands: z
+      .array(z.string())
+      .describe(
+        "Heuristically-detected commands the log records (e.g. `+ avocado build`).",
+      ),
+  });
+
   server.registerTool(
     "diagnose-provision-log",
     {
       title: "Diagnose an avocado provision log",
       description:
-        "Analyze the output of `avocado provision` for known failure patterns (auto-mount, missing device, USB issues, permission errors, etc.) and return a structured diagnosis. Use this when a provision failed and the user has pasted the log.",
+        "Analyze the output of `avocado provision` for known failure patterns (auto-mount, missing device, USB issues, permission errors, TTY harness, etc.) and return a structured diagnosis. When no curated pattern matches, the tool falls back to a generic log-shape extraction: error-line excerpts, exit code, suggested-file-paths, and explicit next-step routing — never returns an empty response when the log has errors. Use this whenever a provision failed and the user has pasted the log.",
       inputSchema: {
         log: z
           .string()
@@ -36,6 +61,7 @@ export function registerDiagnosticsTools(
       },
       outputSchema: {
         diagnoses: z.array(diagnosisSchema),
+        shape: logShapeSchema,
       },
       annotations: {
         title: "Diagnose an avocado provision log",
@@ -47,11 +73,18 @@ export function registerDiagnosticsTools(
     },
     async ({ log }) => {
       const diagnoses = diagnoseProvisionLog(log);
+      const shape = extractLogShape(log);
       return {
         content: [
-          { type: "text", text: renderDiagnoses("provision", diagnoses) },
+          {
+            type: "text",
+            text: renderDiagnoses("provision", diagnoses, undefined, {
+              targets: [],
+              rawLog: log,
+            }),
+          },
         ],
-        structuredContent: { diagnoses },
+        structuredContent: { diagnoses, shape },
       };
     },
   );
@@ -61,7 +94,7 @@ export function registerDiagnosticsTools(
     {
       title: "Diagnose an avocado build/install log",
       description:
-        "Analyze the output of `avocado build` or `avocado install` for known failure patterns AND actively probe the package feed. When you pass `targets`, the tool extracts any failing package names from the log and looks them up across both the `edge` and `apollo` channels — turning generic 'package not found' advice into a concrete answer (e.g. 'present on apollo only, switch distro.channel'). Always pass `targets` if you know them; without it the tool falls back to pattern matching only.",
+        "Analyze the output of `avocado build` or `avocado install` for known failure patterns AND actively probe the package feed. When you pass `targets`, the tool extracts any failing package names from the log and looks them up across both the `edge` and `apollo` channels — turning generic 'package not found' advice into a concrete answer (e.g. 'present on apollo only, switch distro.channel'). Always pass `targets` if you know them. **When no curated pattern matches**, the tool falls back to a generic log-shape extraction: error-line excerpts, exit code, suggested-file-paths, and explicit next-step routing (`search-docs`, `search-packages`, `Read` mentioned files). Never returns an empty response when the log has errors — if `diagnoses` is empty and `shape.hasErrors` is true, the prose response contains the fallback diagnosis.",
       inputSchema: {
         log: z
           .string()
@@ -96,6 +129,7 @@ export function registerDiagnosticsTools(
           .describe(
             "Per-package cross-channel lookup. Only populated when `targets` was supplied.",
           ),
+        shape: logShapeSchema,
       },
       annotations: {
         title: "Diagnose an avocado build/install log",
@@ -107,12 +141,19 @@ export function registerDiagnosticsTools(
     },
     async ({ log, targets }) => {
       const diagnoses = diagnoseBuildLog(log);
+      const shape = extractLogShape(log);
       if (!targets || targets.length === 0) {
         return {
           content: [
-            { type: "text", text: renderDiagnoses("build", diagnoses) },
+            {
+              type: "text",
+              text: renderDiagnoses("build", diagnoses, undefined, {
+                targets: [],
+                rawLog: log,
+              }),
+            },
           ],
-          structuredContent: { diagnoses },
+          structuredContent: { diagnoses, shape },
         };
       }
       const names = extractFailingPackages(log);
@@ -131,7 +172,7 @@ export function registerDiagnosticsTools(
             }),
           },
         ],
-        structuredContent: { diagnoses, investigations },
+        structuredContent: { diagnoses, investigations, shape },
       };
     },
   );
