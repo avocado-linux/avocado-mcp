@@ -11,6 +11,7 @@ import * as tmuxUartBridge from "../resources/tmux-uart-bridge.js";
 import * as extensionBuildDebugging from "../resources/extension-build-debugging.js";
 import * as iterativeDeployment from "../resources/iterative-deployment.js";
 import * as appDevelopment from "../resources/app-development.js";
+import * as avocadoCliExecution from "../resources/avocado-cli-execution.js";
 
 interface Skill {
   uri: string;
@@ -32,6 +33,7 @@ const SKILLS: Skill[] = [
   toSkill(extensionBuildDebugging),
   toSkill(iterativeDeployment),
   toSkill(appDevelopment),
+  toSkill(avocadoCliExecution),
 ];
 
 function toSkill(mod: {

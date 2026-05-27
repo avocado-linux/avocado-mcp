@@ -466,10 +466,7 @@ export const AVOCADO_YAML_SCHEMA: object = {
             "Project-relative path to a post-install hook script run after package install + overlay and before mkfs.",
         },
         permissions: {
-          oneOf: [
-            { type: "string" },
-            { $ref: "#/$defs/permissionsConfig" },
-          ],
+          oneOf: [{ type: "string" }, { $ref: "#/$defs/permissionsConfig" }],
           description:
             "Either a string reference to a top-level `permissions.<name>` entry, or an inline permissions block. When set, users/groups are baked into this image's /etc/passwd, /etc/shadow, /etc/group at build time. Omit to leave the base packages' generic identity files untouched.",
         },
