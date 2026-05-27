@@ -158,6 +158,18 @@ export const AVOCADO_YAML_SCHEMA: object = {
       ],
     },
 
+    permissions: {
+      description:
+        "Top-level permissions definitions. Singleton-or-map. Each entry is a `{users, groups}` block referenced by name from `rootfs.<name>.permissions` / `initramfs.<name>.permissions`. Lets the same users/groups be reused across multiple images.",
+      oneOf: [
+        { $ref: "#/$defs/permissionsConfig" },
+        {
+          type: "object",
+          additionalProperties: { $ref: "#/$defs/permissionsConfig" },
+        },
+      ],
+    },
+
     // ─── Provisioning / signing / fleet ──────────────────────────────────
     provision_profiles: {
       type: "object",
@@ -352,7 +364,13 @@ export const AVOCADO_YAML_SCHEMA: object = {
         users: {
           type: "object",
           description:
-            "User accounts the extension contributes. Each key is a username; the value is a small object (e.g. `{password: ''}`).",
+            "[DEPRECATED] User accounts on extensions are deprecated and will be removed in a future release. Declare users in a top-level `permissions:` block and reference it from `rootfs.<name>.permissions` / `initramfs.<name>.permissions` instead. Each key is a username; the value is an attribute object.",
+          additionalProperties: { type: "object" },
+        },
+        groups: {
+          type: "object",
+          description:
+            "[DEPRECATED] Groups on extensions are deprecated and will be removed in a future release. Declare groups in a top-level `permissions:` block instead. Each key is a group name; the value is an attribute object.",
           additionalProperties: { type: "object" },
         },
         sdk: {
@@ -442,8 +460,42 @@ export const AVOCADO_YAML_SCHEMA: object = {
           description:
             "Image-builder backend args. Format depends on filesystem.",
         },
+        post_install: {
+          type: "string",
+          description:
+            "Project-relative path to a post-install hook script run after package install + overlay and before mkfs.",
+        },
+        permissions: {
+          oneOf: [
+            { type: "string" },
+            { $ref: "#/$defs/permissionsConfig" },
+          ],
+          description:
+            "Either a string reference to a top-level `permissions.<name>` entry, or an inline permissions block. When set, users/groups are baked into this image's /etc/passwd, /etc/shadow, /etc/group at build time. Omit to leave the base packages' generic identity files untouched.",
+        },
       },
       additionalProperties: true,
+    },
+
+    permissionsConfig: {
+      type: "object",
+      description:
+        "Users and groups to provision into a rootfs or initramfs image at build time. Referenced by name from `rootfs.<name>.permissions` / `initramfs.<name>.permissions`, or defined inline at the same location.",
+      properties: {
+        users: {
+          type: "object",
+          description:
+            "User accounts. Each key is a username; each value is an object accepting `password`, `uid`, `gid`, `gecos`, `home`, `shell`, `groups`, `system`, `disabled`, and shadow-aging attributes (`last_change`, `min_days`, `max_days`, `warn_days`, `inactive_days`, `expire_date`).",
+          additionalProperties: { type: "object" },
+        },
+        groups: {
+          type: "object",
+          description:
+            "Group definitions. Each key is a group name; each value is an object accepting `gid`, `password`, `members`, `admins`, `system`.",
+          additionalProperties: { type: "object" },
+        },
+      },
+      additionalProperties: false,
     },
 
     kernelConfig: {
