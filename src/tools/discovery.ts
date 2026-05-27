@@ -62,6 +62,81 @@ const execFileP = promisify(execFile);
 const MIN_FREE_GB = 8;
 const INSTALL_HINT = "curl -fsSL https://connect.peridio.com/install.sh | sh";
 
+// Host MCP probe. When this MCP runs inside the avocado-vm, the QEMU
+// user-mode NAT routes 10.0.2.2 to the macOS host's loopback, so the
+// desktop app's MCP server (`MCPHostServer.swift`, default port 11551)
+// is reachable. On a developer's workstation the address isn't
+// routable and the connect fails fast — that's the workstation signal.
+const HOST_MCP_URL = "http://10.0.2.2:11551/mcp";
+const HOST_MCP_PROBE_TIMEOUT_MS = 600;
+
+interface HostMcpDelegation {
+  available: boolean;
+  runToolName?: string;
+  statusToolName?: string;
+  awaitToolName?: string;
+  detail: string;
+}
+
+async function probeHostMcp(): Promise<HostMcpDelegation> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), HOST_MCP_PROBE_TIMEOUT_MS);
+  try {
+    const resp = await fetch(HOST_MCP_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/list",
+        params: {},
+      }),
+      signal: controller.signal,
+    });
+    if (!resp.ok) {
+      return {
+        available: false,
+        detail: `host MCP responded HTTP ${resp.status}`,
+      };
+    }
+    const body = (await resp.json()) as {
+      result?: { tools?: Array<{ name: string }> };
+    };
+    const names = new Set(
+      (body.result?.tools ?? []).map((t) => t.name).filter(Boolean),
+    );
+    if (names.has("run_avocado_cli") && names.has("avocado_cli_status")) {
+      return {
+        available: true,
+        runToolName: "run_avocado_cli",
+        statusToolName: "avocado_cli_status",
+        // Older host MCPs don't expose await_avocado_cli yet — surface
+        // it only when it's actually there so the agent's instructions
+        // line up with what it can call.
+        awaitToolName: names.has("await_avocado_cli")
+          ? "await_avocado_cli"
+          : undefined,
+        detail: "host MCP advertises CLI delegation",
+      };
+    }
+    return {
+      available: false,
+      detail: "host MCP reachable but does not expose run_avocado_cli",
+    };
+  } catch (e) {
+    // The expected workstation path: ECONNREFUSED / ENETUNREACH /
+    // AbortError. We don't surface the underlying error to the user —
+    // it's just "no host MCP" and that's fine.
+    const err = e as { name?: string; code?: string };
+    if (err.name === "AbortError") {
+      return { available: false, detail: "no host MCP (probe timed out)" };
+    }
+    return { available: false, detail: "no host MCP reachable" };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function checkBinary(
   cmd: string,
   args: string[],
@@ -121,10 +196,14 @@ export function registerDiscoveryTools(
     {
       title: "Check host prerequisites",
       description:
-        "Verify the host has the prerequisites to build and provision an Avocado OS project: `avocado` CLI on PATH, Docker daemon reachable, and ≥8 GB free disk space in $HOME. Also reports host CPU arch + OS so downstream tools (e.g. `init-project`) can warn about cross-arch QEMU performance gotchas. Call this BEFORE init-project / list-targets when the user is starting from scratch — it pre-empts the common `bash: avocado: command not found` and `Cannot connect to the Docker daemon` failures. **QEMU-target prerequisites** (qemu-system-*) are NOT checked here — `get-provisioning-steps` validates those when the resolved target is a QEMU one. Read-only.",
+        "Verify the host has the prerequisites to build and provision an Avocado OS project: `avocado` CLI on PATH, Docker daemon reachable, and ≥8 GB free disk space in $HOME. Also (a) reports host CPU arch + OS so downstream tools (e.g. `init-project`) can warn about cross-arch QEMU performance gotchas, and (b) detects the avocado-cli execution channel for this session — when reachable, the Avocado desktop's host MCP runs CLI commands on the user's Mac (their CLI, their config, their keys) so the LLM doesn't have to invoke the CLI directly. Call this BEFORE init-project / list-targets / build-and-deploy so subsequent steps follow the right invocation pattern. **QEMU-target prerequisites** (qemu-system-*) are NOT checked here — `get-provisioning-steps` validates those when the resolved target is a QEMU one. Read-only.",
       inputSchema: {},
       outputSchema: {
-        ok: z.boolean().describe("True iff all three checks pass."),
+        ok: z
+          .boolean()
+          .describe(
+            "True iff the session is ready to invoke avocado-cli — either all local checks pass, or the host MCP is delegating CLI calls.",
+          ),
         host: z.object({
           arch: z
             .enum(["arm64", "x86-64", "other"])
@@ -136,6 +215,17 @@ export function registerDiscoveryTools(
             .describe(
               "Node-reported OS family (`darwin`, `linux`, `win32`, etc.).",
             ),
+        }),
+        executionChannel: z.object({
+          mode: z
+            .enum(["host-tool", "bash"])
+            .describe(
+              "`host-tool` when the Avocado desktop's MCP is reachable and will run avocado-cli on the user's Mac. `bash` for a normal developer workstation — the LLM invokes `avocado` via its Bash tool.",
+            ),
+          runToolName: z.string().optional(),
+          statusToolName: z.string().optional(),
+          awaitToolName: z.string().optional(),
+          detail: z.string(),
         }),
         cli: z.object({
           ok: z.boolean(),
@@ -166,50 +256,97 @@ export function registerDiscoveryTools(
     },
     async () => {
       const host = { arch: normalizedHostArch(), platform: osPlatform() };
-      const [cli, docker, disk] = await Promise.all([
+      const [cli, docker, disk, delegation] = await Promise.all([
         checkBinary("avocado", ["--version"]),
         checkBinary("docker", ["info", "--format", "{{.ServerVersion}}"]),
         checkDiskGB(),
+        probeHostMcp(),
       ]);
 
-      const allOk = cli.ok && docker.ok && disk.ok;
+      // When the host MCP is delegating CLI calls, the LOCAL avocado /
+      // Docker / disk checks describe an environment we don't actually
+      // use — the binary, SDK container, and disk that matter are on
+      // the Mac, behind the host tool. So we gate readiness on
+      // whichever environment will run avocado-cli for this session.
+      const localOk = cli.ok && docker.ok && disk.ok;
+      const ready = delegation.available || localOk;
+
       let out = `# environment-check\n\n`;
-      out += `**Status:** ${allOk ? "✅ ready" : "❌ missing prerequisites"}\n`;
-      out += `**Host:** \`${host.platform}\` / \`${host.arch}\`\n\n`;
+      out += `**Status:** ${ready ? "✅ ready" : "❌ missing prerequisites"}\n`;
+      out += `**Host:** \`${host.platform}\` / \`${host.arch}\`\n`;
+      if (delegation.available) {
+        out += `**Execution channel:** \`host-tool\` (avocado-cli runs on the Mac via the Avocado desktop's host MCP).\n\n`;
+        out += `_Local checks below are informational — this session delegates CLI calls to the host, so these don't gate readiness:_\n\n`;
+      } else {
+        out += `**Execution channel:** \`bash\` (avocado-cli runs locally via your Bash tool).\n\n`;
+      }
       out += `| Check | Status | Detail |\n`;
       out += `|-------|--------|--------|\n`;
       out += `| \`avocado\` CLI on PATH | ${cli.ok ? "✅" : "❌"} | ${cli.detail} |\n`;
       out += `| Docker daemon | ${docker.ok ? "✅" : "❌"} | ${docker.detail} |\n`;
       out += `| Free disk (\`$HOME\`) | ${disk.ok ? "✅" : "❌"} | ${disk.freeGB.toFixed(1)} GB free (need ≥${MIN_FREE_GB}) |\n`;
 
+      out += `\n## Avocado-CLI execution channel\n\n`;
+      if (delegation.available) {
+        out += `- **Channel:** \`host-tool\`.\n`;
+        out += `- **Start a run with:** \`${delegation.runToolName}\` (returns a \`run_id\` immediately). Pass \`{ "args": ["build"], "project": "<name>" }\` or similar — do NOT pass \`--no-tui\`, the host already runs the CLI non-interactively.\n`;
+        if (delegation.awaitToolName) {
+          out += `- **Wait with:** \`${delegation.awaitToolName}\` — blocks the response until the run hits terminal state and the host wakes the call within milliseconds of process exit. Default \`max_wait_seconds\` 240; loop the call if the response carries \`timedOut: true\`. This is the canonical wait pattern (replaces the older scheduled-poll loop).\n`;
+          out += `- **Snapshot with:** \`${delegation.statusToolName}\` — one-shot status only (use inside scheduled follow-ups, or after you already know a run is terminal). Don't spin-poll it in-turn.\n`;
+        } else {
+          out += `- **Poll with:** \`${delegation.statusToolName}\` using the returned \`run_id\` until \`status\` is no longer \`running\`. Output (merged stdout+stderr, line-preserved) comes back in \`outputTail\`. (Note: this host MCP doesn't advertise \`await_avocado_cli\` — if it did, prefer that; it's a host-push wake with no scheduled-poll latency.)\n`;
+        }
+        out += `- **Do NOT also run \`avocado\` via your Bash tool** in this session — it would run inside the VM with a different CLI, config, and credential set than the user's host install. Read \`avocado://skills/avocado-cli-execution\` for the full contract.\n`;
+      } else {
+        out += `- **Channel:** \`bash\`.\n`;
+        out += `- **Probe of \`${HOST_MCP_URL}\`:** ${delegation.detail}. This is the normal channel on a developer workstation.\n`;
+        out += `- **Use the redirect-to-file + tail + grep pattern** in \`avocado://skills/avocado-cli-execution\` so long CLI output doesn't flood context.\n`;
+      }
+
       const fixes: string[] = [];
-      if (!cli.ok) {
-        fixes.push(
-          `- **Install the avocado CLI and put it on PATH:** \`${INSTALL_HINT}\` (macOS / Linux). If you have a local build of the CLI but it's not on PATH, symlink it: \`mkdir -p ~/.local/bin && ln -s /path/to/avocado ~/.local/bin/avocado\` (then ensure \`~/.local/bin\` is on PATH).`,
-        );
-      }
-      if (!docker.ok) {
-        fixes.push(
-          `- **Start Docker:** install Docker Desktop (macOS) or the \`docker\` engine (Linux), then ensure the daemon is running (\`docker info\` should succeed).`,
-        );
-      }
-      if (!disk.ok) {
-        fixes.push(
-          `- **Free disk space:** the SDK container + builds need ≥${MIN_FREE_GB} GB. Clear caches or move builds to a larger volume.`,
-        );
+      // Local-CLI fixes only surface when we'll actually use the local
+      // CLI. If the host MCP is delegating, missing local avocado /
+      // docker / disk isn't a blocker for this session.
+      if (!delegation.available) {
+        if (!cli.ok) {
+          fixes.push(
+            `- **Install the avocado CLI and put it on PATH:** \`${INSTALL_HINT}\` (macOS / Linux). If you have a local build of the CLI but it's not on PATH, symlink it: \`mkdir -p ~/.local/bin && ln -s /path/to/avocado ~/.local/bin/avocado\` (then ensure \`~/.local/bin\` is on PATH).`,
+          );
+        }
+        if (!docker.ok) {
+          fixes.push(
+            `- **Start Docker:** install Docker Desktop (macOS) or the \`docker\` engine (Linux), then ensure the daemon is running (\`docker info\` should succeed).`,
+          );
+        }
+        if (!disk.ok) {
+          fixes.push(
+            `- **Free disk space:** the SDK container + builds need ≥${MIN_FREE_GB} GB. Clear caches or move builds to a larger volume.`,
+          );
+        }
       }
       if (fixes.length > 0) {
         out += `\n## Fix\n\n${fixes.join("\n")}\n`;
-      } else {
+      } else if (ready) {
         out += `\nAll prerequisites satisfied. Safe to proceed with \`list-targets\` → \`init-project\`.\n`;
         out += `\n_QEMU prerequisites (\`qemu-system-*\`) are validated by \`get-provisioning-steps\` when the resolved target is a QEMU one — no need to check them here._\n`;
       }
 
+      const executionChannel = delegation.available
+        ? {
+            mode: "host-tool" as const,
+            runToolName: delegation.runToolName,
+            statusToolName: delegation.statusToolName,
+            awaitToolName: delegation.awaitToolName,
+            detail: delegation.detail,
+          }
+        : { mode: "bash" as const, detail: delegation.detail };
+
       return {
         content: [{ type: "text", text: out }],
         structuredContent: {
-          ok: allOk,
+          ok: ready,
           host,
+          executionChannel,
           cli,
           docker,
           disk: { ok: disk.ok, freeGB: disk.freeGB, minGB: MIN_FREE_GB },
