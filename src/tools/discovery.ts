@@ -3,9 +3,59 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { statfs } from "fs/promises";
-import { homedir } from "os";
+import { arch as osArch, platform as osPlatform, homedir } from "os";
 import { RepoClient } from "../lib/repo-client.js";
 import { resolveTarget } from "../lib/target-resolver.js";
+
+/**
+ * Normalize Node's `os.arch()` to the same vocabulary the rest of the MCP
+ * uses for target arch (e.g. `qemux86-64` → `x86-64`, `qemuarm64` → `arm64`).
+ */
+export function normalizedHostArch(): "arm64" | "x86-64" | "other" {
+  const a = osArch();
+  if (a === "arm64" || a === "aarch64") return "arm64";
+  if (a === "x64" || a === "x86_64") return "x86-64";
+  return "other";
+}
+
+/**
+ * Best-effort: given a target slug, return its arch family for cross-arch
+ * comparison with the host. Only QEMU targets carry an obvious arch hint in
+ * the slug. Returns `null` when we can't tell (most physical targets — the
+ * BSP packaging knows the arch, the slug alone doesn't).
+ */
+export function targetArchHint(target: string): "arm64" | "x86-64" | null {
+  if (target === "qemuarm64") return "arm64";
+  if (target === "qemux86-64") return "x86-64";
+  if (target.startsWith("intel-x86-64")) return "x86-64";
+  return null;
+}
+
+/**
+ * If the target is a QEMU target whose arch doesn't match the host, return
+ * a markdown advisory the LLM should surface to the user. Returns `null`
+ * when no warning is warranted (same arch, non-QEMU target, or unknown
+ * host arch). Performance-only — does NOT block; the user may have
+ * legitimate cross-arch reasons.
+ */
+export function qemuArchAdvisory(target: string): string | null {
+  if (!target.startsWith("qemu")) return null;
+  const host = normalizedHostArch();
+  const tgt = targetArchHint(target);
+  if (host === "other" || tgt === null) return null;
+  if (host === tgt) return null;
+
+  const recommendedTarget = host === "arm64" ? "qemuarm64" : "qemux86-64";
+  return [
+    `> ⚠️  **Cross-arch QEMU — performance advisory.** Host is \`${host}\`; you're targeting \`${target}\` (\`${tgt}\`).`,
+    `>`,
+    `> A QEMU VM whose arch doesn't match the host boots under software emulation — typically **10–20× slower** than a matched-arch VM with hardware acceleration (HVF on macOS, KVM on Linux). For iteration loops (build → boot → debug → rebuild) that's the difference between seconds and minutes per cycle.`,
+    `>`,
+    `> **Faster path:** use \`--target ${recommendedTarget}\` for native-speed iteration.`,
+    `>`,
+    `> **Keep \`${target}\` if** you specifically need to test x86/arm-shape behaviour — cross-arch QEMU testing before real hardware is available, or to validate target-specific binaries. The choice is yours; this is performance guidance only, not a blocker.`,
+  ].join("\n");
+}
 
 const execFileP = promisify(execFile);
 
@@ -48,10 +98,22 @@ export function registerDiscoveryTools(
     {
       title: "Check host prerequisites",
       description:
-        "Verify the host has the prerequisites to build and provision an Avocado OS project: `avocado` CLI on PATH, Docker daemon reachable, and ≥8 GB free disk space in $HOME. Call this BEFORE init-project / list-targets when the user is starting from scratch — it pre-empts the common `bash: avocado: command not found` and `Cannot connect to the Docker daemon` failures. Read-only: runs `avocado --version`, `docker info`, and statfs($HOME). No project required.",
+        "Verify the host has the prerequisites to build and provision an Avocado OS project: `avocado` CLI on PATH, Docker daemon reachable, and ≥8 GB free disk space in $HOME. Also reports host CPU arch + OS so downstream tools (e.g. `init-project`) can warn about cross-arch QEMU performance gotchas. Call this BEFORE init-project / list-targets when the user is starting from scratch — it pre-empts the common `bash: avocado: command not found` and `Cannot connect to the Docker daemon` failures. Read-only: runs `avocado --version`, `docker info`, and statfs($HOME). No project required.",
       inputSchema: {},
       outputSchema: {
         ok: z.boolean().describe("True iff all three checks pass."),
+        host: z.object({
+          arch: z
+            .enum(["arm64", "x86-64", "other"])
+            .describe(
+              "Normalized host CPU architecture. `arm64` includes Apple Silicon. `other` covers anything unexpected (32-bit ARM, RISC-V, etc.).",
+            ),
+          platform: z
+            .string()
+            .describe(
+              "Node-reported OS family (`darwin`, `linux`, `win32`, etc.).",
+            ),
+        }),
         cli: z.object({
           ok: z.boolean(),
           detail: z
@@ -86,9 +148,11 @@ export function registerDiscoveryTools(
         checkDiskGB(),
       ]);
 
+      const host = { arch: normalizedHostArch(), platform: osPlatform() };
       const allOk = cli.ok && docker.ok && disk.ok;
       let out = `# environment-check\n\n`;
-      out += `**Status:** ${allOk ? "✅ ready" : "❌ missing prerequisites"}\n\n`;
+      out += `**Status:** ${allOk ? "✅ ready" : "❌ missing prerequisites"}\n`;
+      out += `**Host:** \`${host.platform}\` / \`${host.arch}\`\n\n`;
       out += `| Check | Status | Detail |\n`;
       out += `|-------|--------|--------|\n`;
       out += `| \`avocado\` CLI | ${cli.ok ? "✅" : "❌"} | ${cli.detail} |\n`;
@@ -121,6 +185,7 @@ export function registerDiscoveryTools(
         content: [{ type: "text", text: out }],
         structuredContent: {
           ok: allOk,
+          host,
           cli,
           docker,
           disk: { ok: disk.ok, freeGB: disk.freeGB, minGB: MIN_FREE_GB },
