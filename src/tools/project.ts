@@ -14,6 +14,7 @@ import {
   type ScoredReference,
 } from "../lib/references-client.js";
 import { resolveTarget } from "../lib/target-resolver.js";
+import { qemuArchAdvisory } from "./discovery.js";
 
 export function registerProjectTools(
   server: McpServer,
@@ -112,6 +113,10 @@ export function registerProjectTools(
       } else {
         out += `_No reference matched ${task ? `task "${task}"` : "the target"}. Falling back to a minimal starter._\n\n`;
       }
+      const archWarning = qemuArchAdvisory(target);
+      if (archWarning) {
+        out += `${archWarning}\n\n`;
+      }
       if (validation.ok) {
         out += `✅ Generated YAML validates against the current schema (v ${validation.schemaVersion}).\n\n`;
       } else {
@@ -123,11 +128,17 @@ export function registerProjectTools(
       }
       const rt = runtimeName ?? "dev";
       out += `Save the YAML below as \`avocado.yaml\` at your project root, then:\n\n`;
+      out += `**For a HUMAN running these in their own terminal:**\n\n`;
       out += "```bash\n";
-      out += `avocado install -f --no-tui\n`;
-      out += `avocado build --no-tui\n`;
-      out += `# avocado provision needs a TTY — when running via Bash (no terminal), wrap with script:\n`;
-      out += `script -q /dev/null avocado provision -r ${rt} --no-tui\n`;
+      out += `avocado install -f\n`;
+      out += `avocado build\n`;
+      out += `avocado provision -r ${rt}\n`;
+      out += "```\n\n";
+      out += `**For an LLM running via the Bash tool (no TTY):** use \`--no-tui\` + redirect-to-file for build/install, and wrap \`avocado provision\` with \`script\` to give it a pseudo-TTY (it shells out to \`docker run -it\`).\n\n`;
+      out += "```bash\n";
+      out += `avocado install -f --no-tui > /tmp/avocado-install.log 2>&1\n`;
+      out += `avocado build --no-tui > /tmp/avocado-build.log 2>&1\n`;
+      out += `script -q /dev/null avocado provision -r ${rt} --no-tui > /tmp/avocado-provision.log 2>&1\n`;
       out += "```\n\n";
       out += `## avocado.yaml\n\n\`\`\`yaml\n${yaml}\`\`\``;
 
@@ -522,6 +533,10 @@ function renderReferenceMatch(
   out += task
     ? `Task: _"${task}"_\n\n`
     : `(No task provided — listing references with summaries.)\n\n`;
+  const archWarning = qemuArchAdvisory(target);
+  if (archWarning) {
+    out += `${archWarning}\n\n`;
+  }
   out += `Found **${matches.length}** candidate reference${matches.length === 1 ? "" : "s"} matching the query. **Do NOT auto-pick the first one.** The MCP ranks by query-token relevance only — it does NOT know which candidate is the best fit for the user's actual task. **You must read each candidate's getting_started.md before picking** — that's where authors document what the reference actually does, what hardware they've tested it on, and what trade-offs they made.\n\n`;
 
   out += `## Selection workflow\n\n`;

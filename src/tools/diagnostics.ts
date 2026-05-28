@@ -9,6 +9,7 @@ import {
   renderDiagnoses,
 } from "../lib/diagnostics.js";
 import { RepoClient } from "../lib/repo-client.js";
+import { qemuArchAdvisory } from "./discovery.js";
 
 export function registerDiagnosticsTools(
   server: McpServer,
@@ -232,6 +233,10 @@ export function registerDiagnosticsTools(
       } else {
         out += `## QEMU target — no UART adapter needed\n\n`;
         out += `\`${target}\` runs in a VM; the serial console comes directly to the launching terminal. See the \`qemu-quickstart\` reference for the full flow.\n\n`;
+        const archWarning = qemuArchAdvisory(target);
+        if (archWarning) {
+          out += `${archWarning}\n\n`;
+        }
       }
 
       out += `**Profile:** \`${profile.profile}\`\n`;

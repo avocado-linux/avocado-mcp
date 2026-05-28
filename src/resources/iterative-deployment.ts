@@ -35,7 +35,23 @@ Most users don't know this exists. Surface it.
 
 ## The iteration loop — build-first, install only when needed
 
-\`avocado install\` is the slow part of the loop (package resolution, downloads). **Don't run it by default.** \`avocado build\` is fast and gives you a clear signal when install IS needed. The optimised loop:
+\`avocado install\` is the slow part of the loop (package resolution, downloads). **Don't run it by default.** \`avocado build\` is fast and gives you a clear signal when install IS needed.
+
+### For a human running these in their own terminal
+
+\`\`\`bash
+# (Optional) edit avocado.yaml, app sources, overlays, or hook scripts
+avocado build
+# → if it fails with a missing-package error, run \`avocado install -f\` then re-run build
+avocado deploy -r dev -d 192.168.1.42
+# → test on the device (UART or SSH)
+\`\`\`
+
+The default TUI gives the human nice progress bars and a status spinner.
+
+### For an LLM running via the Bash tool (no terminal)
+
+Use \`--no-tui\` + redirect-to-file + tail/grep slicing on every \`avocado\` call. The default TUI emits ANSI escapes that garble a captured log.
 
 \`\`\`bash
 # 1. (Optional) edit avocado.yaml, app sources, overlays, or hook scripts
@@ -254,4 +270,34 @@ For new packages: \`rpm -q <name>\` confirms install. For service changes: \`sys
 | When to use | First boot; bootloader/kernel/BSP changes; clean wipe | Every iteration after first provision |
 
 If the user is doing dev iteration, \`deploy\` is almost always the right call. \`provision\` is the floor; \`deploy\` is the daily driver.
+
+## When the SDK gets stuck — \`avocado clean\` / \`avocado prune\`
+
+The SDK keeps a fair amount of state across runs: pulled container images, resolved package caches, build artifacts under \`/opt/_avocado/\`, and the project's named Docker volume. Most of the time this is what you want — it's what makes the build-first iteration loop fast. But it can also accumulate stale data that produces confusing failures:
+
+- **"Disk full" / "No space left on device"** during build or install, even though the host has free space.
+- **Stale extension or package state** after the user has manually edited the SDK container or rolled the channel back.
+- **A build that worked last week and fails today** with no YAML change, often with errors that don't make sense given the current YAML.
+- **A provision that times out partway through** and leaves half-written state behind.
+
+In these cases — and ONLY in these cases — clearing SDK state is the right move:
+
+**For a human running these in their own terminal:**
+
+\`\`\`bash
+avocado clean        # clear this project's SDK build artifacts + caches
+avocado prune        # additionally remove the project's named Docker volume (heavier)
+\`\`\`
+
+**For an LLM running via the Bash tool:**
+
+\`\`\`bash
+avocado clean --no-tui > /tmp/avocado-clean.log 2>&1 && tail -20 /tmp/avocado-clean.log
+\`\`\`
+
+After cleaning, re-run \`avocado install -f && avocado build\` from scratch.
+
+**Do NOT** run \`clean\` / \`prune\` reflexively — they discard the cache the iteration loop relies on, and the next build will be slow. They're a recovery tool, not part of the loop. If \`explain-build-error\` returns a curated diagnosis pointing at the YAML or a specific package, fix that instead.
+
+\`avocado clean --help\` and \`avocado prune --help\` show the per-command options (e.g. \`--all\` to clear caches for every project on the host, not just CWD).
 `;
