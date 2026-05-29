@@ -1,6 +1,6 @@
 {
   "name": "avocado-os-mcp-server",
-  "version": "4.0.0",
+  "version": "5.0.0",
   "main": "build/index.js",
   "type": "module",
   "bin": {
@@ -8,6 +8,7 @@
   },
   "scripts": {
     "build": "tsc --project tsconfig.build.json && node -e \"require('fs').chmodSync('build/index.js', '755')\"",
+    "prepare": "npm run build",
     "prepublishOnly": "npm run build",
     "dev": "npm run build && node build/index.js",
     "test": "npm run build && npx @modelcontextprotocol/inspector build/index.js",

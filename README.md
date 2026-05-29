@@ -25,13 +25,13 @@ Add to your MCP client config (Claude Desktop, Claude Code, Cursor, etc.):
   "mcpServers": {
     "avocado-os": {
       "command": "npx",
-      "args": ["-y", "avocado-os-mcp-server"]
+      "args": ["-y", "github:avocado-linux/avocado-mcp"]
     }
   }
 }
 ```
 
-Requires Node ≥18. `npx` will fetch the package on first use and cache it.
+Requires Node ≥18. `npx` will clone the repo on first run, install dependencies, and build it (~30s); subsequent runs are instant from cache. To pin to a specific release, suffix with a tag: `github:avocado-linux/avocado-mcp#5.0.0` (see [GitHub Releases](https://github.com/avocado-linux/avocado-mcp/releases)).
 
 ## What it exposes
 
