@@ -89,6 +89,29 @@ async function checkDiskGB(): Promise<{ ok: boolean; freeGB: number }> {
   }
 }
 
+/**
+ * `qemu-system-<arch>` presence. We probe the binary that matches the host
+ * arch since that's the one a same-arch QEMU target needs (HVF / KVM). Note:
+ * QEMU is ONLY required for QEMU-target workflows — `environment-check` does
+ * not include this. It's exposed for `get-provisioning-steps` to call when
+ * the resolved target is a QEMU one.
+ */
+export async function checkQemu(): Promise<{ ok: boolean; detail: string }> {
+  const host = normalizedHostArch();
+  // Same-arch QEMU is the common path; check it. Users doing cross-arch QEMU
+  // need the other one too, but we already advise against that.
+  const binary =
+    host === "arm64"
+      ? "qemu-system-aarch64"
+      : host === "x86-64"
+        ? "qemu-system-x86_64"
+        : null;
+  if (!binary) {
+    return { ok: false, detail: `host arch '${host}' — unknown QEMU binary` };
+  }
+  return checkBinary(binary, ["--version"]);
+}
+
 export function registerDiscoveryTools(
   server: McpServer,
   repoClient: RepoClient,
@@ -98,7 +121,7 @@ export function registerDiscoveryTools(
     {
       title: "Check host prerequisites",
       description:
-        "Verify the host has the prerequisites to build and provision an Avocado OS project: `avocado` CLI on PATH, Docker daemon reachable, and ≥8 GB free disk space in $HOME. Also reports host CPU arch + OS so downstream tools (e.g. `init-project`) can warn about cross-arch QEMU performance gotchas. Call this BEFORE init-project / list-targets when the user is starting from scratch — it pre-empts the common `bash: avocado: command not found` and `Cannot connect to the Docker daemon` failures. Read-only: runs `avocado --version`, `docker info`, and statfs($HOME). No project required.",
+        "Verify the host has the prerequisites to build and provision an Avocado OS project: `avocado` CLI on PATH, Docker daemon reachable, and ≥8 GB free disk space in $HOME. Also reports host CPU arch + OS so downstream tools (e.g. `init-project`) can warn about cross-arch QEMU performance gotchas. Call this BEFORE init-project / list-targets when the user is starting from scratch — it pre-empts the common `bash: avocado: command not found` and `Cannot connect to the Docker daemon` failures. **QEMU-target prerequisites** (qemu-system-*) are NOT checked here — `get-provisioning-steps` validates those when the resolved target is a QEMU one. Read-only.",
       inputSchema: {},
       outputSchema: {
         ok: z.boolean().describe("True iff all three checks pass."),
@@ -142,27 +165,27 @@ export function registerDiscoveryTools(
       },
     },
     async () => {
+      const host = { arch: normalizedHostArch(), platform: osPlatform() };
       const [cli, docker, disk] = await Promise.all([
         checkBinary("avocado", ["--version"]),
         checkBinary("docker", ["info", "--format", "{{.ServerVersion}}"]),
         checkDiskGB(),
       ]);
 
-      const host = { arch: normalizedHostArch(), platform: osPlatform() };
       const allOk = cli.ok && docker.ok && disk.ok;
       let out = `# environment-check\n\n`;
       out += `**Status:** ${allOk ? "✅ ready" : "❌ missing prerequisites"}\n`;
       out += `**Host:** \`${host.platform}\` / \`${host.arch}\`\n\n`;
       out += `| Check | Status | Detail |\n`;
       out += `|-------|--------|--------|\n`;
-      out += `| \`avocado\` CLI | ${cli.ok ? "✅" : "❌"} | ${cli.detail} |\n`;
+      out += `| \`avocado\` CLI on PATH | ${cli.ok ? "✅" : "❌"} | ${cli.detail} |\n`;
       out += `| Docker daemon | ${docker.ok ? "✅" : "❌"} | ${docker.detail} |\n`;
       out += `| Free disk (\`$HOME\`) | ${disk.ok ? "✅" : "❌"} | ${disk.freeGB.toFixed(1)} GB free (need ≥${MIN_FREE_GB}) |\n`;
 
       const fixes: string[] = [];
       if (!cli.ok) {
         fixes.push(
-          `- **Install the avocado CLI:** \`${INSTALL_HINT}\` (macOS / Linux).`,
+          `- **Install the avocado CLI and put it on PATH:** \`${INSTALL_HINT}\` (macOS / Linux). If you have a local build of the CLI but it's not on PATH, symlink it: \`mkdir -p ~/.local/bin && ln -s /path/to/avocado ~/.local/bin/avocado\` (then ensure \`~/.local/bin\` is on PATH).`,
         );
       }
       if (!docker.ok) {
@@ -179,6 +202,7 @@ export function registerDiscoveryTools(
         out += `\n## Fix\n\n${fixes.join("\n")}\n`;
       } else {
         out += `\nAll prerequisites satisfied. Safe to proceed with \`list-targets\` → \`init-project\`.\n`;
+        out += `\n_QEMU prerequisites (\`qemu-system-*\`) are validated by \`get-provisioning-steps\` when the resolved target is a QEMU one — no need to check them here._\n`;
       }
 
       return {

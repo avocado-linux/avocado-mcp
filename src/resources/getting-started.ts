@@ -14,11 +14,22 @@ Avocado OS is a Yocto-based embedded Linux distribution. A working project consi
 
 ## Prerequisites the user must have
 
+**Always required:**
+
 - **Docker Desktop** (macOS or Linux). The CLI runs all builds inside the SDK container.
-- **The avocado CLI** installed (\`curl -fsSL https://connect.peridio.com/install.sh | sh\` on macOS or Linux).
+- **The avocado CLI** installed AND on PATH (\`curl -fsSL https://connect.peridio.com/install.sh | sh\` on macOS or Linux). If the user has a local build of the CLI but it isn't on PATH, symlink it: \`mkdir -p ~/.local/bin && ln -s /path/to/avocado ~/.local/bin/avocado\` (then verify \`~/.local/bin\` is on PATH).
 - **~8 GB free disk space** for the SDK container, builds, and image artifacts.
-- **A USB-to-UART adapter** wired into the device's debug UART. **HARD REQUIREMENT** for every non-QEMU target — provisioning and debugging both go through the serial console. Without it, the user can't see boot output, can't recover from failures, and can't diagnose anything on the device. The only exception is QEMU targets (\`qemuarm64\`, \`qemux86-64\`) which run in a VM and don't need physical hardware. If the user doesn't have an adapter, recommend starting with QEMU first.
-- **A microSD card / USB drive / NVMe** appropriate to the target's provisioning profile (most targets use SD). Not needed for QEMU.
+
+**Required for QEMU targets only** (\`qemuarm64\`, \`qemux86-64\`):
+
+- **QEMU** installed on the host. macOS: \`brew install qemu\`. Debian/Ubuntu: \`sudo apt install qemu-system\`. Without this, \`avocado sdk run\` fails. \`get-provisioning-steps\` validates this when the resolved target is QEMU.
+
+**Required for physical-hardware targets only** (non-QEMU):
+
+- **A USB-to-UART adapter** wired into the device's debug UART. **HARD REQUIREMENT** — provisioning and debugging both go through the serial console. Without it, the user can't see boot output, can't recover from failures, and can't diagnose anything on the device. If the user doesn't have an adapter, recommend starting with QEMU first.
+- **A microSD card / USB drive / NVMe** appropriate to the target's provisioning profile (most targets use SD).
+
+Run \`environment-check\` to verify all of these at once before starting work.
 
 ## The happy path
 
