@@ -9,7 +9,8 @@ import {
   renderDiagnoses,
 } from "../lib/diagnostics.js";
 import { RepoClient } from "../lib/repo-client.js";
-import { qemuArchAdvisory } from "./discovery.js";
+import { checkQemu, qemuArchAdvisory } from "./discovery.js";
+import { platform as osPlatform } from "os";
 
 export function registerDiagnosticsTools(
   server: McpServer,
@@ -236,6 +237,22 @@ export function registerDiagnosticsTools(
         const archWarning = qemuArchAdvisory(target);
         if (archWarning) {
           out += `${archWarning}\n\n`;
+        }
+
+        // QEMU-only prerequisite: verify `qemu-system-<arch>` is on PATH.
+        // Skipped for non-QEMU targets in `environment-check` to avoid noise.
+        const qemu = await checkQemu();
+        if (!qemu.ok) {
+          const platform = osPlatform();
+          const installCmd =
+            platform === "darwin"
+              ? "brew install qemu"
+              : platform === "linux"
+                ? "sudo apt install qemu-system  # or your distro's equivalent (e.g. `dnf install qemu-system-x86 qemu-system-arm` on Fedora)"
+                : "install QEMU for your platform";
+          out += `## ⚠️  QEMU prerequisite missing\n\n`;
+          out += `\`${target}\` is a QEMU target, but the matching \`qemu-system\` binary isn't on PATH: ${qemu.detail}.\n\n`;
+          out += `**Fix:** \`${installCmd}\`. Then retry. \`environment-check\` does not include this check because it's only relevant for QEMU targets.\n\n`;
         }
       }
 

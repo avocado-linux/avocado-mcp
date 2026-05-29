@@ -32,6 +32,15 @@ const PROVISION_PATTERNS: Pattern[] = [
       "Wrap the command with `script -q /dev/null` to provide a pseudo-TTY: `script -q /dev/null avocado provision -r <runtime> [--profile <prof>] --no-tui > /tmp/avocado-provision.log 2>&1`. This is the standard workaround when running interactive-Docker-shelling CLIs from a non-interactive harness. Re-run with the wrapper and the TTY error should disappear.",
   },
   {
+    label: "QEMU binary missing",
+    match:
+      /qemu-system-[a-z0-9_]+ ?: ?(?:command not found|not found|no such file)|cannot find qemu|qemu binary missing/i,
+    cause:
+      "The QEMU emulator binary (`qemu-system-<arch>`) is not installed. Required for QEMU-target workflows; not needed for physical-hardware builds.",
+    suggestion:
+      "Install QEMU: macOS → `brew install qemu`; Debian/Ubuntu → `sudo apt install qemu-system`; Fedora → `sudo dnf install qemu-system-x86 qemu-system-arm`. Then retry. `environment-check` can verify the install.",
+  },
+  {
     label: "Device auto-mounted by host OS",
     match: /(automount|auto-mounted|gvfs|udisks)/i,
     cause:
