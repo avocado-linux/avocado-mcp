@@ -3,17 +3,18 @@
 MCP server that turns an AI assistant into a working Avocado OS co-pilot. It helps a user:
 
 - Pick the right hardware target
-- Initialize a working `avocado.yaml` from a clean slate
-- Search and describe packages in the live RPM feed
-- Author and validate YAML safely (schema-checked, package-verified)
+- Scaffold a project — reference-first when one matches the user's task, or a minimal `avocado.yaml` when none does
+- Search and describe packages in the live RPM feed; feed-first is the default for adding any library
+- Author and validate `avocado.yaml` against a bundled JSON Schema (no schema-version drift)
 - Browse, read, and copy from reference projects (full source — `avocado.yaml`, app code, overlays, build hooks)
-- Diagnose `avocado build` / `avocado provision` failures
-- Look up per-target provisioning steps
-- Debug a running device over UART/USB via a long-lived tmux session
+- First-time provision a device, then push iterative updates via `avocado deploy` — no reflash required
+- Diagnose `avocado build` / `avocado provision` failures; honest fallback when no pattern matches (no empty diagnoses)
+- Look up per-target provisioning steps with the right `script -q /dev/null` wrapper for LLM-driven runs
+- Debug a running device over UART/USB via a long-lived tmux session (default), or SSH once the device is healthy
+- Run closed-loop debugging: read logs, edit code or extensions to add logging, redeploy, re-verify
 
 Stdio-only over npm. No hosted endpoint, no API key. All data sources are public:
-`repo.avocadolinux.org`, `github.com/avocado-linux/avocado-config`,
-`github.com/avocado-linux/references`, `docs.peridio.com`.
+`repo.avocadolinux.org`, `github.com/avocado-linux/references`, `docs.peridio.com`. The `avocado.yaml` schema ships bundled with the server.
 
 ## Installation
 
@@ -38,7 +39,7 @@ Requires Node ≥18. `npx` will fetch the package on first use and cache it.
 
 | Tool                         | Purpose                                                                              |
 | ---------------------------- | ------------------------------------------------------------------------------------ |
-| `environment-check`          | Verify host has `avocado` CLI, Docker daemon, and ≥8 GB free disk space              |
+| `environment-check`          | Verify host has `avocado` CLI on PATH, Docker daemon, ≥8 GB free disk; reports host arch + OS |
 | `list-targets`               | Every Avocado target currently supported by the package feed                         |
 | `search-packages`            | Substring search across the live RPM feed (optionally scoped to release/channel)     |
 | `describe-package`           | Detail view for one package: version, arch, summary, description                     |
@@ -91,19 +92,27 @@ Pre-built workflows the user can invoke by name:
 
 ## Recommended flow
 
-The schema-first, package-verified pattern is non-negotiable. When generating or modifying YAML, the canonical order is:
+For most user requests, the canonical entry point is one of the six prompts — they orchestrate the right tool sequence and surface the relevant skills along the way.
 
-1. **Read context** — let Claude consult `getting-started` and `config-yaml-guide` skills first.
-2. **`get-config-schema`** — pull the schema so structure decisions are grounded.
-3. **`list-targets`** to pick a target from user requirements.
-4. **`init-project`** to scaffold, or **`add-extension` / `add-runtime` / `add-package-to-extension`** to edit.
-5. **`search-packages` / `describe-package`** before every package add — never invent names.
-6. **`validate-yaml`** before handing back a final YAML.
-7. **`get-provisioning-steps`** when telling the user how to flash.
+- **New to Avocado / fresh project** → `/start-avocado-project`
+- **First-time flash of a physical device or QEMU VM** → `/provision-device`
+- **Iterating after the first provision (edit → push → verify)** → `/build-and-deploy`
+- **A build or install failed** → `/debug-build-failure`
+- **Debugging a running device** → `/debug-device` (UART, default) or `/debug-device-ssh` (once known healthy)
 
-If a build or provision fails, paste the log into `explain-build-error` or `diagnose-provision-log`.
+When invoked directly without a prompt, the underlying conventions are:
 
-To debug a running device, plug in a USB-to-UART adapter and run `detect-serial-ports` → `get-device-connection-info` → `get-tmux-uart-snippet`.
+1. **`environment-check`** first when the user is new — pre-empts CLI / Docker / disk problems before they show up later.
+2. **`list-targets({ query })`** to resolve user-supplied hardware names to canonical slugs.
+3. **`init-project`** with `target` + `task` — searches the reference catalog first; falls back to a minimal starter only when no reference fits.
+4. **`add-extension` / `add-runtime` / `add-package-to-extension`** for YAML edits; package additions are verified against the live feed.
+5. **`search-packages` / `describe-package`** before adding any library — feed packages beat vendoring / `pip install` / `npm install` on every axis (versioning, security updates, image size).
+6. **`validate-yaml`** runs against a JSON Schema bundled with the MCP, so there's no schema-version drift.
+7. **`get-provisioning-steps`** emits both human and LLM-shaped commands; LLM-driven runs need `script -q /dev/null` to give `avocado provision` a pseudo-TTY.
+
+If `avocado build` / `install` / `provision` fails, paste the log into `explain-build-error` or `diagnose-provision-log` — they return a curated diagnosis when one fits, and otherwise extract the error lines + file paths + next-step routing rather than returning empty.
+
+To debug a running device, plug in a USB-to-UART adapter and run `detect-serial-ports` → `get-device-connection-info` → `get-tmux-uart-snippet`. UART is the default; SSH (`/debug-device-ssh`) is for steady-state work after UART confirms the device is healthy.
 
 ## Development
 
@@ -166,10 +175,11 @@ When you change source files, run `npm run build` again and restart the client (
 
 The server reads from public HTTPS endpoints only:
 
-- **`repo.avocadolinux.org`** — RPM repodata (targets manifest, `repomd.xml`, `primary.xml.gz`). Used by `list-targets`, `search-packages`, `describe-package`, `add-package-to-extension`. Defaults to release `2024`, channel `edge` (matching the current docs site); both are overridable per-call.
-- **`github.com/avocado-linux/avocado-config`** — JSON Schema for `avocado.yaml`. Used by `get-config-schema`, `validate-yaml`, every YAML-mutation tool.
+- **`repo.avocadolinux.org`** — RPM repodata (targets manifest, `repomd.xml`, `primary.xml.gz`). Used by `list-targets`, `search-packages`, `describe-package`, `add-package-to-extension`. Defaults to release `2024`, channel `edge`; both are overridable per-call.
 - **`github.com/avocado-linux/references`** — full source of every reference project. Used by `get-reference` and `get-reference-file` (fetched via `raw.githubusercontent.com` + GitHub trees API).
 - **`github.com/peridio/docs`** — the Docusaurus source for `docs.peridio.com`. Used by `search-docs` and `get-doc`. Trees API for the manifest (cached 1 h), `raw.githubusercontent.com` for content (cached on disk by blob SHA, no TTL — content-addressable).
+
+The `avocado.yaml` JSON Schema is bundled with the server — no network call for `get-config-schema` / `validate-yaml`.
 
 Caches under `~/.cache/avocado-mcp/` (override with `$AVOCADO_MCP_CACHE_DIR` or `$XDG_CACHE_HOME`). Set `GITHUB_TOKEN` for higher GitHub API rate limits if you'll be using the references / docs tools heavily.
 
@@ -181,7 +191,6 @@ Caches under `~/.cache/avocado-mcp/` (override with `$AVOCADO_MCP_CACHE_DIR` or 
 
 ## Repository links
 
-- Schema repo: https://github.com/avocado-linux/avocado-config
 - References repo: https://github.com/avocado-linux/references
 - Package feed: https://repo.avocadolinux.org
 - Targets manifest: https://repo.avocadolinux.org/2024/edge/targets.json
