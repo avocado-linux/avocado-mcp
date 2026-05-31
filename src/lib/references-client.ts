@@ -2,25 +2,16 @@
  * Reference catalog + content fetcher.
  *
  * Source of truth: github.com/avocado-linux/references (public). Every
- * reference is a top-level directory in that repo, structured as:
+ * reference is a top-level directory containing README.md + avocado.yaml
+ * (plus app/, build hooks, icon.png).
  *
- *   <slug>/
- *     README.md
- *     getting_started.md
- *     avocado.yaml
- *     app/
- *       <app source — e.g. package.json, server.js>
- *       overlay/
- *         <root-fs-style tree of files baked into the extension>
- *     app-clean.sh
- *     app-compile.sh
- *     app-install.sh
- *     icon.png
- *
- * The CATALOG below is hardcoded metadata (title, language, tags) so the LLM
- * can browse and search without hitting GitHub. Actual content is fetched on
- * demand from raw.githubusercontent.com.
+ * There is NO hardcoded catalog. The list of references is discovered from
+ * the repo tree, and each entry's metadata (title, language, hardware, tags,
+ * summary) is parsed live from that reference's README.md frontmatter + body.
+ * Nothing is cached: every call reflects the current state of the repo.
  */
+
+import { parse as parseYaml } from "yaml";
 
 const REPO_OWNER = "avocado-linux";
 const REPO_NAME = "references";
@@ -30,8 +21,6 @@ const API_TREE_URL = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/gi
 const SOURCE_BASE = `https://github.com/${REPO_OWNER}/${REPO_NAME}/tree/${REPO_REF}`;
 
 const USER_AGENT = "avocado-mcp-server";
-const TREE_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
-const FILE_CACHE_TTL_MS = 10 * 60 * 1000;
 const MAX_FILE_BYTES = 1 * 1024 * 1024; // 1 MB per file safety cap
 
 const SAFE_SLUG_RE = /^[a-z0-9][a-z0-9_-]*$/;
@@ -64,237 +53,7 @@ export interface ReferenceProject {
   overlayPaths: string[];
 }
 
-export const CATALOG: ReferenceEntry[] = [
-  {
-    slug: "c-gpio",
-    title: "C GPIO",
-    language: "C",
-    summary: "Toggle GPIO from a C program built against the Avocado SDK.",
-    hardware: ["raspberrypi5", "raspberrypi4"],
-    tags: ["gpio", "c", "hardware-control"],
-  },
-  {
-    slug: "cpp-tui-dashboard",
-    title: "C++ TUI dashboard",
-    language: "C++",
-    summary: "Terminal UI dashboard in C++ using ncurses.",
-    hardware: [],
-    tags: ["c++", "tui", "ncurses", "dashboard"],
-  },
-  {
-    slug: "dev",
-    title: "Dev runtime walkthrough",
-    language: "n/a",
-    summary:
-      "Tour of the dev runtime: SSH access, debugging tools, hardware-in-the-loop iteration.",
-    hardware: [],
-    tags: ["dev", "ssh", "debug", "getting-started"],
-  },
-  {
-    slug: "elixir-phoenix",
-    title: "Elixir Phoenix",
-    language: "Elixir",
-    summary: "Phoenix web app on Avocado OS with hot code reload.",
-    hardware: [],
-    tags: ["elixir", "phoenix", "beam", "web"],
-  },
-  {
-    slug: "icam-540",
-    title: "Advantech ICAM-540 AI camera",
-    language: "Python",
-    summary: "Vision pipeline on the Advantech ICAM-540 (Jetson Orin NX).",
-    hardware: ["icam-540"],
-    tags: ["vision", "ai", "jetson", "camera", "deepstream"],
-  },
-  {
-    slug: "java-hello",
-    title: "Java hello world",
-    language: "Java",
-    summary: "Minimal Java app + JRE extension on Avocado OS.",
-    hardware: [],
-    tags: ["java", "jvm", "hello-world"],
-  },
-  {
-    slug: "linux-custom-kernel",
-    title: "Custom Linux kernel",
-    language: "n/a",
-    summary: "Build and ship a custom Linux kernel with your project.",
-    hardware: [],
-    tags: ["kernel", "linux", "advanced"],
-  },
-  {
-    slug: "nodejs-dashboard",
-    title: "Node.js dashboard",
-    language: "Node.js",
-    summary: "Server-rendered Node.js dashboard with WebSocket telemetry.",
-    hardware: [],
-    tags: ["node", "javascript", "dashboard", "websocket"],
-  },
-  {
-    slug: "python-flask",
-    title: "Python Flask",
-    language: "Python",
-    summary: "Flask web app served from the device.",
-    hardware: [],
-    tags: ["python", "flask", "web"],
-  },
-  {
-    slug: "python-gstreamer-yolo",
-    title: "Python GStreamer + YOLO",
-    language: "Python",
-    summary:
-      "Real-time object detection with GStreamer ingest and YOLO inference.",
-    hardware: ["jetson-orin-nano-devkit", "jetson-agx-orin-devkit", "icam-540"],
-    tags: ["python", "gstreamer", "yolo", "vision", "ai"],
-  },
-  {
-    slug: "python-mqtt",
-    title: "Python MQTT",
-    language: "Python",
-    summary: "Publish/subscribe MQTT client in Python.",
-    hardware: [],
-    tags: ["python", "mqtt", "iot", "messaging"],
-  },
-  {
-    slug: "python-whisper",
-    title: "Python Whisper speech-to-text",
-    language: "Python",
-    summary: "On-device speech transcription with Whisper.",
-    hardware: [],
-    tags: ["python", "whisper", "audio", "ai", "speech"],
-  },
-  {
-    slug: "qemu-quickstart",
-    title: "QEMU quickstart",
-    language: "n/a",
-    summary: "Build and boot Avocado OS in QEMU — no hardware required.",
-    hardware: ["qemuarm64", "qemux86-64"],
-    tags: ["qemu", "virtual", "getting-started"],
-  },
-  {
-    slug: "react-dashboard",
-    title: "React dashboard",
-    language: "JavaScript",
-    summary: "React SPA served by an embedded HTTP server.",
-    hardware: [],
-    tags: ["react", "javascript", "dashboard", "spa"],
-  },
-  {
-    slug: "rubicon",
-    title: "Rubicon orchestrator",
-    language: "Python",
-    summary:
-      "Reference orchestrator binary — used for self-test and on-device validation flows.",
-    hardware: [],
-    tags: ["python", "orchestration", "testing"],
-  },
-  {
-    slug: "rust-vitals",
-    title: "Rust vitals telemetry",
-    language: "Rust",
-    summary: "System telemetry collector in Rust, exposed over HTTP.",
-    hardware: [],
-    tags: ["rust", "telemetry", "http", "metrics"],
-  },
-  {
-    slug: "shell-heartbeat",
-    title: "Shell heartbeat",
-    language: "Shell",
-    summary: "Tiny POSIX-shell heartbeat service for liveness checks.",
-    hardware: [],
-    tags: ["shell", "bash", "heartbeat", "minimal"],
-  },
-  {
-    slug: "webkit-ui",
-    title: "WebKit UI",
-    language: "JavaScript",
-    summary: "Fullscreen WebKit-based HMI surface for kiosks/HMIs.",
-    hardware: [],
-    tags: ["webkit", "ui", "kiosk", "hmi"],
-  },
-];
-
-export function listReferences(): ReferenceEntry[] {
-  return [...CATALOG].sort((a, b) => a.title.localeCompare(b.title));
-}
-
-/**
- * Compatibility of a reference relative to a target.
- *  - "generic": reference hardware list is empty — works on any target.
- *  - "listed": reference explicitly lists the target as supported.
- *  - "unlisted": reference lists OTHER hardware but not this target. Surface
- *    it anyway with a warning — it may still work but isn't tested for this target.
- */
-export type ReferenceCompatibility = "generic" | "listed" | "unlisted";
-
-export interface ScoredReference {
-  entry: ReferenceEntry;
-  compatibility: ReferenceCompatibility;
-}
-
-export function searchReferences(
-  query: string,
-  target?: string,
-): ReferenceEntry[] {
-  return searchReferencesScored(query, target).map((s) => s.entry);
-}
-
-export function searchReferencesScored(
-  query: string,
-  target?: string,
-): ScoredReference[] {
-  const tokens = query
-    .toLowerCase()
-    .split(/[^a-z0-9+#.-]+/)
-    .filter((t) => t.length > 0);
-
-  type Scored = {
-    entry: ReferenceEntry;
-    score: number;
-    compatibility: ReferenceCompatibility;
-  };
-  const scored: Scored[] = [];
-  for (const r of CATALOG) {
-    // Compatibility is informational only — surfaced so the LLM knows whether
-    // the reference's authors tested it on this target. Does NOT affect ordering.
-    let compatibility: ReferenceCompatibility;
-    if (r.hardware.length === 0) compatibility = "generic";
-    else if (target && r.hardware.includes(target)) compatibility = "listed";
-    else compatibility = "unlisted";
-
-    if (tokens.length === 0) {
-      scored.push({ entry: r, score: 0, compatibility });
-      continue;
-    }
-
-    const haystack = [r.slug, r.title, r.language, r.summary, ...r.tags]
-      .join(" ")
-      .toLowerCase();
-    let score = 0;
-    for (const t of tokens) {
-      if (haystack.includes(t)) score++;
-    }
-    if (tokens.includes(r.slug)) score += 10;
-
-    if (score > 0) scored.push({ entry: r, score, compatibility });
-  }
-
-  return scored
-    .sort(
-      (a, b) => b.score - a.score || a.entry.title.localeCompare(b.entry.title),
-    )
-    .map(({ entry, compatibility }) => ({ entry, compatibility }));
-}
-
-export function getReferenceEntry(slug: string): ReferenceEntry | undefined {
-  return CATALOG.find((r) => r.slug === slug);
-}
-
-export function referenceUrl(slug: string): string {
-  return `${SOURCE_BASE}/${slug}`;
-}
-
-// ----- tree + file fetching -----
+// ----- tree + file fetching (live, no cache) -----
 
 interface TreeEntry {
   path: string;
@@ -302,12 +61,7 @@ interface TreeEntry {
   size?: number;
 }
 
-let treeCache: { entries: TreeEntry[]; expiresAt: number } | null = null;
-const fileCache = new Map<string, { content: string; expiresAt: number }>();
-
 async function fetchRepoTree(): Promise<TreeEntry[]> {
-  const now = Date.now();
-  if (treeCache && now < treeCache.expiresAt) return treeCache.entries;
   const res = await fetch(API_TREE_URL, {
     headers: {
       "User-Agent": USER_AGENT,
@@ -327,15 +81,13 @@ async function fetchRepoTree(): Promise<TreeEntry[]> {
       "[WARN] github trees API returned truncated:true; reference listings may be incomplete",
     );
   }
-  const entries: TreeEntry[] = data.tree
+  return data.tree
     .filter((t) => t.type === "blob" || t.type === "tree")
     .map((t) => ({
       path: t.path,
       type: t.type as "blob" | "tree",
       size: t.size,
     }));
-  treeCache = { entries, expiresAt: now + TREE_CACHE_TTL_MS };
-  return entries;
 }
 
 /**
@@ -374,10 +126,6 @@ export async function fetchReferenceFile(
   if (!SAFE_PATH_RE.test(relativePath) || relativePath.includes("..")) {
     throw new Error(`Invalid file path: ${relativePath}`);
   }
-  const cacheKey = `${slug}/${relativePath}`;
-  const now = Date.now();
-  const cached = fileCache.get(cacheKey);
-  if (cached && now < cached.expiresAt) return cached.content;
 
   const url = `${RAW_BASE}/${slug}/${relativePath}`;
   const res = await fetch(url, { headers: { "User-Agent": USER_AGENT } });
@@ -411,14 +159,227 @@ export async function fetchReferenceFile(
     buf.set(c, pos);
     pos += c.byteLength;
   }
-  const content = new TextDecoder("utf-8").decode(buf);
-  fileCache.set(cacheKey, { content, expiresAt: now + FILE_CACHE_TTL_MS });
-  return content;
+  return new TextDecoder("utf-8").decode(buf);
+}
+
+// ----- catalog derivation from READMEs -----
+
+/**
+ * Top-level directories that are references: those that have BOTH a README.md
+ * and an avocado.yaml at their root.
+ */
+async function discoverReferenceSlugs(): Promise<string[]> {
+  const tree = await fetchRepoTree();
+  const hasReadme = new Set<string>();
+  const hasYaml = new Set<string>();
+  for (const e of tree) {
+    if (e.type !== "blob") continue;
+    const parts = e.path.split("/");
+    if (parts.length !== 2) continue; // only top-level <dir>/<file>
+    const [dir, file] = parts;
+    if (!SAFE_SLUG_RE.test(dir)) continue;
+    if (file === "README.md") hasReadme.add(dir);
+    else if (file === "avocado.yaml") hasYaml.add(dir);
+  }
+  return [...hasReadme].filter((d) => hasYaml.has(d)).sort();
+}
+
+/** Pull the leading `--- ... ---` YAML frontmatter block out of a README. */
+function extractFrontmatter(markdown: string): Record<string, unknown> {
+  const m = markdown.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  if (!m) return {};
+  try {
+    const obj = parseYaml(m[1]) as unknown;
+    return obj && typeof obj === "object"
+      ? (obj as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+/** First `# ` heading, with any inline icon `<img>` and markdown stripped. */
+function extractTitle(markdown: string): string | null {
+  const line = markdown.split(/\r?\n/).find((l) => /^#\s+/.test(l));
+  if (!line) return null;
+  return (
+    line
+      .replace(/^#\s+/, "")
+      .replace(/<img[^>]*\/?>/gi, "")
+      .replace(/[`*]/g, "")
+      .trim() || null
+  );
+}
+
+/** First sentence of the first body paragraph after the title heading. */
+function extractSummary(markdown: string): string {
+  const lines = markdown.split(/\r?\n/);
+  const titleIdx = lines.findIndex((l) => /^#\s+/.test(l));
+  const para: string[] = [];
+  for (let i = titleIdx + 1; i < lines.length; i++) {
+    const t = lines[i].trim();
+    if (!t || t.startsWith("#") || t.startsWith("---")) {
+      if (para.length) break;
+      continue;
+    }
+    para.push(t);
+  }
+  const text = para
+    .join(" ")
+    .replace(/[`*]/g, "")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1") // markdown links -> text
+    .replace(/&mdash;/g, "—")
+    .replace(/\s+/g, " ")
+    .trim();
+  // First sentence: split on ". " so we don't break on "3.10"/"v2." etc.
+  const dot = text.indexOf(". ");
+  return dot >= 0 ? text.slice(0, dot + 1) : text;
+}
+
+/** Build a catalog entry from a reference's README content. */
+function parseReferenceEntry(slug: string, readme: string): ReferenceEntry {
+  const fm = extractFrontmatter(readme);
+
+  const language =
+    typeof fm.language === "string" && fm.language.trim()
+      ? fm.language.trim()
+      : "n/a";
+
+  const targets = fm.targets;
+  let hardware: string[] = [];
+  if (Array.isArray(targets)) {
+    hardware = targets.map((t) => String(t)).filter((t) => t !== "*");
+  } else if (typeof targets === "string" && targets !== "*") {
+    hardware = [targets];
+  }
+
+  const tags = Array.isArray(fm.topics) ? fm.topics.map((t) => String(t)) : [];
+
+  return {
+    slug,
+    title: extractTitle(readme) ?? slug,
+    language,
+    summary: extractSummary(readme),
+    hardware,
+    tags,
+  };
 }
 
 /**
- * Compose a project bundle for the LLM: catalog entry + file tree +
- * pre-fetched README/getting_started/avocado.yaml + overlay summary.
+ * Discover every reference and build its catalog entry from its README.
+ * Each README is fetched in parallel; a reference whose README can't be
+ * fetched/parsed is dropped rather than failing the whole listing.
+ */
+export async function listReferences(): Promise<ReferenceEntry[]> {
+  const slugs = await discoverReferenceSlugs();
+  const entries = await Promise.all(
+    slugs.map(async (slug) => {
+      try {
+        return parseReferenceEntry(
+          slug,
+          await fetchReferenceFile(slug, "README.md"),
+        );
+      } catch {
+        return null;
+      }
+    }),
+  );
+  return entries
+    .filter((e): e is ReferenceEntry => e !== null)
+    .sort((a, b) => a.title.localeCompare(b.title));
+}
+
+/**
+ * Compatibility of a reference relative to a target.
+ *  - "generic": reference hardware list is empty — works on any target.
+ *  - "listed": reference explicitly lists the target as supported.
+ *  - "unlisted": reference lists OTHER hardware but not this target. Surface
+ *    it anyway with a warning — it may still work but isn't tested for this target.
+ */
+export type ReferenceCompatibility = "generic" | "listed" | "unlisted";
+
+export interface ScoredReference {
+  entry: ReferenceEntry;
+  compatibility: ReferenceCompatibility;
+}
+
+export async function searchReferences(
+  query: string,
+  target?: string,
+): Promise<ReferenceEntry[]> {
+  return (await searchReferencesScored(query, target)).map((s) => s.entry);
+}
+
+export async function searchReferencesScored(
+  query: string,
+  target?: string,
+): Promise<ScoredReference[]> {
+  const refs = await listReferences();
+  const tokens = query
+    .toLowerCase()
+    .split(/[^a-z0-9+#.-]+/)
+    .filter((t) => t.length > 0);
+
+  type Scored = {
+    entry: ReferenceEntry;
+    score: number;
+    compatibility: ReferenceCompatibility;
+  };
+  const scored: Scored[] = [];
+  for (const r of refs) {
+    // Compatibility is informational only — surfaced so the LLM knows whether
+    // the reference's authors tested it on this target. Does NOT affect ordering.
+    let compatibility: ReferenceCompatibility;
+    if (r.hardware.length === 0) compatibility = "generic";
+    else if (target && r.hardware.includes(target)) compatibility = "listed";
+    else compatibility = "unlisted";
+
+    if (tokens.length === 0) {
+      scored.push({ entry: r, score: 0, compatibility });
+      continue;
+    }
+
+    const haystack = [r.slug, r.title, r.language, r.summary, ...r.tags]
+      .join(" ")
+      .toLowerCase();
+    let score = 0;
+    for (const t of tokens) {
+      if (haystack.includes(t)) score++;
+    }
+    if (tokens.includes(r.slug)) score += 10;
+
+    if (score > 0) scored.push({ entry: r, score, compatibility });
+  }
+
+  return scored
+    .sort(
+      (a, b) => b.score - a.score || a.entry.title.localeCompare(b.entry.title),
+    )
+    .map(({ entry, compatibility }) => ({ entry, compatibility }));
+}
+
+export async function getReferenceEntry(
+  slug: string,
+): Promise<ReferenceEntry | undefined> {
+  if (!SAFE_SLUG_RE.test(slug)) return undefined;
+  try {
+    return parseReferenceEntry(
+      slug,
+      await fetchReferenceFile(slug, "README.md"),
+    );
+  } catch {
+    return undefined;
+  }
+}
+
+export function referenceUrl(slug: string): string {
+  return `${SOURCE_BASE}/${slug}`;
+}
+
+/**
+ * Compose a project bundle for the LLM: catalog entry (derived from the
+ * README) + file tree + pre-fetched README/getting_started/avocado.yaml +
+ * overlay summary.
  *
  * Files are fetched in parallel; any individual fetch failure becomes a null
  * field rather than a fatal error so the LLM gets partial data instead of an
@@ -427,16 +388,13 @@ export async function fetchReferenceFile(
 export async function fetchReferenceProject(
   slug: string,
 ): Promise<ReferenceProject> {
-  const entry = getReferenceEntry(slug);
-  if (!entry) {
-    throw new Error(
-      `Unknown reference "${slug}". Use search-references (with no query) to see the catalog.`,
-    );
+  if (!SAFE_SLUG_RE.test(slug)) {
+    throw new Error(`Invalid reference slug: ${slug}`);
   }
   const files = await fetchReferenceTree(slug);
   if (files.length === 0) {
     throw new Error(
-      `Reference "${slug}" exists in catalog but no files found in the repo. Verify the slug matches the directory name in github.com/avocado-linux/references.`,
+      `Unknown reference "${slug}". Use search-references (with no query) to see the catalog.`,
     );
   }
 
@@ -462,6 +420,17 @@ export async function fetchReferenceProject(
     tryFetch("getting_started.md"),
     tryFetch("avocado.yaml"),
   ]);
+
+  const entry: ReferenceEntry = readme
+    ? parseReferenceEntry(slug, readme)
+    : {
+        slug,
+        title: slug,
+        language: "n/a",
+        summary: "",
+        hardware: [],
+        tags: [],
+      };
 
   return {
     entry,

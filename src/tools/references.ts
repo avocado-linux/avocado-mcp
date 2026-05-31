@@ -3,10 +3,8 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
   listReferences,
   searchReferences,
-  getReferenceEntry,
   fetchReferenceProject,
   fetchReferenceFile,
-  referenceUrl,
   type ReferenceEntry,
   type ReferenceProject,
 } from "../lib/references-client.js";
@@ -60,40 +58,54 @@ export function registerReferenceTools(server: McpServer): void {
     },
     async ({ query, target }) => {
       const q = query?.trim() ?? "";
-      if (q.length === 0) {
-        // Catalog-browse mode
-        const all = target ? searchReferences("", target) : listReferences();
-        let out = `# search-references — catalog\n\n`;
-        out += `**Total:** ${all.length}${target ? `  •  **Target filter:** \`${target}\`` : ""}\n\n`;
-        out += renderList(all);
+      try {
+        if (q.length === 0) {
+          // Catalog-browse mode
+          const all = await (target
+            ? searchReferences("", target)
+            : listReferences());
+          let out = `# search-references — catalog\n\n`;
+          out += `**Total:** ${all.length}${target ? `  •  **Target filter:** \`${target}\`` : ""}\n\n`;
+          out += renderList(all);
+          return {
+            content: [{ type: "text", text: out }],
+            structuredContent: {
+              mode: "browse" as const,
+              target,
+              total: all.length,
+              references: all,
+            },
+          };
+        }
+
+        // Ranked-search mode
+        const matches = await searchReferences(q, target);
         return {
-          content: [{ type: "text", text: out }],
+          content: [
+            {
+              type: "text",
+              text: `# search-references\n\n**Query:** \`${q}\`${target ? `  •  **Target:** \`${target}\`` : ""}\n**Matches:** ${matches.length}\n\n${renderList(matches)}`,
+            },
+          ],
           structuredContent: {
-            mode: "browse" as const,
+            mode: "search" as const,
+            query: q,
             target,
-            total: all.length,
-            references: all,
+            total: matches.length,
+            references: matches,
           },
         };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `# search-references failed\n\n❌ ${error}\n\nThe reference catalog is read live from github.com/avocado-linux/references; this usually means GitHub was briefly unreachable or rate-limited. Try again.`,
+            },
+          ],
+          isError: true,
+        };
       }
-
-      // Ranked-search mode
-      const matches = searchReferences(q, target);
-      return {
-        content: [
-          {
-            type: "text",
-            text: `# search-references\n\n**Query:** \`${q}\`${target ? `  •  **Target:** \`${target}\`` : ""}\n**Matches:** ${matches.length}\n\n${renderList(matches)}`,
-          },
-        ],
-        structuredContent: {
-          mode: "search" as const,
-          query: q,
-          target,
-          total: matches.length,
-          references: matches,
-        },
-      };
     },
   );
 
@@ -120,18 +132,6 @@ export function registerReferenceTools(server: McpServer): void {
     },
     async ({ slug }) => {
       try {
-        const entry = getReferenceEntry(slug);
-        if (!entry) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Unknown reference "${slug}". Run \`search-references\` to see the catalog.`,
-              },
-            ],
-            isError: true,
-          };
-        }
         const project = await fetchReferenceProject(slug);
         return { content: [{ type: "text", text: renderProject(project) }] };
       } catch (error) {
@@ -176,18 +176,6 @@ export function registerReferenceTools(server: McpServer): void {
     },
     async ({ slug, path }) => {
       try {
-        const entry = getReferenceEntry(slug);
-        if (!entry) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Unknown reference "${slug}". Run \`search-references\` to see the catalog.`,
-              },
-            ],
-            isError: true,
-          };
-        }
         const content = await fetchReferenceFile(slug, path);
         return {
           content: [

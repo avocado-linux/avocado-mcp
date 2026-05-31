@@ -88,9 +88,13 @@ export function registerProjectTools(
         return { content: [{ type: "text", text: body }] };
       }
 
-      // Reference path — try this first unless explicitly skipped.
+      // Reference path — try this first unless explicitly skipped. The
+      // reference catalog is read live from GitHub; if that's unreachable,
+      // fall through to the from-scratch path rather than failing.
       if (!forceFromScratch) {
-        const matches = searchReferencesScored(task ?? "", target);
+        const matches = await searchReferencesScored(task ?? "", target).catch(
+          () => [],
+        );
         if (matches.length > 0) {
           return {
             content: [
