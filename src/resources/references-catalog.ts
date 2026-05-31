@@ -7,12 +7,9 @@ export const CONTENT = `# References catalog
 
 Reference projects are full, working Avocado OS projects (each with an \`avocado.yaml\`, an app extension, and provisioning instructions) that show how to do something useful. They are the fastest way for a user to get a hands-on result.
 
-## What kinds of references exist
+## Browsing the catalog
 
-- **Tooling / language quickstarts**: \`python-flask\`, \`python-mqtt\`, \`python-gstreamer-yolo\`, \`python-whisper\`, \`nodejs-dashboard\`, \`react-dashboard\`, \`java-hello\`, \`elixir-phoenix\`, \`rust-vitals\`, \`shell-heartbeat\`, \`webkit-ui\`, \`cpp-tui-dashboard\`.
-- **System / kernel demos**: \`linux-custom-kernel\`, \`c-gpio\`, \`rubicon\`.
-- **Hardware-specific**: \`icam-540\` (Advantech AI camera), \`qemu-quickstart\` (no hardware).
-- **Meta**: \`dev\` (development-runtime walkthrough).
+The catalog is **not hardcoded** — it is read live from the repo. Call \`search-references\` with no \`query\` to list every reference (slug, language, hardware, one-line summary), or pass a \`query\` (and optional \`target\`) to rank matches. References span language/framework quickstarts, system & kernel demos, hardware-specific camera/vision runtimes, container patterns, and a minimal \`dev\` starter — read the live list rather than relying on a fixed set of names here.
 
 ## Layout of every reference
 
