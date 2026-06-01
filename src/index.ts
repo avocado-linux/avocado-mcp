@@ -2,6 +2,8 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { createRequire } from "module";
+import { realpathSync } from "fs";
+import { pathToFileURL } from "url";
 import { RepoClient } from "./lib/repo-client.js";
 import { registerConfigTools } from "./tools/config.js";
 import { registerPackageTools } from "./tools/packages.js";
@@ -105,7 +107,31 @@ async function main() {
   await server.connect(transport);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+// TEMP instrumentation: confirm how each consumer (Claude Code / ACP /
+// microclaw) spawns us. stderr is safe — it does not pollute the JSON-RPC
+// stream on stdout. Remove once the root cause is confirmed.
+console.error(
+  "[avocado-mcp] argv1=%s import.meta.url=%s",
+  process.argv[1],
+  import.meta.url,
+);
+
+// Run main() when this module is the entry point. npx installs the bin as a
+// symlink, so process.argv[1] is the symlink path while import.meta.url is the
+// resolved real path — a naive `file://${argv[1]}` comparison fails and main()
+// never runs, leaving the client with no initialize response (-32000). Resolve
+// the symlink before comparing.
+const invokedDirectly = (() => {
+  const argv1 = process.argv[1];
+  if (!argv1) return false;
+  try {
+    return import.meta.url === pathToFileURL(realpathSync(argv1)).href;
+  } catch {
+    return false;
+  }
+})();
+
+if (invokedDirectly) {
   main().catch((error) => {
     console.error("Server failed:", error);
     process.exit(1);
