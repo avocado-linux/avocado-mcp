@@ -12,6 +12,7 @@ import * as extensionBuildDebugging from "../resources/extension-build-debugging
 import * as iterativeDeployment from "../resources/iterative-deployment.js";
 import * as appDevelopment from "../resources/app-development.js";
 import * as avocadoCliExecution from "../resources/avocado-cli-execution.js";
+import * as upstreamSources from "../resources/upstream-sources.js";
 
 interface Skill {
   uri: string;
@@ -34,6 +35,7 @@ const SKILLS: Skill[] = [
   toSkill(iterativeDeployment),
   toSkill(appDevelopment),
   toSkill(avocadoCliExecution),
+  toSkill(upstreamSources),
 ];
 
 function toSkill(mod: {
