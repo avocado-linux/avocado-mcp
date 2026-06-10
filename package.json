@@ -59,5 +59,8 @@
     "ajv-formats": "^3.0.1",
     "yaml": "^2.6.0",
     "zod": "^3.25.76"
+  },
+  "overrides": {
+    "shell-quote": "^1.8.4"
   }
 }
