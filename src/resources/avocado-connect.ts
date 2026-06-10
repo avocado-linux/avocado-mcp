@@ -59,11 +59,12 @@ avocado build -C avocado.yaml --target <target> --output json
 
 # 2. Upload the built artifact to the platform (creates a runtime in draft)
 avocado connect upload dev \\       # runtime name (positional arg)
+  --version v0.0.2-dev \\          # REQUIRED: human-readable version for this upload
   -C avocado.yaml \\
   --publish \\                      # promote to "published" immediately
   --deploy-cohort <cohort-id> \\   # optionally deploy right after upload
   --deploy-activate \\             # activate the deployment (rolls to devices)
-  --output json                   # NDJSON stream: artifact_uploaded → complete → deployed
+  --output json                   # NDJSON: task_registered/step per phase → artifact_uploaded → complete (error event on failure)
 
 # 3. (Or deploy separately if upload was done without --deploy-cohort)
 avocado connect deploy \\
@@ -71,7 +72,7 @@ avocado connect deploy \\
   --cohort <cohort-id> \\
   --activate \\                    # make it active immediately
   -C avocado.yaml \\
-  --output json                   # { "event": "complete", "deployment_id": "...", ... }
+  --output json                   # NDJSON: task_registered/step (resolve → create-deployment → activate) → complete (error event on failure)
 \`\`\`
 
 **Key rules:**
