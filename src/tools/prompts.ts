@@ -388,4 +388,49 @@ export function registerPrompts(server: McpServer): void {
       ],
     }),
   );
+
+  server.prompt(
+    "setup-connect",
+    "Initialize an Avocado project for fleet OTA updates via Avocado Connect. Guides through auth check → org/project/cohort selection → `avocado connect init` → rebuild.",
+    {
+      directory: z
+        .string()
+        .optional()
+        .describe(
+          "Absolute path to the Avocado project directory. If omitted, the agent will ask.",
+        ),
+      runtime: z
+        .string()
+        .optional()
+        .describe(
+          "Runtime name in avocado.yaml to wire Connect into (defaults to 'dev').",
+        ),
+    },
+    ({ directory, runtime }) => ({
+      messages: [
+        {
+          role: "user",
+          content: {
+            type: "text",
+            text: [
+              `I want to set up Avocado Connect OTA fleet management for my project.${directory ? ` Project directory: \`${directory}\`.` : ""}${runtime ? ` Runtime: \`${runtime}\`.` : ""}`,
+              "",
+              "Please walk me through the initialization. Follow this exact order:",
+              "",
+              "1. Read `avocado://skills/avocado-connect` — this is the authoritative reference for Connect concepts, the upload/deploy lifecycle, and the correct tool sequence.",
+              "2. Call `connect-auth-status`. If `logged_in` is false, stop and tell me to run `avocado connect auth login` first. If `token_valid` is false, tell me the token may be expired and to re-login.",
+              "3. Call `connect-list-resources { resource: 'orgs' }`. Present the org list. If only one org, auto-select it (tell me which one). If multiple, ask me to choose.",
+              "4. Call `connect-list-resources { resource: 'projects', org: '<id>' }` with the chosen org. Present the project list. If only one, auto-select; if multiple, ask me to choose.",
+              "5. Call `connect-list-resources { resource: 'cohorts', org: '<id>', project: '<id>' }` with the chosen project. Present the cohort list. If only one, auto-select; if multiple, ask me to choose. If no cohorts exist, tell me to create one in the Connect web UI first.",
+              "6. Confirm the selections with me before proceeding.",
+              "7. Call `connect-init` with the confirmed `directory`, `org`, `project`, `cohort`, and `runtime`.",
+              "8. On success, tell me: (a) which files were modified in `avocado.yaml`, (b) that I need to run `avocado build` to compile the new Connect extension into my runtime, and (c) that after provisioning a device with this build, it will self-enroll into the cohort at first boot.",
+              "",
+              "If `connect-init` fails, surface the exact error message and suggest remediation (re-login, check org/project/cohort IDs, etc.).",
+            ].join("\n"),
+          },
+        },
+      ],
+    }),
+  );
 }

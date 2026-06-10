@@ -13,6 +13,7 @@ import { registerProjectTools } from "./tools/project.js";
 import { registerDiagnosticsTools } from "./tools/diagnostics.js";
 import { registerDebuggingTools } from "./tools/debugging.js";
 import { registerDocsTools } from "./tools/docs.js";
+import { registerConnectTools } from "./tools/connect.js";
 import { registerSkillResources } from "./tools/resources.js";
 import { registerPrompts } from "./tools/prompts.js";
 
@@ -82,6 +83,12 @@ const server = new McpServer(
       "example, iterative-deployment before pushing changes to a device, device-debugging",
       "before UART work, avocado-cli-execution before running any `avocado` command).",
       "Follow each skill's prescribed tool order rather than guessing.",
+      "",
+      "For fleet OTA management tasks (pushing updates to devices in production,",
+      "enrolling devices, managing cohorts, uploading runtimes), use the `connect-*`",
+      "tools. Always read `avocado://skills/avocado-connect` first — it explains the",
+      "upload → publish → deploy lifecycle and the correct tool sequence. The",
+      "`/setup-connect` prompt walks through the full initialization flow.",
     ].join("\n"),
   },
 );
@@ -101,6 +108,7 @@ registerProjectTools(server, repoClient);
 registerDiagnosticsTools(server, repoClient);
 registerDebuggingTools(server);
 registerDocsTools(server);
+registerConnectTools(server);
 
 async function main() {
   const transport = new StdioServerTransport();
