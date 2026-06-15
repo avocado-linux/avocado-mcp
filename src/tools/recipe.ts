@@ -1,4 +1,5 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
+import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, relative, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
@@ -190,6 +191,7 @@ export function registerRecipeTools(
 
   registerExplainBitbake(server);
   registerFindRecipeExamples(server);
+  registerScaffoldRecipe(server);
 }
 
 /**
@@ -675,5 +677,194 @@ function renderExamples(
   for (const ex of examples) {
     out += `## \`${ex.path}\` (score ${ex.score})\n\n`;
   }
+  return out;
+}
+
+/**
+ * Parse the first `inherit` line from recipe text and return the inherited
+ * classes as a single space-joined string (e.g. "setuptools3"), or undefined
+ * when the recipe has no inherit line. Leading/trailing whitespace and the
+ * `inherit` keyword are stripped.
+ */
+function parseInheritLine(recipeText: string): string | undefined {
+  for (const line of recipeText.split("\n")) {
+    const match = line.match(/^\s*inherit\s+(.+?)\s*$/);
+    if (match) return match[1];
+  }
+  return undefined;
+}
+
+/**
+ * Scan recipetool's output for variables that still hold placeholder values a
+ * human must resolve before the recipe will build:
+ *   - any variable whose value contains `???` (recipetool's unknown marker);
+ *   - DEPENDS / RDEPENDS assigned an empty value (unresolved dependencies);
+ *   - LIC_FILES_CHKSUM whose md5 checksum is a placeholder rather than a real
+ *     32-hex digest.
+ * Returns the offending variable names (deduplicated, in first-seen order).
+ */
+function detectManualReview(recipeText: string): string[] {
+  const flagged: string[] = [];
+  const seen = new Set<string>();
+  const flag = (name: string): void => {
+    if (!seen.has(name)) {
+      seen.add(name);
+      flagged.push(name);
+    }
+  };
+
+  for (const rawLine of recipeText.split("\n")) {
+    const line = rawLine.trim();
+    const assign = line.match(
+      /^([A-Za-z_][A-Za-z0-9_:${}.-]*)\s*[+?:]?=\s*(.*)$/,
+    );
+    if (!assign) continue;
+    const name = assign[1].replace(/:.*$/, "");
+    const value = assign[2].replace(/^["']|["']$/g, "").trim();
+
+    if (assign[2].includes("???")) {
+      flag(name);
+      continue;
+    }
+    if ((name === "DEPENDS" || name === "RDEPENDS") && value.length === 0) {
+      flag(name);
+      continue;
+    }
+    if (name === "LIC_FILES_CHKSUM") {
+      const md5 = value.match(/md5=([^;"'\s]*)/);
+      if (md5 && !/^[0-9a-f]{32}$/i.test(md5[1])) {
+        flag(name);
+      }
+    }
+  }
+  return flagged;
+}
+
+const scaffoldRecipeResultSchema = {
+  recipe_text: z.string().optional(),
+  inherit_detected: z.string().optional(),
+  needs_manual_review: z.array(z.string()).optional(),
+  error: z.string().optional(),
+  hint: z.string().optional(),
+};
+
+function registerScaffoldRecipe(server: McpServer): void {
+  server.registerTool(
+    "scaffold-recipe",
+    {
+      title: "Scaffold a BitBake recipe with recipetool",
+      description:
+        "Generate a first-draft BitBake recipe for a package source URL (GitHub repo or PyPI) by shelling out to `recipetool create --fetch`. Requires an initialized build environment (`BUILDDIR` set; enter one via `kas shell meta-avocado/kas/machine/qemux86-64.yml`) — when it is not set the tool returns immediately with an `error` and a `hint`. On success it returns the generated recipe text, the `inherit` class recipetool detected, and a `needs_manual_review` list naming variables (e.g. DEPENDS, RDEPENDS, LIC_FILES_CHKSUM) that still hold placeholder values a human must resolve. A non-zero recipetool exit returns its stderr as `error`.",
+      inputSchema: {
+        url: z
+          .string()
+          .min(1)
+          .describe(
+            "Package source URL to scaffold from. Examples: a GitHub repo URL or a PyPI project/sdist URL.",
+          ),
+      },
+      outputSchema: scaffoldRecipeResultSchema,
+      annotations: {
+        title: "Scaffold a BitBake recipe with recipetool",
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
+    },
+    async ({ url }) => {
+      if (!process.env.BUILDDIR) {
+        const error = "build environment not initialized";
+        const hint = "kas shell meta-avocado/kas/machine/qemux86-64.yml";
+        return {
+          content: [
+            {
+              type: "text",
+              text: `# scaffold-recipe\n\n❌ ${error}\n\nEnter a build environment first:\n\n    ${hint}\n`,
+            },
+          ],
+          structuredContent: { error, hint },
+        };
+      }
+
+      const outPath = `/tmp/scaffold-${Date.now()}.bb`;
+      try {
+        execSync(
+          `recipetool create --fetch ${JSON.stringify(url)} -o ${JSON.stringify(
+            outPath,
+          )}`,
+          { timeout: 60_000, stdio: ["ignore", "pipe", "pipe"] },
+        );
+      } catch (error) {
+        const stderr =
+          error && typeof error === "object" && "stderr" in error
+            ? String((error as { stderr: unknown }).stderr ?? "")
+            : "";
+        const message =
+          stderr.trim().length > 0
+            ? stderr.trim()
+            : error instanceof Error
+              ? error.message
+              : String(error);
+        return {
+          content: [
+            {
+              type: "text",
+              text: `# scaffold-recipe failed\n\n❌ ${message}\n`,
+            },
+          ],
+          structuredContent: { error: message },
+        };
+      }
+
+      let recipeText: string;
+      try {
+        recipeText = readFileSync(outPath, "utf8");
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return {
+          content: [
+            {
+              type: "text",
+              text: `# scaffold-recipe failed\n\n❌ ${message}\n`,
+            },
+          ],
+          structuredContent: { error: message },
+        };
+      }
+
+      const inheritDetected = parseInheritLine(recipeText);
+      const needsManualReview = detectManualReview(recipeText);
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: renderScaffold(inheritDetected, needsManualReview),
+          },
+        ],
+        structuredContent: {
+          recipe_text: recipeText,
+          inherit_detected: inheritDetected,
+          needs_manual_review: needsManualReview,
+        },
+      };
+    },
+  );
+}
+
+function renderScaffold(
+  inheritDetected: string | undefined,
+  needsManualReview: string[],
+): string {
+  let out = `# scaffold-recipe\n\n`;
+  out += `**inherit:** ${
+    inheritDetected ? `\`${inheritDetected}\`` : "_(none detected)_"
+  }\n`;
+  out += `**Needs manual review:** ${
+    needsManualReview.length > 0
+      ? needsManualReview.map((v) => `\`${v}\``).join(", ")
+      : "_(none)_"
+  }\n`;
   return out;
 }
