@@ -1,3 +1,8 @@
+import { readdirSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, resolve } from "node:path";
+import { parse as parseYaml } from "yaml";
+import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { RepoClient } from "../lib/repo-client.js";
 
@@ -33,15 +38,179 @@ export function normalizeSignature(raw: string): string {
 }
 
 /**
+ * Default corpus root: the `corpus/` directory that sits beside the avocado-mcp
+ * repo in the workspace. The compiled module lives at `build/tools/corpus.js`,
+ * so three `..` hops land on the avocado-mcp root's parent (the workspace), and
+ * `corpus/` is its child. Matches `find-recipe-examples`' path convention.
+ */
+function defaultCorpusDir(): string {
+  const here = dirname(fileURLToPath(import.meta.url));
+  return resolve(here, "../../../corpus");
+}
+
+/** A corpus case as loaded from a `<corpus_dir>/cases/*.yaml` file. */
+type CorpusCase = Record<string, unknown> & { normalized_signature?: unknown };
+
+/**
+ * Load every parseable case from `<corpus_dir>/cases/*.yaml`. A missing
+ * directory yields an empty list; an unreadable or unparseable individual file
+ * is skipped rather than failing the whole scan, so one corrupt case cannot
+ * blind the diagnoser to every other case.
+ */
+function loadCorpusCases(corpusDir: string): CorpusCase[] {
+  const casesDir = resolve(corpusDir, "cases");
+  let entries: string[];
+  try {
+    entries = readdirSync(casesDir);
+  } catch {
+    return [];
+  }
+
+  const cases: CorpusCase[] = [];
+  for (const entry of entries) {
+    if (!entry.endsWith(".yaml") && !entry.endsWith(".yml")) continue;
+    try {
+      const raw = readFileSync(resolve(casesDir, entry), "utf8");
+      const parsed = parseYaml(raw);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        cases.push(parsed as CorpusCase);
+      }
+    } catch {
+      // Skip this file; a single bad case must not sink the scan.
+    }
+  }
+  return cases;
+}
+
+type MatchType = "exact" | "fuzzy" | "none";
+
+interface DiagnoseResult {
+  [key: string]: unknown;
+  match_type: MatchType;
+  confidence: number;
+  case: CorpusCase | null;
+  normalized_key: string;
+}
+
+/**
+ * Match a normalized log key against the loaded corpus cases. Exact equality on
+ * `normalized_signature` wins (confidence 1.0); failing that, a substring
+ * relationship in either direction counts as a fuzzy hit (confidence 0.5);
+ * otherwise no match (confidence 0.0). The first exact case short-circuits;
+ * the first fuzzy case is kept only when no exact case is found.
+ */
+function matchCorpus(key: string, cases: CorpusCase[]): DiagnoseResult {
+  let fuzzy: CorpusCase | null = null;
+
+  for (const c of cases) {
+    const sig = c.normalized_signature;
+    if (typeof sig !== "string") continue;
+
+    if (sig === key) {
+      return {
+        match_type: "exact",
+        confidence: 1.0,
+        case: c,
+        normalized_key: key,
+      };
+    }
+
+    if (fuzzy === null && (sig.includes(key) || key.includes(sig))) {
+      fuzzy = c;
+    }
+  }
+
+  if (fuzzy !== null) {
+    return {
+      match_type: "fuzzy",
+      confidence: 0.5,
+      case: fuzzy,
+      normalized_key: key,
+    };
+  }
+
+  return { match_type: "none", confidence: 0.0, case: null, normalized_key: key };
+}
+
+function renderDiagnosis(result: DiagnoseResult): string {
+  let out = `# diagnose-build-failure\n\n`;
+  out += `**Normalized key:** \`${result.normalized_key}\`\n`;
+  out += `**Match:** ${result.match_type} (confidence ${result.confidence})\n`;
+
+  if (result.match_type === "none" || result.case === null) {
+    out += `\nNo corpus case matched this signature. This is a novel failure: extract the error, route to the relevant Yocto docs, and record the fix with \`record-recipe-fix\` once verified.\n`;
+    return out;
+  }
+
+  const c = result.case;
+  const field = (name: string): string => {
+    const v = c[name];
+    return typeof v === "string" ? v : v === undefined ? "_(none)_" : String(v);
+  };
+  out += `\n**Failed task:** \`${field("failed_task")}\`\n`;
+  out += `**Build system:** \`${field("build_system")}\`\n`;
+  out += `**Root cause:** ${field("root_cause")}\n`;
+  out += `**Fix:**\n\n\`\`\`\n${field("fix_diff")}\n\`\`\`\n`;
+  out += `**Doc:** ${field("doc_link")}\n`;
+  out += `**Falsifier:** ${field("falsifier")}\n`;
+  return out;
+}
+
+/**
  * Register the corpus learn/retrieve MCP tools (diagnose-build-failure,
- * record-recipe-fix). Stub for now: subsequent tasks add the actual tools.
- * `repoClient` is threaded through to match the registrar convention used by
- * the other tool groups; the corpus tools do not use it today.
+ * record-recipe-fix). `repoClient` is threaded through to match the registrar
+ * convention used by the other tool groups; the corpus tools do not use it.
  */
 export function registerCorpusTools(
   server: McpServer,
   repoClient: RepoClient,
 ): void {
-  void server;
   void repoClient;
+
+  server.registerTool(
+    "diagnose-build-failure",
+    {
+      title: "Diagnose a BitBake build failure against the corpus",
+      description:
+        "Normalize a raw BitBake build-log error and match it against the verified error-learning corpus. Pass the failing log snippet as `log`; the tool computes its normalized signature and scans `<corpus_dir>/cases/*.yaml` for a case with the same signature. An exact signature match returns confidence 1.0; a substring (fuzzy) match returns 0.5; no match returns 0.0 with a null case (a novel failure to route to docs and later record). `corpus_dir` defaults to the `corpus/` directory beside avocado-mcp in the workspace.",
+      inputSchema: {
+        log: z
+          .string()
+          .min(1)
+          .describe(
+            "Raw BitBake build-log snippet containing the error line(s).",
+          ),
+        corpus_dir: z
+          .string()
+          .optional()
+          .describe(
+            "Corpus root to scan; the tool reads `<corpus_dir>/cases/*.yaml`. Defaults to the `corpus/` directory beside avocado-mcp.",
+          ),
+      },
+      outputSchema: {
+        match_type: z.enum(["exact", "fuzzy", "none"]),
+        confidence: z.number(),
+        case: z.record(z.unknown()).nullable(),
+        normalized_key: z.string(),
+      },
+      annotations: {
+        title: "Diagnose a BitBake build failure against the corpus",
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async ({ log, corpus_dir }) => {
+      const corpusDir = corpus_dir ?? defaultCorpusDir();
+      const key = normalizeSignature(log);
+      const cases = loadCorpusCases(corpusDir);
+      const result = matchCorpus(key, cases);
+
+      return {
+        content: [{ type: "text", text: renderDiagnosis(result) }],
+        structuredContent: result,
+      };
+    },
+  );
 }
