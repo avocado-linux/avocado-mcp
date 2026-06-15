@@ -1,3 +1,7 @@
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, relative, resolve } from "node:path";
+import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { RepoClient } from "../lib/repo-client.js";
@@ -185,6 +189,7 @@ export function registerRecipeTools(
   );
 
   registerExplainBitbake(server);
+  registerFindRecipeExamples(server);
 }
 
 /**
@@ -398,4 +403,277 @@ function registerExplainBitbake(server: McpServer): void {
       };
     },
   );
+}
+
+/**
+ * Default workspace root: the directory that holds avocado-mcp, `corpus/`, and
+ * `meta-avocado/` as siblings. The compiled module lives at
+ * `build/tools/recipe.js`, so three `..` hops land on avocado-mcp's parent.
+ * Mirrors `corpus.ts`' `defaultCorpusDir()` path convention.
+ */
+function defaultWorkspaceRoot(): string {
+  const here = dirname(fileURLToPath(import.meta.url));
+  return resolve(here, "../../../");
+}
+
+/** A single find-recipe-examples result row. */
+interface RecipeExample {
+  path: string;
+  content: string;
+  score: number;
+}
+
+/** Split a free-text intent into lowercase keyword tokens for overlap scoring. */
+function tokenize(text: string): string[] {
+  return text
+    .toLowerCase()
+    .split(/[^a-z0-9_]+/)
+    .filter((t) => t.length > 0);
+}
+
+/**
+ * Score a corpus case against the intent tokens. The score is the count of
+ * distinct intent tokens that appear in the case's `build_system`,
+ * `failed_task`, or `root_cause` fields. A zero score means no overlap.
+ */
+function scoreCase(
+  intentTokens: Set<string>,
+  caseObj: Record<string, unknown>,
+): number {
+  const haystack = ["build_system", "failed_task", "root_cause"]
+    .map((field) => (typeof caseObj[field] === "string" ? caseObj[field] : ""))
+    .join(" ");
+  const haystackTokens = new Set(tokenize(haystack as string));
+  let score = 0;
+  for (const tok of intentTokens) {
+    if (haystackTokens.has(tok)) score += 1;
+  }
+  return score;
+}
+
+/**
+ * Collect corpus-case examples from `<root>/corpus/cases/*.yaml` whose
+ * `build_system`/`failed_task`/`root_cause` fields overlap the intent tokens.
+ * A missing corpus directory or an unparseable individual file is skipped
+ * rather than failing the scan, so one corrupt case cannot blind retrieval.
+ */
+function collectCorpusExamples(
+  root: string,
+  intentTokens: Set<string>,
+): RecipeExample[] {
+  const casesDir = resolve(root, "corpus", "cases");
+  let entries: string[];
+  try {
+    entries = readdirSync(casesDir);
+  } catch {
+    return [];
+  }
+
+  const examples: RecipeExample[] = [];
+  for (const entry of entries) {
+    if (!entry.endsWith(".yaml") && !entry.endsWith(".yml")) continue;
+    const filePath = resolve(casesDir, entry);
+    let raw: string;
+    try {
+      raw = readFileSync(filePath, "utf8");
+    } catch {
+      continue;
+    }
+    let parsed: unknown;
+    try {
+      parsed = parseYaml(raw);
+    } catch {
+      continue;
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      continue;
+    }
+    const score = scoreCase(intentTokens, parsed as Record<string, unknown>);
+    if (score > 0) {
+      examples.push({
+        path: relative(root, filePath),
+        content: raw,
+        score,
+      });
+    }
+  }
+  return examples;
+}
+
+/**
+ * Recursively list every `.bb` file under `dir`. A directory that cannot be
+ * read is skipped silently so a permission hiccup in one subtree does not abort
+ * the whole walk.
+ */
+function listBbFiles(dir: string): string[] {
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return [];
+  }
+  const out: string[] = [];
+  for (const entry of entries) {
+    const full = resolve(dir, entry);
+    let isDir: boolean;
+    try {
+      isDir = statSync(full).isDirectory();
+    } catch {
+      continue;
+    }
+    if (isDir) {
+      out.push(...listBbFiles(full));
+    } else if (entry.endsWith(".bb")) {
+      out.push(full);
+    }
+  }
+  return out;
+}
+
+/**
+ * Collect `.bb` recipe examples from `<root>/meta-avocado/` that `inherit` the
+ * given class. The score is fixed at 1: an inherit match is binary, not a
+ * keyword overlap. A missing `meta-avocado/` tree yields no examples.
+ */
+function collectBbExamples(
+  root: string,
+  inheritClass: string,
+): RecipeExample[] {
+  const metaDir = resolve(root, "meta-avocado");
+  const files = listBbFiles(metaDir);
+  const needle = new RegExp(
+    `^\\s*inherit\\b[^\\n]*\\b${escapeRegExp(inheritClass)}\\b`,
+    "m",
+  );
+  const examples: RecipeExample[] = [];
+  for (const file of files) {
+    let content: string;
+    try {
+      content = readFileSync(file, "utf8");
+    } catch {
+      continue;
+    }
+    if (needle.test(content)) {
+      examples.push({
+        path: relative(root, file),
+        content,
+        score: 1,
+      });
+    }
+  }
+  return examples;
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+const recipeExampleSchema = z.object({
+  path: z.string(),
+  content: z.string(),
+  score: z.number(),
+});
+
+function registerFindRecipeExamples(server: McpServer): void {
+  server.registerTool(
+    "find-recipe-examples",
+    {
+      title: "Find real recipe examples by intent",
+      description:
+        "Retrieve real recipe examples as pattern fuel before authoring or fixing a BitBake recipe. Matches an `intent` string against the verified error-learning corpus (`corpus/cases/*.yaml`) by keyword overlap on each case's `build_system`, `failed_task`, and `root_cause` fields, and — when an `inherit` class is given — additionally returns `.bb` recipes under `meta-avocado/` whose `inherit` line includes that class (e.g. cmake, meson, setuptools3, autotools, cargo). Returns up to `limit` examples as `{path, content, score}` rows sorted by descending score (corpus keyword-overlap count; inherit matches score 1). On a filesystem error it returns an `error` string instead of throwing.",
+      inputSchema: {
+        intent: z
+          .string()
+          .min(1)
+          .describe(
+            "Free-text description of what you are trying to author or fix. Matched (keyword overlap) against corpus cases' build_system/failed_task/root_cause. Examples: 'cmake do_install staging', 'setuptools3 numpy runtime dependency'.",
+          ),
+        inherit: z
+          .string()
+          .optional()
+          .describe(
+            "BitBake class to additionally find `.bb` examples for under meta-avocado/ (matches the `inherit` line). Examples: 'cmake', 'meson', 'setuptools3', 'autotools', 'cargo'.",
+          ),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(50)
+          .optional()
+          .describe("Maximum number of examples to return (default 5)."),
+      },
+      outputSchema: {
+        found: z.boolean(),
+        count: z.number(),
+        examples: z.array(recipeExampleSchema),
+        error: z.string().optional(),
+      },
+      annotations: {
+        title: "Find real recipe examples by intent",
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async ({ intent, inherit, limit }) => {
+      try {
+        const root = defaultWorkspaceRoot();
+        const cap = limit ?? 5;
+        const intentTokens = new Set(tokenize(intent));
+
+        const examples = collectCorpusExamples(root, intentTokens);
+        if (typeof inherit === "string" && inherit.trim().length > 0) {
+          examples.push(...collectBbExamples(root, inherit.trim()));
+        }
+
+        examples.sort((a, b) => b.score - a.score);
+        const top = examples.slice(0, cap);
+        const found = top.length > 0;
+
+        return {
+          content: [
+            { type: "text", text: renderExamples(intent, inherit, top) },
+          ],
+          structuredContent: { found, count: top.length, examples: top },
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return {
+          content: [
+            {
+              type: "text",
+              text: `# find-recipe-examples failed\n\n❌ ${message}`,
+            },
+          ],
+          structuredContent: {
+            found: false,
+            count: 0,
+            examples: [],
+            error: message,
+          },
+        };
+      }
+    },
+  );
+}
+
+function renderExamples(
+  intent: string,
+  inherit: string | undefined,
+  examples: RecipeExample[],
+): string {
+  let out = `# find-recipe-examples\n\n`;
+  out += `**Intent:** \`${intent}\`\n`;
+  if (inherit) out += `**Inherit:** \`${inherit}\`\n`;
+  out += `**Matches:** ${examples.length}\n`;
+  if (examples.length === 0) {
+    out += `\nNo corpus case or recipe matched. Broaden the intent or drop the inherit filter.\n`;
+    return out;
+  }
+  out += `\n`;
+  for (const ex of examples) {
+    out += `## \`${ex.path}\` (score ${ex.score})\n\n`;
+  }
+  return out;
 }
