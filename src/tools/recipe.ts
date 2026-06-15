@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, relative, resolve } from "node:path";
@@ -192,6 +192,7 @@ export function registerRecipeTools(
   registerExplainBitbake(server);
   registerFindRecipeExamples(server);
   registerScaffoldRecipe(server);
+  registerLintRecipe(server);
 }
 
 /**
@@ -866,5 +867,145 @@ function renderScaffold(
       ? needsManualReview.map((v) => `\`${v}\``).join(", ")
       : "_(none)_"
   }\n`;
+  return out;
+}
+
+/** Severities surfaced by lint-recipe, mapped from oelint-adv's output. */
+type LintSeverity = "error" | "warning" | "info";
+
+/** A single oelint-adv finding parsed from one stdout line. */
+interface LintFinding {
+  file: string;
+  line: number;
+  severity: LintSeverity;
+  rule: string;
+  message: string;
+}
+
+const lintSeverityMap: Record<string, LintSeverity> = {
+  error: "error",
+  warning: "warning",
+  info: "info",
+};
+
+/**
+ * Parse oelint-adv stdout into findings. Each finding line has the form
+ *   <file>:<line>:<severity>:<rule>:<message>
+ * The message itself may contain colons, so only the first four fields are
+ * split on `:` and the remainder is the message. Lines that do not match the
+ * shape (blank lines, summary banners) are skipped.
+ */
+function parseLintOutput(stdout: string): LintFinding[] {
+  const findings: LintFinding[] = [];
+  for (const rawLine of stdout.split("\n")) {
+    const line = rawLine.trimEnd();
+    if (line.length === 0) continue;
+    const parts = line.split(":");
+    if (parts.length < 5) continue;
+    const [file, lineNoRaw, severityRaw, rule, ...rest] = parts;
+    const severity = lintSeverityMap[severityRaw.trim().toLowerCase()];
+    if (severity === undefined) continue;
+    const lineNo = Number.parseInt(lineNoRaw, 10);
+    if (Number.isNaN(lineNo)) continue;
+    findings.push({
+      file,
+      line: lineNo,
+      severity,
+      rule: rule.trim(),
+      message: rest.join(":").trim(),
+    });
+  }
+  return findings;
+}
+
+const lintFindingSchema = z.object({
+  file: z.string(),
+  line: z.number(),
+  severity: z.enum(["error", "warning", "info"]),
+  rule: z.string(),
+  message: z.string(),
+});
+
+const lintRecipeResultSchema = {
+  findings: z.array(lintFindingSchema).optional(),
+  clean: z.boolean().optional(),
+  error: z.string().optional(),
+};
+
+function registerLintRecipe(server: McpServer): void {
+  server.registerTool(
+    "lint-recipe",
+    {
+      title: "Lint a BitBake recipe with oelint-adv",
+      description:
+        "Lint a BitBake `.bb` recipe with oelint-adv against the scarthgap release. Pass an absolute path to the recipe file; when the file does not exist the tool returns `{error: 'file not found'}` immediately without invoking oelint-adv. On a real run it shells out to `oelint-adv --quiet --release scarthgap <recipe_path>` and parses each `<file>:<line>:<severity>:<rule>:<message>` line into a structured finding (severity is one of error/warning/info). Returns `{findings, clean}` where `clean` is true only when there are no findings.",
+      inputSchema: {
+        recipe_path: z
+          .string()
+          .min(1)
+          .describe(
+            "Absolute path to the .bb recipe file to lint. The file must exist.",
+          ),
+      },
+      outputSchema: lintRecipeResultSchema,
+      annotations: {
+        title: "Lint a BitBake recipe with oelint-adv",
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async ({ recipe_path }) => {
+      if (!existsSync(recipe_path)) {
+        const error = "file not found";
+        return {
+          content: [
+            { type: "text", text: `# lint-recipe\n\n❌ ${error}: \`${recipe_path}\`\n` },
+          ],
+          structuredContent: { error },
+        };
+      }
+
+      // oelint-adv exits non-zero when it has findings, so the findings land on
+      // the error object's `stdout`. Capture both paths and parse the same way.
+      let stdout: string;
+      try {
+        stdout = execSync(
+          `oelint-adv --quiet --release scarthgap ${JSON.stringify(
+            recipe_path,
+          )}`,
+          { timeout: 60_000, stdio: ["ignore", "pipe", "pipe"], encoding: "utf8" },
+        );
+      } catch (error) {
+        stdout =
+          error && typeof error === "object" && "stdout" in error
+            ? String((error as { stdout: unknown }).stdout ?? "")
+            : "";
+      }
+
+      const findings = parseLintOutput(stdout);
+      const clean = findings.length === 0;
+      return {
+        content: [{ type: "text", text: renderLint(recipe_path, findings) }],
+        structuredContent: { findings, clean },
+      };
+    },
+  );
+}
+
+function renderLint(recipePath: string, findings: LintFinding[]): string {
+  let out = `# lint-recipe\n\n`;
+  out += `**Recipe:** \`${recipePath}\`\n`;
+  out += `**Findings:** ${findings.length}\n`;
+  if (findings.length === 0) {
+    out += `\n✅ Clean — no oelint-adv findings.\n`;
+    return out;
+  }
+  out += `\n| line | severity | rule | message |\n`;
+  out += `| --- | --- | --- | --- |\n`;
+  for (const f of findings) {
+    out += `| ${f.line} | ${f.severity} | \`${f.rule}\` | ${f.message} |\n`;
+  }
   return out;
 }
