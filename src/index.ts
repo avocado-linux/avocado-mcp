@@ -18,6 +18,7 @@ import { registerSkillResources } from "./tools/resources.js";
 import { registerPrompts } from "./tools/prompts.js";
 import { registerRecipeTools } from "./tools/recipe.js";
 import { registerCorpusTools } from "./tools/corpus.js";
+import { registerRecipeAuthoringResource } from "./tools/recipe-authoring.js";
 
 const require = createRequire(import.meta.url);
 const packageJson = require("../package.json");
@@ -98,6 +99,7 @@ const server = new McpServer(
 const repoClient = new RepoClient();
 
 // Resources first so Claude can read context before invoking tools.
+registerRecipeAuthoringResource(server);
 registerSkillResources(server);
 registerPrompts(server);
 
