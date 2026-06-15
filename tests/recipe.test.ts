@@ -129,5 +129,6 @@ describe("scaffold-recipe", () => {
     expect(result.isError).not.toBe(true);
     const out = result.structuredContent ?? {};
     expect(out.error).toBe("build environment not initialized");
+    expect(out.hint).toBe("kas shell meta-avocado/kas/machine/qemuarm64.yml");
   });
 });

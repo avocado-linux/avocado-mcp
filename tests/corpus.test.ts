@@ -148,6 +148,14 @@ describe("diagnose-build-failure", () => {
     const out = payload(result as never);
     expect(out.match_type).toBe("exact");
     expect(out.confidence).toBe(1.0);
+    // Pin the matched payload, not just the score: confirm the diagnoser
+    // returned the case it was seeded with, not merely some exact match.
+    expect(out.case).toMatchObject({
+      failed_task: "do_package_qa",
+      root_cause:
+        "The recipe shipped the development symlink in the runtime package.",
+      fix_diff: 'FILES:${PN}-dev += "${libdir}/libzmq.so"',
+    });
   });
 });
 

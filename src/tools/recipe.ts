@@ -193,6 +193,7 @@ export function registerRecipeTools(
   registerFindRecipeExamples(server);
   registerScaffoldRecipe(server);
   registerLintRecipe(server);
+  registerIntrospectRecipe(server);
 }
 
 /**
@@ -732,8 +733,11 @@ function detectManualReview(recipeText: string): string[] {
       continue;
     }
     if (name === "LIC_FILES_CHKSUM") {
-      const md5 = value.match(/md5=([^;"'\s]*)/);
-      if (md5 && !/^[0-9a-f]{32}$/i.test(md5[1])) {
+      // A multi-license LIC_FILES_CHKSUM carries one md5= per file; flag if ANY
+      // is a placeholder, not just the first (recipetool can leave a later
+      // entry unresolved while the first is a real digest).
+      const md5s = [...value.matchAll(/md5=([^;"'\s]*)/g)];
+      if (md5s.some((m) => !/^[0-9a-f]{32}$/i.test(m[1]))) {
         flag(name);
       }
     }
@@ -755,7 +759,7 @@ function registerScaffoldRecipe(server: McpServer): void {
     {
       title: "Scaffold a BitBake recipe with recipetool",
       description:
-        "Generate a first-draft BitBake recipe for a package source URL (GitHub repo or PyPI) by shelling out to `recipetool create --fetch`. Requires an initialized build environment (`BUILDDIR` set; enter one via `kas shell meta-avocado/kas/machine/qemux86-64.yml`) — when it is not set the tool returns immediately with an `error` and a `hint`. On success it returns the generated recipe text, the `inherit` class recipetool detected, and a `needs_manual_review` list naming variables (e.g. DEPENDS, RDEPENDS, LIC_FILES_CHKSUM) that still hold placeholder values a human must resolve. A non-zero recipetool exit returns its stderr as `error`.",
+        "Generate a first-draft BitBake recipe for a package source URL (GitHub repo or PyPI) by shelling out to `recipetool create --fetch`. Requires an initialized build environment (`BUILDDIR` set; enter one via `kas shell meta-avocado/kas/machine/qemuarm64.yml`) — when it is not set the tool returns immediately with an `error` and a `hint`. On success it returns the generated recipe text, the `inherit` class recipetool detected, and a `needs_manual_review` list naming variables (e.g. DEPENDS, RDEPENDS, LIC_FILES_CHKSUM) that still hold placeholder values a human must resolve. A non-zero recipetool exit returns its stderr as `error`.",
       inputSchema: {
         url: z
           .string()
@@ -776,7 +780,7 @@ function registerScaffoldRecipe(server: McpServer): void {
     async ({ url }) => {
       if (!process.env.BUILDDIR) {
         const error = "build environment not initialized";
-        const hint = "kas shell meta-avocado/kas/machine/qemux86-64.yml";
+        const hint = "kas shell meta-avocado/kas/machine/qemuarm64.yml";
         return {
           content: [
             {
@@ -1006,6 +1010,154 @@ function renderLint(recipePath: string, findings: LintFinding[]): string {
   out += `| --- | --- | --- | --- |\n`;
   for (const f of findings) {
     out += `| ${f.line} | ${f.severity} | \`${f.rule}\` | ${f.message} |\n`;
+  }
+  return out;
+}
+
+/**
+ * Parse `bitbake -e` lines of the form `VAR="value"` or `VAR=value` into a
+ * `{[var]: value}` map, stripping a single layer of surrounding double or
+ * single quotes. Only lines whose variable name is in `wanted` are kept, so a
+ * grep that over-matches (e.g. `VAR_foo=`) is filtered out here. The last
+ * assignment for a given variable wins.
+ */
+function parseIntrospectOutput(
+  stdout: string,
+  wanted: Set<string>,
+): Record<string, string> {
+  const resolved: Record<string, string> = {};
+  for (const rawLine of stdout.split("\n")) {
+    const match = rawLine.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+    if (!match) continue;
+    const name = match[1];
+    if (!wanted.has(name)) continue;
+    const value = match[2].replace(/^(["'])(.*)\1$/, "$2");
+    resolved[name] = value;
+  }
+  return resolved;
+}
+
+const introspectRecipeResultSchema = {
+  resolved: z.record(z.string(), z.string()).optional(),
+  env_active: z.boolean(),
+  error: z.string().optional(),
+  hint: z.string().optional(),
+};
+
+function registerIntrospectRecipe(server: McpServer): void {
+  server.registerTool(
+    "introspect-recipe",
+    {
+      title: "Resolve BitBake variables for a recipe",
+      description:
+        "Resolve the effective values of specific BitBake variables for a recipe by shelling out to `bitbake -e <recipe>` and filtering its output to the requested variable names. This is the recipe analogue of diffing requested-vs-effective `.config` — never trust the recipe source text, introspect the resolved state (e.g. DEPENDS, RDEPENDS, SRC_URI after all appends/overrides/class injection). Requires an initialized build environment (`BUILDDIR` set; enter one via `kas shell meta-avocado/kas/machine/qemuarm64.yml`) — when it is not set the tool returns immediately with an `error`, a `hint`, and `env_active: false`. On success it returns `{resolved, env_active: true}` where `resolved` maps each requested variable to its resolved value (variables not present in the output are omitted, not set to null). A non-zero exit returns its stderr as `error` with `env_active: false`.",
+      inputSchema: {
+        recipe: z
+          .string()
+          .min(1)
+          .describe(
+            "Recipe name to introspect. Examples: 'python3-numpy', 'flatbuffers', 'tflite-runtime'.",
+          ),
+        variables: z
+          .array(z.string().min(1))
+          .min(1)
+          .describe(
+            "BitBake variable names to resolve. Examples: ['DEPENDS', 'RDEPENDS', 'SRC_URI'].",
+          ),
+      },
+      outputSchema: introspectRecipeResultSchema,
+      annotations: {
+        title: "Resolve BitBake variables for a recipe",
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async ({ recipe, variables }) => {
+      if (!process.env.BUILDDIR) {
+        const error = "build environment not initialized";
+        const hint = "kas shell meta-avocado/kas/machine/qemuarm64.yml";
+        return {
+          content: [
+            {
+              type: "text",
+              text: `# introspect-recipe\n\n❌ ${error}\n\nEnter a build environment first:\n\n    ${hint}\n`,
+            },
+          ],
+          structuredContent: { env_active: false, error, hint },
+        };
+      }
+
+      const wanted = new Set(variables);
+      const pattern = `^(${variables.map(escapeRegExp).join("|")})=`;
+
+      let stdout: string;
+      try {
+        // pipefail so a genuine `bitbake -e` failure still propagates (and is
+        // reported as env_active:false); `grep ... || [ $? -eq 1 ]` swallows
+        // grep's exit-1 (no requested variable matched) so a valid recipe that
+        // simply defines none of them returns {resolved:{}, env_active:true}
+        // instead of a false failure. grep exit 2 (bad pattern) still throws.
+        stdout = execSync(
+          `set -o pipefail; bitbake -e ${JSON.stringify(
+            recipe,
+          )} 2>/dev/null | { grep -E ${JSON.stringify(
+            pattern,
+          )} || [ $? -eq 1 ]; }`,
+          {
+            shell: "/bin/bash",
+            timeout: 120_000, stdio: ["ignore", "pipe", "pipe"], encoding: "utf8" },
+        );
+      } catch (error) {
+        const stderr =
+          error && typeof error === "object" && "stderr" in error
+            ? String((error as { stderr: unknown }).stderr ?? "")
+            : "";
+        const message =
+          stderr.trim().length > 0
+            ? stderr.trim()
+            : error instanceof Error
+              ? error.message
+              : String(error);
+        return {
+          content: [
+            {
+              type: "text",
+              text: `# introspect-recipe failed\n\n❌ ${message}\n`,
+            },
+          ],
+          structuredContent: { env_active: false, error: message },
+        };
+      }
+
+      const resolved = parseIntrospectOutput(stdout, wanted);
+      return {
+        content: [
+          { type: "text", text: renderIntrospect(recipe, variables, resolved) },
+        ],
+        structuredContent: { resolved, env_active: true },
+      };
+    },
+  );
+}
+
+function renderIntrospect(
+  recipe: string,
+  variables: string[],
+  resolved: Record<string, string>,
+): string {
+  let out = `# introspect-recipe: \`${recipe}\`\n\n`;
+  const names = Object.keys(resolved);
+  out += `**Resolved:** ${names.length}/${variables.length}\n`;
+  if (names.length === 0) {
+    out += `\nNone of the requested variables appeared in \`bitbake -e\` output.\n`;
+    return out;
+  }
+  out += `\n| variable | value |\n`;
+  out += `| --- | --- |\n`;
+  for (const name of names) {
+    out += `| \`${name}\` | ${resolved[name] || "_(empty)_"} |\n`;
   }
   return out;
 }
