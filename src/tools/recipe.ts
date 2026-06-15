@@ -194,6 +194,7 @@ export function registerRecipeTools(
   registerScaffoldRecipe(server);
   registerLintRecipe(server);
   registerIntrospectRecipe(server);
+  registerStageRecipeToFeed(server);
 }
 
 /**
@@ -1158,6 +1159,162 @@ function renderIntrospect(
   out += `| --- | --- |\n`;
   for (const name of names) {
     out += `| \`${name}\` | ${resolved[name] || "_(empty)_"} |\n`;
+  }
+  return out;
+}
+
+const FEED_URL =
+  "https://github.com/avocado-linux/meta-avocado/tree/feed-bringup-zeromq";
+
+const stageRecipeToFeedResultSchema = {
+  sdk_pass: z.boolean(),
+  boot_pass: z.boolean(),
+  qga_output: z.string(),
+  feed_url: z.string().optional(),
+  hint: z.string().optional(),
+};
+
+/** Parsed verdict from validate-feed-local.sh stdout. */
+interface FeedVerdict {
+  sdk_pass: boolean;
+  boot_pass: boolean;
+}
+
+/**
+ * Read the SDK and BOOT tier verdicts from validate-feed-local.sh stdout. The
+ * script prints "SDK PASS"/"SDK FAIL" and "BOOT PASS"/"BOOT FAIL" markers; a
+ * PASS marker wins over a FAIL marker for the same tier (the last marker
+ * printed reflects the final state). A tier with no marker defaults to false.
+ */
+function parseFeedVerdict(stdout: string): FeedVerdict {
+  return {
+    sdk_pass: /\bSDK PASS\b/.test(stdout) && !/\bSDK FAIL\b/.test(stdout),
+    boot_pass: /\bBOOT PASS\b/.test(stdout) && !/\bBOOT FAIL\b/.test(stdout),
+  };
+}
+
+/** Return the last non-empty line of `text`, or "" when there is none. */
+function lastNonEmptyLine(text: string): string {
+  const lines = text.split("\n");
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = lines[i].trim();
+    if (line.length > 0) return line;
+  }
+  return "";
+}
+
+/**
+ * Stage a green recipe into the local package feed and validate it end-to-end.
+ *
+ * Requires the feed-bringup-zeromq branch of meta-avocado.
+ */
+function registerStageRecipeToFeed(server: McpServer): void {
+  server.registerTool(
+    "stage-recipe-to-feed",
+    {
+      title: "Stage a recipe into the local package feed",
+      description:
+        "Stage a built recipe into the local package feed and validate it end-to-end by shelling out to `bash meta-avocado/scripts/validate-feed-local.sh -b -l <lib_file> <package>` from the workspace root. The `-b` flag runs the full boot validation (SDK sysroot assertion plus a QEMU boot that asserts the library/module is present at runtime via the guest agent), so this can take several minutes. Requires the feed-bringup-zeromq branch of meta-avocado. On exit 0 it returns `{sdk_pass: true, boot_pass: true, qga_output, feed_url}`. On a non-zero exit it parses the SDK PASS/FAIL and BOOT PASS/FAIL markers to report which tier failed and returns `{sdk_pass, boot_pass: false, qga_output, hint}` — check `qga_output` for the failing assertion.",
+      inputSchema: {
+        package: z
+          .string()
+          .min(1)
+          .describe(
+            "Recipe package name to stage. Examples: 'python3-executorch', 'tflite-runtime'.",
+          ),
+        lib_file: z
+          .string()
+          .min(1)
+          .describe(
+            "Shared library or Python module file to assert in the SDK sysroot. Examples: 'executorch.so', 'executorch/__init__.py'.",
+          ),
+      },
+      outputSchema: stageRecipeToFeedResultSchema,
+      annotations: {
+        title: "Stage a recipe into the local package feed",
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
+    },
+    async ({ package: pkg, lib_file }) => {
+      const root = defaultWorkspaceRoot();
+      const command = `bash meta-avocado/scripts/validate-feed-local.sh -b -l ${JSON.stringify(
+        lib_file,
+      )} ${JSON.stringify(pkg)}`;
+
+      let stdout: string;
+      try {
+        stdout = execSync(command, {
+          cwd: root,
+          timeout: 300_000,
+          stdio: ["ignore", "pipe", "pipe"],
+          encoding: "utf8",
+        });
+      } catch (error) {
+        const errObj =
+          error && typeof error === "object"
+            ? (error as { stdout?: unknown; stderr?: unknown })
+            : {};
+        const outText = String(errObj.stdout ?? "");
+        const errText = String(errObj.stderr ?? "");
+        const verdict = parseFeedVerdict(outText);
+        const qgaOutput =
+          errText.trim().length > 0
+            ? errText.trim()
+            : lastNonEmptyLine(outText);
+        const result = {
+          sdk_pass: verdict.sdk_pass,
+          boot_pass: false,
+          qga_output: qgaOutput,
+          hint: "Check qga_output for the failing assertion",
+        };
+        return {
+          content: [
+            { type: "text", text: renderStageFeed(pkg, lib_file, result) },
+          ],
+          structuredContent: result,
+        };
+      }
+
+      const result = {
+        sdk_pass: true,
+        boot_pass: true,
+        qga_output: lastNonEmptyLine(stdout),
+        feed_url: FEED_URL,
+      };
+      return {
+        content: [
+          { type: "text", text: renderStageFeed(pkg, lib_file, result) },
+        ],
+        structuredContent: result,
+      };
+    },
+  );
+}
+
+function renderStageFeed(
+  pkg: string,
+  libFile: string,
+  result: {
+    sdk_pass: boolean;
+    boot_pass: boolean;
+    qga_output: string;
+    feed_url?: string;
+    hint?: string;
+  },
+): string {
+  let out = `# stage-recipe-to-feed: \`${pkg}\`\n\n`;
+  out += `**Library asserted:** \`${libFile}\`\n`;
+  out += `**SDK:** ${result.sdk_pass ? "✅ PASS" : "❌ FAIL"}\n`;
+  out += `**Boot:** ${result.boot_pass ? "✅ PASS" : "❌ FAIL"}\n`;
+  if (result.feed_url) {
+    out += `**Feed:** ${result.feed_url}\n`;
+  }
+  out += `\n**QGA output:**\n\n    ${result.qga_output || "_(none)_"}\n`;
+  if (result.hint) {
+    out += `\n${result.hint}\n`;
   }
   return out;
 }
