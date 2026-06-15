@@ -1,7 +1,13 @@
-import { readdirSync, readFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
-import { parse as parseYaml } from "yaml";
+import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { RepoClient } from "../lib/repo-client.js";
@@ -129,7 +135,12 @@ function matchCorpus(key: string, cases: CorpusCase[]): DiagnoseResult {
     };
   }
 
-  return { match_type: "none", confidence: 0.0, case: null, normalized_key: key };
+  return {
+    match_type: "none",
+    confidence: 0.0,
+    case: null,
+    normalized_key: key,
+  };
 }
 
 function renderDiagnosis(result: DiagnoseResult): string {
@@ -209,6 +220,119 @@ export function registerCorpusTools(
 
       return {
         content: [{ type: "text", text: renderDiagnosis(result) }],
+        structuredContent: result,
+      };
+    },
+  );
+
+  server.registerTool(
+    "record-recipe-fix",
+    {
+      title: "Record a verified BitBake recipe fix into the corpus",
+      description:
+        'Append a new error-learning case to `<corpus_dir>/cases/*.yaml`. `normalized_signature` must already be the normalized corpus key (call `diagnose-build-failure` or normalize the raw log first); a raw, un-normalized log is rejected. An empty `falsifier` is rejected (a case with no way to verify the fix is worthless). A signature already present in the corpus is rejected as a duplicate. On success the case is written with `verified: false` and `source: "user-recorded"` so a later human/CI pass can promote it.',
+      inputSchema: {
+        normalized_signature: z
+          .string()
+          .min(1)
+          .describe(
+            "The normalized corpus key (NOT a raw log). Must already be normalized; the tool rejects input that differs from its own normalization.",
+          ),
+        failed_task: z
+          .string()
+          .min(1)
+          .describe('The failing BitBake task, e.g. "do_package_qa".'),
+        build_system: z
+          .string()
+          .min(1)
+          .describe('The recipe build system, e.g. "cmake", "autotools".'),
+        root_cause: z
+          .string()
+          .min(1)
+          .describe("One-sentence root cause of the failure."),
+        fix_diff: z
+          .string()
+          .min(1)
+          .describe("Unified diff of the fix applied to the recipe."),
+        doc_link: z
+          .string()
+          .min(1)
+          .describe("URL to the relevant Yocto documentation."),
+        falsifier: z
+          .string()
+          .describe("How to verify the fix works; an empty value is rejected."),
+        corpus_dir: z
+          .string()
+          .optional()
+          .describe(
+            "Corpus root to write into; the case lands in `<corpus_dir>/cases/`. Defaults to the `corpus/` directory beside avocado-mcp.",
+          ),
+      },
+      annotations: {
+        title: "Record a verified BitBake recipe fix into the corpus",
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+    },
+    async ({
+      normalized_signature,
+      failed_task,
+      build_system,
+      root_cause,
+      fix_diff,
+      doc_link,
+      falsifier,
+      corpus_dir,
+    }) => {
+      const fail = (error: string) => ({
+        content: [{ type: "text" as const, text: JSON.stringify({ error }) }],
+        structuredContent: { error },
+      });
+
+      if (falsifier === "") {
+        return fail("falsifier required");
+      }
+
+      const normalized = normalizeSignature(normalized_signature);
+      if (normalized !== normalized_signature) {
+        return fail(
+          `normalized_signature must already be normalized; got ${normalized_signature}, expected ${normalized}`,
+        );
+      }
+
+      const corpusDir = corpus_dir ?? defaultCorpusDir();
+      const cases = loadCorpusCases(corpusDir);
+      if (cases.some((c) => c.normalized_signature === normalized_signature)) {
+        return fail("duplicate");
+      }
+
+      const slugSource = `${failed_task}-${normalized_signature.slice(0, 40)}`;
+      const slug = slugSource.replace(/[^a-zA-Z0-9]+/g, "-").toLowerCase();
+
+      const casesDir = resolve(corpusDir, "cases");
+      if (!existsSync(casesDir)) {
+        mkdirSync(casesDir, { recursive: true });
+      }
+      const path = resolve(casesDir, `${slug}.yaml`);
+
+      const record = {
+        normalized_signature,
+        failed_task,
+        build_system,
+        root_cause,
+        fix_diff,
+        doc_link,
+        falsifier,
+        verified: false,
+        source: "user-recorded",
+      };
+      writeFileSync(path, stringifyYaml(record), "utf8");
+
+      const result = { written: true, path };
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(result) }],
         structuredContent: result,
       };
     },
