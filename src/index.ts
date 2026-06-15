@@ -17,6 +17,7 @@ import { registerConnectTools } from "./tools/connect.js";
 import { registerSkillResources } from "./tools/resources.js";
 import { registerPrompts } from "./tools/prompts.js";
 import { registerRecipeTools } from "./tools/recipe.js";
+import { registerCorpusTools } from "./tools/corpus.js";
 
 const require = createRequire(import.meta.url);
 const packageJson = require("../package.json");
@@ -111,6 +112,7 @@ registerDebuggingTools(server);
 registerDocsTools(server);
 registerConnectTools(server);
 registerRecipeTools(server, repoClient);
+registerCorpusTools(server, repoClient);
 
 async function main() {
   const transport = new StdioServerTransport();
