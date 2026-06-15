@@ -183,6 +183,8 @@ export function registerRecipeTools(
       }
     },
   );
+
+  registerExplainBitbake(server);
 }
 
 /**
@@ -196,7 +198,9 @@ async function resolveLayerNames(
   const out = new Map<number, string>();
   if (ids.size === 0) return out;
   try {
-    const raw = await fetchJson(`${LAYER_INDEX_BASE}layerBranches/?format=json`);
+    const raw = await fetchJson(
+      `${LAYER_INDEX_BASE}layerBranches/?format=json`,
+    );
     const layerBranches = Array.isArray(raw)
       ? (raw as LayerIndexLayerBranch[])
       : [];
@@ -234,4 +238,164 @@ function renderResults(
     } |\n`;
   }
   return out;
+}
+
+/** BitBake variable kinds surfaced by explain-bitbake. */
+type BitbakeVarType = "string" | "list" | "path" | "task";
+
+/** A single explain-bitbake table entry. */
+interface BitbakeVarEntry {
+  type: BitbakeVarType;
+  description: string;
+  doc_url: string;
+}
+
+const REF_VARS =
+  "https://docs.yoctoproject.org/ref-manual/variables.html#term-";
+const REF_TASKS =
+  "https://docs.yoctoproject.org/ref-manual/tasks.html#ref-tasks-";
+
+/**
+ * The 12 most common BitBake recipe variables and tasks. Keyed by the
+ * canonical variable/task name; lookup is case-insensitive (see
+ * explain-bitbake).
+ */
+const BITBAKE_VARS: Record<string, BitbakeVarEntry> = {
+  DESCRIPTION: {
+    type: "string",
+    description: "Human-readable recipe description",
+    doc_url: `${REF_VARS}DESCRIPTION`,
+  },
+  LICENSE: {
+    type: "string",
+    description: "SPDX license expression",
+    doc_url: `${REF_VARS}LICENSE`,
+  },
+  LIC_FILES_CHKSUM: {
+    type: "string",
+    description: "License file paths with checksums",
+    doc_url: `${REF_VARS}LIC_FILES_CHKSUM`,
+  },
+  SRC_URI: {
+    type: "list",
+    description: "Source file URIs to fetch",
+    doc_url: `${REF_VARS}SRC_URI`,
+  },
+  SRCREV: {
+    type: "string",
+    description: "SCM revision to fetch",
+    doc_url: `${REF_VARS}SRCREV`,
+  },
+  DEPENDS: {
+    type: "list",
+    description: "build-time package dependencies",
+    doc_url: `${REF_VARS}DEPENDS`,
+  },
+  RDEPENDS: {
+    type: "list",
+    description: "Runtime package dependencies",
+    doc_url: `${REF_VARS}RDEPENDS`,
+  },
+  S: {
+    type: "path",
+    description: "Source directory (defaults to WORKDIR/name-version)",
+    doc_url: `${REF_VARS}S`,
+  },
+  B: {
+    type: "path",
+    description: "Build directory (defaults to S)",
+    doc_url: `${REF_VARS}B`,
+  },
+  do_configure: {
+    type: "task",
+    description: "Custom configure step (run cmake, ./configure, etc.)",
+    doc_url: `${REF_TASKS}configure`,
+  },
+  do_compile: {
+    type: "task",
+    description: "Custom compile step",
+    doc_url: `${REF_TASKS}compile`,
+  },
+  do_install: {
+    type: "task",
+    description: "Install files into ${D}",
+    doc_url: `${REF_TASKS}install`,
+  },
+};
+
+/** Case-insensitive name -> canonical key map, built once at module load. */
+const BITBAKE_VAR_LOOKUP = new Map<string, string>(
+  Object.keys(BITBAKE_VARS).map((key) => [key.toLowerCase(), key]),
+);
+
+const explainBitbakeResultSchema = {
+  found: z.boolean(),
+  variable: z.string().optional(),
+  type: z.enum(["string", "list", "path", "task"]).optional(),
+  description: z.string().optional(),
+  doc_url: z.string().optional(),
+  error: z.string().optional(),
+};
+
+function registerExplainBitbake(server: McpServer): void {
+  server.registerTool(
+    "explain-bitbake",
+    {
+      title: "Explain a common BitBake recipe variable",
+      description:
+        "Explain one of the 12 most common BitBake recipe variables or tasks (DESCRIPTION, LICENSE, LIC_FILES_CHKSUM, SRC_URI, SRCREV, DEPENDS, RDEPENDS, S, B, do_configure, do_compile, do_install). Returns the variable's type (string/list/path/task), a one-line description, and a link to the Yocto reference manual. Lookup is case-insensitive. Unknown names return an `error` listing the known variables.",
+      inputSchema: {
+        symbol: z
+          .string()
+          .min(1)
+          .describe(
+            "BitBake variable or task name to explain (case-insensitive). Examples: 'DEPENDS', 'SRC_URI', 'do_install'.",
+          ),
+      },
+      outputSchema: explainBitbakeResultSchema,
+      annotations: {
+        title: "Explain a common BitBake recipe variable",
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async ({ symbol }) => {
+      const key = BITBAKE_VAR_LOOKUP.get(symbol.trim().toLowerCase());
+      if (key === undefined) {
+        const known = Object.keys(BITBAKE_VARS).join(", ");
+        const error = `unknown variable ${symbol}; known: [${known}]`;
+        return {
+          content: [
+            {
+              type: "text",
+              text: `# explain-bitbake\n\n❌ ${error}`,
+            },
+          ],
+          structuredContent: { found: false, error },
+        };
+      }
+      const entry = BITBAKE_VARS[key];
+      return {
+        content: [
+          {
+            type: "text",
+            text:
+              `# explain-bitbake: \`${key}\`\n\n` +
+              `**Type:** ${entry.type}\n\n` +
+              `${entry.description}\n\n` +
+              `[Reference manual](${entry.doc_url})\n`,
+          },
+        ],
+        structuredContent: {
+          found: true,
+          variable: key,
+          type: entry.type,
+          description: entry.description,
+          doc_url: entry.doc_url,
+        },
+      };
+    },
+  );
 }
