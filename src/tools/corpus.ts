@@ -30,8 +30,13 @@ export function normalizeSignature(raw: string): string {
   let s = raw;
 
   // Pass 1: collapse an absolute home-rooted build path prefix to <WORKDIR>/.
-  // Matches /home/<user>/<repo>/<dir>/ and the deeper tmp/work tree beneath it.
+  // Matches /home/<user>/<repo>/<dir>/.
   s = s.replace(/\/home\/[^/\s]+\/[^/\s]+\/[^/\s]+\//g, "<WORKDIR>/");
+
+  // Pass 1b: collapse BitBake tmp/work build paths to <WORKDIR>.
+  // Handles build roots like /build/tmp/work/... (not under /home/) and the
+  // tmp/work subtree remaining after Pass 1 collapses the /home/ prefix.
+  s = s.replace(/(?:<WORKDIR>\/|\/[^\s/]+\/)tmp\/work\/\S*/g, "<WORKDIR>");
 
   // Pass 2: collapse BitBake <pkg>-<version>-<rev> tokens to <PKG>.
   // e.g. zeromq-4.3.5-r0, python3-numpy-1.26.4-r0.
@@ -39,6 +44,11 @@ export function normalizeSignature(raw: string): string {
 
   // Pass 3: collapse lib<name>.so library names in QA messages to <LIB>.so.
   s = s.replace(/\blib[\w+-]+\.so\b/g, "<LIB>.so");
+
+  // Pass 4: collapse hex hash strings (>= 8 consecutive hex chars) to <HASH>.
+  // Strips SHA256/MD5 digests from do_fetch checksum mismatch errors so the
+  // same failure for different artifact versions collapses to one corpus key.
+  s = s.replace(/\b[0-9a-f]{8,}(?:\.\.\.)?/gi, "<HASH>");
 
   return s;
 }
@@ -96,6 +106,7 @@ interface DiagnoseResult {
   confidence: number;
   case: CorpusCase | null;
   normalized_key: string;
+  kb_hint?: string;
 }
 
 /**
@@ -140,6 +151,7 @@ function matchCorpus(key: string, cases: CorpusCase[]): DiagnoseResult {
     confidence: 0.0,
     case: null,
     normalized_key: key,
+    kb_hint: `kb_recall(project="peridio", description="${key}")`,
   };
 }
 
@@ -150,6 +162,9 @@ function renderDiagnosis(result: DiagnoseResult): string {
 
   if (result.match_type === "none" || result.case === null) {
     out += `\nNo corpus case matched this signature. This is a novel failure: extract the error, route to the relevant Yocto docs, and record the fix with \`record-recipe-fix\` once verified.\n`;
+    if (result.kb_hint) {
+      out += `\n**KB fallback:** run \`${result.kb_hint}\` for compiled KB knowledge on similar failures.\n`;
+    }
     return out;
   }
 
@@ -203,6 +218,7 @@ export function registerCorpusTools(
         confidence: z.number(),
         case: z.record(z.unknown()).nullable(),
         normalized_key: z.string(),
+        kb_hint: z.string().optional(),
       },
       annotations: {
         title: "Diagnose a BitBake build failure against the corpus",
@@ -330,7 +346,22 @@ export function registerCorpusTools(
       };
       writeFileSync(path, stringifyYaml(record), "utf8");
 
-      const result = { written: true, path };
+      const result = {
+        written: true,
+        path,
+        kb_sync_needed: true,
+        kb_ingest_args: {
+          project: "peridio",
+          source_type: "manual",
+          source_id: slug,
+          raw_content: stringifyYaml(record),
+          keywords: ["yocto", "bitbake", "build-failure", failed_task],
+        },
+        kb_compile_args: {
+          project: "peridio",
+          entries: [slug],
+        },
+      };
       return {
         content: [{ type: "text" as const, text: JSON.stringify(result) }],
         structuredContent: result,
