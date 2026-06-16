@@ -6,6 +6,7 @@ import { statfs } from "fs/promises";
 import { arch as osArch, platform as osPlatform, homedir } from "os";
 import { RepoClient } from "../lib/repo-client.js";
 import { resolveTarget } from "../lib/target-resolver.js";
+import { probeHostMcp, HOST_MCP_URL } from "../lib/cli-channel.js";
 
 /**
  * Normalize Node's `os.arch()` to the same vocabulary the rest of the MCP
@@ -61,81 +62,6 @@ const execFileP = promisify(execFile);
 
 const MIN_FREE_GB = 8;
 const INSTALL_HINT = "curl -fsSL https://connect.peridio.com/install.sh | sh";
-
-// Host MCP probe. When this MCP runs inside the avocado-vm, the QEMU
-// user-mode NAT routes 10.0.2.2 to the macOS host's loopback, so the
-// desktop app's MCP server (`MCPHostServer.swift`, default port 11551)
-// is reachable. On a developer's workstation the address isn't
-// routable and the connect fails fast — that's the workstation signal.
-const HOST_MCP_URL = "http://10.0.2.2:11551/mcp";
-const HOST_MCP_PROBE_TIMEOUT_MS = 600;
-
-interface HostMcpDelegation {
-  available: boolean;
-  runToolName?: string;
-  statusToolName?: string;
-  awaitToolName?: string;
-  detail: string;
-}
-
-async function probeHostMcp(): Promise<HostMcpDelegation> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), HOST_MCP_PROBE_TIMEOUT_MS);
-  try {
-    const resp = await fetch(HOST_MCP_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "tools/list",
-        params: {},
-      }),
-      signal: controller.signal,
-    });
-    if (!resp.ok) {
-      return {
-        available: false,
-        detail: `host MCP responded HTTP ${resp.status}`,
-      };
-    }
-    const body = (await resp.json()) as {
-      result?: { tools?: Array<{ name: string }> };
-    };
-    const names = new Set(
-      (body.result?.tools ?? []).map((t) => t.name).filter(Boolean),
-    );
-    if (names.has("run_avocado_cli") && names.has("avocado_cli_status")) {
-      return {
-        available: true,
-        runToolName: "run_avocado_cli",
-        statusToolName: "avocado_cli_status",
-        // Older host MCPs don't expose await_avocado_cli yet — surface
-        // it only when it's actually there so the agent's instructions
-        // line up with what it can call.
-        awaitToolName: names.has("await_avocado_cli")
-          ? "await_avocado_cli"
-          : undefined,
-        detail: "host MCP advertises CLI delegation",
-      };
-    }
-    return {
-      available: false,
-      detail: "host MCP reachable but does not expose run_avocado_cli",
-    };
-  } catch (e) {
-    // The expected workstation path: ECONNREFUSED / ENETUNREACH /
-    // AbortError. We don't surface the underlying error to the user —
-    // it's just "no host MCP" and that's fine.
-    const err = e as { name?: string; code?: string };
-    if (err.name === "AbortError") {
-      return { available: false, detail: "no host MCP (probe timed out)" };
-    }
-    return { available: false, detail: "no host MCP reachable" };
-  } finally {
-    clearTimeout(timer);
-  }
-}
 
 async function checkBinary(
   cmd: string,

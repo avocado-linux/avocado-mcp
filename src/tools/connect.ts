@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { execFile } from "child_process";
 import { promisify } from "util";
+import { assertWorkstationChannel } from "../lib/cli-channel.js";
 
 const execFileP = promisify(execFile);
 
@@ -40,6 +41,49 @@ function firstErrorEventMessage(ndjson: string): string | null {
 }
 
 /**
+ * Turn a rejected `execFile` into a descriptive Error. Centralizes the three
+ * cases shared by `runConnectCli` and `connect-init`:
+ *   - binary missing (ENOENT),
+ *   - an `avocado` too old to know the `connect` subcommand, and
+ *   - a generic non-zero exit (preferring a structured NDJSON `error` event,
+ *     then stderr, then the raw message).
+ */
+function mapConnectCliError(args: string[], err: unknown): Error {
+  const e = err as {
+    code?: string;
+    stderr?: string;
+    stdout?: string;
+    message?: string;
+  };
+  if (e.code === "ENOENT") {
+    return new Error(
+      `avocado binary not found. Ensure avocado is installed and on PATH. ` +
+        `Connect tools run the CLI locally — they require the workstation execution channel.`,
+    );
+  }
+  const stderr = (e.stderr ?? "").trim();
+  // An older CLI without Connect support makes clap reject `connect` as an
+  // unrecognized subcommand. Detect that specific shape and point at an upgrade
+  // rather than surfacing a bare clap usage error.
+  const haystack = `${stderr}\n${e.message ?? ""}`.toLowerCase();
+  if (
+    /(unrecognized|unknown|invalid|no such) subcommand/.test(haystack) &&
+    haystack.includes("connect")
+  ) {
+    return new Error(
+      `Your \`avocado\` CLI does not support the \`connect\` subcommand. ` +
+        `Avocado Connect requires a newer avocado CLI — please update avocado and try again.`,
+    );
+  }
+  const detail =
+    firstErrorEventMessage(e.stdout ?? "") ||
+    stderr ||
+    e.message ||
+    "unknown error";
+  return new Error(`avocado ${args.join(" ")} failed: ${detail}`);
+}
+
+/**
  * Run an `avocado connect …` subcommand and return parsed JSON stdout.
  * Throws a descriptive Error on non-zero exit, parse failure, or timeout.
  */
@@ -47,6 +91,9 @@ async function runConnectCli(
   args: string[],
   opts: CliRunOpts = {},
 ): Promise<unknown> {
+  // Connect tools exec `avocado` locally; refuse in host-tool sessions where
+  // the real CLI/credentials/project live on the Mac and we'd hit the VM's.
+  await assertWorkstationChannel();
   const binary = process.env.AVOCADO_BINARY ?? "avocado";
   let stdout: string;
   let stderr: string;
@@ -57,16 +104,7 @@ async function runConnectCli(
       signal: opts.signal,
     }));
   } catch (err) {
-    const e = err as { code?: string; stderr?: string; message?: string };
-    if (e.code === "ENOENT") {
-      throw new Error(
-        `avocado binary not found. Ensure avocado is installed and on PATH. ` +
-          `Connect tools require the workstation execution channel — they will not work from inside the VM.`,
-      );
-    }
-    // execFileP rejects on non-zero exit; extract stderr for context.
-    const detail = (e.stderr ?? "").trim() || (e.message ?? "unknown error");
-    throw new Error(`avocado ${args.join(" ")} failed: ${detail}`);
+    throw mapConnectCliError(args, err);
   }
   // The CLI may print an [UPDATE] banner before the JSON payload; extract
   // the first complete JSON object or array, same as the Desktop does.
@@ -285,6 +323,8 @@ export function registerConnectTools(server: McpServer): void {
       },
     },
     async ({ directory, org, project, cohort, runtime }, extra) => {
+      // Same local-exec constraint as runConnectCli — bail early in host-tool.
+      await assertWorkstationChannel();
       const configPath = `${directory.replace(/\/+$/, "")}/avocado.yaml`;
       const runtimeName = (runtime ?? "").trim() || "dev";
       // `--flag=value` form so an id/path beginning with `-` can't be misparsed
@@ -315,25 +355,7 @@ export function registerConnectTools(server: McpServer): void {
           signal: extra.signal,
         }));
       } catch (err) {
-        const e = err as {
-          code?: string;
-          stderr?: string;
-          stdout?: string;
-          message?: string;
-        };
-        if (e.code === "ENOENT") {
-          throw new Error(
-            `avocado binary not found. Connect tools require the workstation execution channel.`,
-          );
-        }
-        // Prefer a structured `error` event from the NDJSON stream; fall back
-        // to stderr, then the raw error message.
-        const detail =
-          firstErrorEventMessage(e.stdout ?? "") ||
-          (e.stderr ?? "").trim() ||
-          e.message ||
-          "unknown error";
-        throw new Error(`connect init failed: ${detail}`);
+        throw mapConnectCliError(args, err);
       }
 
       // Parse the final complete event from NDJSON output.
