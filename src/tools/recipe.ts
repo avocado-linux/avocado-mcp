@@ -421,6 +421,29 @@ function defaultWorkspaceRoot(): string {
   return resolve(here, "../../../");
 }
 
+/**
+ * Pull a captured stream (`stdout`/`stderr`) off the object `execSync` throws on
+ * a non-zero exit. Returns "" when the error carries no such field.
+ */
+function capturedStream(error: unknown, field: "stdout" | "stderr"): string {
+  return error && typeof error === "object" && field in error
+    ? String((error as Record<string, unknown>)[field] ?? "")
+    : "";
+}
+
+/**
+ * Build a human-readable message from a failed `execSync`: prefer the trimmed
+ * captured stream, falling back to the Error message or its string form.
+ */
+function execErrorMessage(
+  error: unknown,
+  field: "stdout" | "stderr" = "stderr",
+): string {
+  const captured = capturedStream(error, field).trim();
+  if (captured.length > 0) return captured;
+  return error instanceof Error ? error.message : String(error);
+}
+
 /** A single find-recipe-examples result row. */
 interface RecipeExample {
   path: string;
@@ -802,16 +825,7 @@ function registerScaffoldRecipe(server: McpServer): void {
           { timeout: 60_000, stdio: ["ignore", "pipe", "pipe"] },
         );
       } catch (error) {
-        const stderr =
-          error && typeof error === "object" && "stderr" in error
-            ? String((error as { stderr: unknown }).stderr ?? "")
-            : "";
-        const message =
-          stderr.trim().length > 0
-            ? stderr.trim()
-            : error instanceof Error
-              ? error.message
-              : String(error);
+        const message = execErrorMessage(error, "stderr");
         return {
           content: [
             {
@@ -966,7 +980,10 @@ function registerLintRecipe(server: McpServer): void {
         const error = "file not found";
         return {
           content: [
-            { type: "text", text: `# lint-recipe\n\n❌ ${error}: \`${recipe_path}\`\n` },
+            {
+              type: "text",
+              text: `# lint-recipe\n\n❌ ${error}: \`${recipe_path}\`\n`,
+            },
           ],
           structuredContent: { error },
         };
@@ -980,13 +997,14 @@ function registerLintRecipe(server: McpServer): void {
           `oelint-adv --quiet --release scarthgap ${JSON.stringify(
             recipe_path,
           )}`,
-          { timeout: 60_000, stdio: ["ignore", "pipe", "pipe"], encoding: "utf8" },
+          {
+            timeout: 60_000,
+            stdio: ["ignore", "pipe", "pipe"],
+            encoding: "utf8",
+          },
         );
       } catch (error) {
-        stdout =
-          error && typeof error === "object" && "stdout" in error
-            ? String((error as { stdout: unknown }).stdout ?? "")
-            : "";
+        stdout = capturedStream(error, "stdout");
       }
 
       const findings = parseLintOutput(stdout);
@@ -1108,19 +1126,13 @@ function registerIntrospectRecipe(server: McpServer): void {
           )} || [ $? -eq 1 ]; }`,
           {
             shell: "/bin/bash",
-            timeout: 120_000, stdio: ["ignore", "pipe", "pipe"], encoding: "utf8" },
+            timeout: 120_000,
+            stdio: ["ignore", "pipe", "pipe"],
+            encoding: "utf8",
+          },
         );
       } catch (error) {
-        const stderr =
-          error && typeof error === "object" && "stderr" in error
-            ? String((error as { stderr: unknown }).stderr ?? "")
-            : "";
-        const message =
-          stderr.trim().length > 0
-            ? stderr.trim()
-            : error instanceof Error
-              ? error.message
-              : String(error);
+        const message = execErrorMessage(error, "stderr");
         return {
           content: [
             {

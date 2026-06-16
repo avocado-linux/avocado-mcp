@@ -63,7 +63,7 @@ const execFileP = promisify(execFile);
 const MIN_FREE_GB = 8;
 const INSTALL_HINT = "curl -fsSL https://connect.peridio.com/install.sh | sh";
 
-async function checkBinary(
+export async function checkBinary(
   cmd: string,
   args: string[],
 ): Promise<{ ok: boolean; detail: string }> {

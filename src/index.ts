@@ -19,6 +19,7 @@ import { registerPrompts } from "./tools/prompts.js";
 import { registerRecipeTools } from "./tools/recipe.js";
 import { registerCorpusTools } from "./tools/corpus.js";
 import { registerRecipeAuthoringResource } from "./tools/recipe-authoring.js";
+import { registerPreflightTools } from "./tools/preflight.js";
 
 const require = createRequire(import.meta.url);
 const packageJson = require("../package.json");
@@ -115,6 +116,7 @@ registerDocsTools(server);
 registerConnectTools(server);
 registerRecipeTools(server, repoClient);
 registerCorpusTools(server, repoClient);
+registerPreflightTools(server);
 
 async function main() {
   const transport = new StdioServerTransport();

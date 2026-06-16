@@ -344,7 +344,8 @@ export function registerCorpusTools(
         verified: false,
         source: "user-recorded",
       };
-      writeFileSync(path, stringifyYaml(record), "utf8");
+      const recordYaml = stringifyYaml(record);
+      writeFileSync(path, recordYaml, "utf8");
 
       const result = {
         written: true,
@@ -354,7 +355,7 @@ export function registerCorpusTools(
           project: "peridio",
           source_type: "manual",
           source_id: slug,
-          raw_content: stringifyYaml(record),
+          raw_content: recordYaml,
           keywords: ["yocto", "bitbake", "build-failure", failed_task],
         },
         kb_compile_args: {
