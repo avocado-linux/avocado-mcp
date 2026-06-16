@@ -2,3 +2,10 @@ node_modules
 .vscode
 build
 .avocado-cache
+
+# Local Claude Code state is globally ignored (~/.config/git/ignore). Re-include
+# .claude/ so the shipped yocto-engineer skill is tracked as a normal deliverable,
+# but keep the genuinely-local, non-shippable bits out of the repo.
+!.claude/
+.claude/settings.local.json
+.claude/agent-memory/
