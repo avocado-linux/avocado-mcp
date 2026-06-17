@@ -7,6 +7,7 @@ import {
 } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
+import { createHash } from "node:crypto";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -324,7 +325,17 @@ export function registerCorpusTools(
         return fail("duplicate");
       }
 
-      const slugSource = `${failed_task}-${normalized_signature.slice(0, 40)}`;
+      // Append a hash of the full signature so two distinct signatures sharing
+      // the same 40-char prefix get distinct slugs and never overwrite each
+      // other's case file.
+      const sigHash = createHash("sha1")
+        .update(normalized_signature)
+        .digest("hex")
+        .slice(0, 8);
+      const slugSource = `${failed_task}-${normalized_signature.slice(
+        0,
+        40,
+      )}-${sigHash}`;
       const slug = slugSource.replace(/[^a-zA-Z0-9]+/g, "-").toLowerCase();
 
       const casesDir = resolve(corpusDir, "cases");

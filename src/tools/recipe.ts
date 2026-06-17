@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, relative, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
@@ -422,7 +422,7 @@ function defaultWorkspaceRoot(): string {
 }
 
 /**
- * Pull a captured stream (`stdout`/`stderr`) off the object `execSync` throws on
+ * Pull a captured stream (`stdout`/`stderr`) off the object `execFileSync` throws on
  * a non-zero exit. Returns "" when the error carries no such field.
  */
 function capturedStream(error: unknown, field: "stdout" | "stderr"): string {
@@ -432,7 +432,7 @@ function capturedStream(error: unknown, field: "stdout" | "stderr"): string {
 }
 
 /**
- * Build a human-readable message from a failed `execSync`: prefer the trimmed
+ * Build a human-readable message from a failed `execFileSync`: prefer the trimmed
  * captured stream, falling back to the Error message or its string form.
  */
 function execErrorMessage(
@@ -818,12 +818,12 @@ function registerScaffoldRecipe(server: McpServer): void {
 
       const outPath = `/tmp/scaffold-${Date.now()}.bb`;
       try {
-        execSync(
-          `recipetool create --fetch ${JSON.stringify(url)} -o ${JSON.stringify(
-            outPath,
-          )}`,
-          { timeout: 60_000, stdio: ["ignore", "pipe", "pipe"] },
-        );
+        // execFileSync (no shell) so a hostile `url` cannot inject commands;
+        // JSON.stringify quotes for JSON, not the shell, and leaves $()/backticks live.
+        execFileSync("recipetool", ["create", "--fetch", url, "-o", outPath], {
+          timeout: 60_000,
+          stdio: ["ignore", "pipe", "pipe"],
+        });
       } catch (error) {
         const message = execErrorMessage(error, "stderr");
         return {
@@ -993,10 +993,9 @@ function registerLintRecipe(server: McpServer): void {
       // the error object's `stdout`. Capture both paths and parse the same way.
       let stdout: string;
       try {
-        stdout = execSync(
-          `oelint-adv --quiet --release scarthgap ${JSON.stringify(
-            recipe_path,
-          )}`,
+        stdout = execFileSync(
+          "oelint-adv",
+          ["--quiet", "--release", "scarthgap", recipe_path],
           {
             timeout: 60_000,
             stdio: ["ignore", "pipe", "pipe"],
@@ -1109,28 +1108,20 @@ function registerIntrospectRecipe(server: McpServer): void {
       }
 
       const wanted = new Set(variables);
-      const pattern = `^(${variables.map(escapeRegExp).join("|")})=`;
-
       let stdout: string;
       try {
-        // pipefail so a genuine `bitbake -e` failure still propagates (and is
-        // reported as env_active:false); `grep ... || [ $? -eq 1 ]` swallows
-        // grep's exit-1 (no requested variable matched) so a valid recipe that
-        // simply defines none of them returns {resolved:{}, env_active:true}
-        // instead of a false failure. grep exit 2 (bad pattern) still throws.
-        stdout = execSync(
-          `set -o pipefail; bitbake -e ${JSON.stringify(
-            recipe,
-          )} 2>/dev/null | { grep -E ${JSON.stringify(
-            pattern,
-          )} || [ $? -eq 1 ]; }`,
-          {
-            shell: "/bin/bash",
-            timeout: 120_000,
-            stdio: ["ignore", "pipe", "pipe"],
-            encoding: "utf8",
-          },
-        );
+        // execFileSync (no shell) so the recipe name cannot inject commands.
+        // bitbake -e dumps the whole environment to stdout (hence the large
+        // maxBuffer); parseIntrospectOutput filters to the requested variables
+        // in JS. A genuine bitbake failure throws and is reported as
+        // env_active:false; a recipe that simply defines none of the requested
+        // variables yields {resolved:{}, env_active:true} with no false failure.
+        stdout = execFileSync("bitbake", ["-e", recipe], {
+          timeout: 120_000,
+          stdio: ["ignore", "pipe", "pipe"],
+          encoding: "utf8",
+          maxBuffer: 64 * 1024 * 1024,
+        });
       } catch (error) {
         const message = execErrorMessage(error, "stderr");
         return {
@@ -1194,9 +1185,9 @@ interface FeedVerdict {
 
 /**
  * Read the SDK and BOOT tier verdicts from validate-feed-local.sh stdout. The
- * script prints "SDK PASS"/"SDK FAIL" and "BOOT PASS"/"BOOT FAIL" markers; a
- * PASS marker wins over a FAIL marker for the same tier (the last marker
- * printed reflects the final state). A tier with no marker defaults to false.
+ * script prints "SDK PASS"/"SDK FAIL" and "BOOT PASS"/"BOOT FAIL" markers. A
+ * tier passes only when its PASS marker is present and no FAIL marker for that
+ * tier appears anywhere in the output; a tier with no marker defaults to false.
  */
 function parseFeedVerdict(stdout: string): FeedVerdict {
   return {
@@ -1252,18 +1243,26 @@ function registerStageRecipeToFeed(server: McpServer): void {
     },
     async ({ package: pkg, lib_file }) => {
       const root = defaultWorkspaceRoot();
-      const command = `bash meta-avocado/scripts/validate-feed-local.sh -b -l ${JSON.stringify(
-        lib_file,
-      )} ${JSON.stringify(pkg)}`;
-
       let stdout: string;
       try {
-        stdout = execSync(command, {
-          cwd: root,
-          timeout: 300_000,
-          stdio: ["ignore", "pipe", "pipe"],
-          encoding: "utf8",
-        });
+        // execFileSync (no shell) so `lib_file`/`pkg` reach the script as argv,
+        // not interpolated into a shell command line.
+        stdout = execFileSync(
+          "bash",
+          [
+            "meta-avocado/scripts/validate-feed-local.sh",
+            "-b",
+            "-l",
+            lib_file,
+            pkg,
+          ],
+          {
+            cwd: root,
+            timeout: 300_000,
+            stdio: ["ignore", "pipe", "pipe"],
+            encoding: "utf8",
+          },
+        );
       } catch (error) {
         const errObj =
           error && typeof error === "object"
