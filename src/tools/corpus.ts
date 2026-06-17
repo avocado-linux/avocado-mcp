@@ -55,14 +55,15 @@ export function normalizeSignature(raw: string): string {
 }
 
 /**
- * Default corpus root: the `corpus/` directory that sits beside the avocado-mcp
- * repo in the workspace. The compiled module lives at `build/tools/corpus.js`,
- * so three `..` hops land on the avocado-mcp root's parent (the workspace), and
- * `corpus/` is its child. Matches `find-recipe-examples`' path convention.
+ * Default corpus root: the in-repo `corpus/` directory shipped with avocado-mcp.
+ * The compiled module lives at `build/tools/corpus.js`, so two `..` hops land on
+ * the avocado-mcp root and `corpus/` is its child. Keeping the corpus in-repo
+ * (rather than beside the repo in the workspace) makes it portable for any
+ * contributor and part of the package payload.
  */
 function defaultCorpusDir(): string {
   const here = dirname(fileURLToPath(import.meta.url));
-  return resolve(here, "../../../corpus");
+  return resolve(here, "../../corpus");
 }
 
 /** A corpus case as loaded from a `<corpus_dir>/cases/*.yaml` file. */

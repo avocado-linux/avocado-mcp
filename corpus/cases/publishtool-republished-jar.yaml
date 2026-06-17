@@ -1,0 +1,35 @@
+# Real bringup case (feed-bringup-zeromq): an off-farm avocado-complete build
+# failed fetching an external jar that upstream re-published in place.
+
+normalized_signature: "<PKG> do_fetch: Checksum mismatch! (sha256 got <HASH> expected <HASH>)"
+
+failed_task: "do_fetch (nativesdk-publishtool 1.10.0) during an off-farm avocado-complete SDK build"
+
+build_system: "bitbake (external maven jar fetch from kondra.mycloudrepo.io)"
+
+root_cause: |
+  Upstream re-published studio.v1.client.tools.publishtool-1.10.0.jar in place,
+  so its sha256 changed (recipe expected d766771c..., upstream now serves
+  1453074160...). The pinned original lives only on the molcajete premirror
+  (kas/ci/mirrors.yml SOURCE_MIRROR_URL=http://molcajete:30082/downloads), which
+  CI uses but is unreachable off-farm. Off-farm builds fetch kondra live and hit
+  the mutated jar. Re-publishing under the same version silently breaks checksum
+  pinning.
+
+fix_diff: |
+  Short term (local, throwaway - NOT committed to a feature branch): bump the
+  recipe checksum to the current jar.
+    --- a/meta-avocado-distro/recipes-kos/publishtool/publishtool_1.10.0.bb
+    +++ b/meta-avocado-distro/recipes-kos/publishtool/publishtool_1.10.0.bb
+    -SRC_URI[sha256sum] = "d766771c0b0eca11f03e0f8af63d30496f2429887c5385c41cc63060cf5ddc39"
+    +SRC_URI[sha256sum] = "1453074160fab1267a93ad417f2e6d0553e3206d4cc9c9f86566191c630f7b35"
+  Proper fix (tracked with beni/Justin): mirror external artifacts so builds
+  never fetch kondra live (premirror as source of truth, reachable/seedable
+  off-farm), or pin/vendor the jar.
+
+doc_link: "meta-avocado/meta-avocado-distro/recipes-kos/publishtool/publishtool_1.10.0.bb; meta-avocado/kas/ci/mirrors.yml; KB peridio/avocado-external-repo-deps-premirror"
+
+falsifier: |
+  An off-farm avocado-complete build (no molcajete premirror reachable) fails
+  publishtool do_fetch with a checksum mismatch. With the premirror (CI) or after
+  re-pinning the recipe checksum, do_fetch succeeds.

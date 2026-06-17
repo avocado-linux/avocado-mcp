@@ -411,14 +411,27 @@ function registerExplainBitbake(server: McpServer): void {
 }
 
 /**
- * Default workspace root: the directory that holds avocado-mcp, `corpus/`, and
+ * Default workspace root: the directory that holds avocado-mcp and
  * `meta-avocado/` as siblings. The compiled module lives at
  * `build/tools/recipe.js`, so three `..` hops land on avocado-mcp's parent.
- * Mirrors `corpus.ts`' `defaultCorpusDir()` path convention.
+ * Used for `.bb` example scanning and the meta-avocado feed-validation script;
+ * the corpus now ships in-repo (see `defaultCorpusRoot()`).
  */
 function defaultWorkspaceRoot(): string {
   const here = dirname(fileURLToPath(import.meta.url));
   return resolve(here, "../../../");
+}
+
+/**
+ * Default corpus root: the avocado-mcp repo root, which now ships `corpus/`
+ * in-repo. The compiled module lives at `build/tools/recipe.js`, so two `..`
+ * hops land on the avocado-mcp root. Distinct from `defaultWorkspaceRoot()`,
+ * which still points at the workspace for `.bb` example scanning and the
+ * meta-avocado feed-validation script.
+ */
+function defaultCorpusRoot(): string {
+  const here = dirname(fileURLToPath(import.meta.url));
+  return resolve(here, "../../");
 }
 
 /**
@@ -650,7 +663,7 @@ function registerFindRecipeExamples(server: McpServer): void {
         const cap = limit ?? 5;
         const intentTokens = new Set(tokenize(intent));
 
-        const examples = collectCorpusExamples(root, intentTokens);
+        const examples = collectCorpusExamples(defaultCorpusRoot(), intentTokens);
         if (typeof inherit === "string" && inherit.trim().length > 0) {
           examples.push(...collectBbExamples(root, inherit.trim()));
         }

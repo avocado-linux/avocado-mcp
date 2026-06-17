@@ -1,0 +1,46 @@
+normalized_signature: >-
+  ERROR: QA Issue: executorch: Files/directories were installed but not shipped
+  in any package:
+    /work/build-qemuarm64<WORKDIR>
+    /work/build-qemuarm64<WORKDIR>
+    /usr/share/cpuinfo/cpuinfo-config.cmake
+    /usr/lib/cpuinfo.h
+  executorch: 18 installed and not shipped files. [installed-vs-shipped]
+
+  ERROR: Fatal QA errors were found, failing task.
+
+  ERROR: <PKG> do_package: Fatal QA errors were found, failing task.
+failed_task: do_package
+build_system: cmake
+root_cause: The cmake install put some static libs at an absolute build-dir path
+  (leaking a /work tree into ${D}) and a bundled dep installed cmake files and a
+  header to nonstandard locations, none of which the default FILES capture.
+fix_diff: >-
+  --- a/executorch_1.3.1.bb
+
+  +++ b/executorch_1.3.1.bb
+
+  +do_install:append() {
+
+  +    # libs installed to an absolute build path instead of ${libdir}
+
+  +    if [ -d "${D}${B}/lib" ]; then
+
+  +        install -m 0644 ${D}${B}/lib/*.a ${D}${libdir}/
+
+  +    fi
+
+  +    rm -rf "${D}/work"
+
+  +}
+
+  +FILES:${PN}-dev += "${libdir}/cmake ${libdir}/pkgconfig ${libdir}/cpuinfo.h
+  ${datadir}/cpuinfo"
+
+  +ALLOW_EMPTY:${PN} = "1"
+doc_link: https://docs.yoctoproject.org/ref-manual/qa-checks.html#installed-vs-shipped
+falsifier: do_package and do_package_qa pass; the -staticdev package ships the
+  lib*.a (including the relocated ones) and no /work tree or unshipped
+  cmake/header remains.
+verified: false
+source: user-recorded

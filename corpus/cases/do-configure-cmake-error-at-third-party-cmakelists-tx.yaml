@@ -1,0 +1,26 @@
+normalized_signature: >-
+  CMake Error at third-party/CMakeLists.txt:11 (add_subdirectory):
+    The source directory third-party/gflags does not contain a CMakeLists.txt file.
+  CMake Error at ExternalProject.cmake:3235 (message):
+    No download info given for 'flatbuffers_ep' and its source directory:
+     third-party/flatbuffers
+    is not an existing non-empty directory.
+  -- Configuring incomplete, errors occurred!
+
+  ERROR: <PKG> do_configure: ExecutionError
+failed_task: do_configure
+build_system: cmake
+root_cause: The git fetcher silently ignored the invalid ;submodules=1 option,
+  leaving the repo's submodule directories empty; with
+  FETCHCONTENT_FULLY_DISCONNECTED the cmake config cannot fetch them and aborts.
+fix_diff: |-
+  --- a/executorch_1.3.1.bb
+  +++ b/executorch_1.3.1.bb
+  -SRC_URI = "git://github.com/pytorch/executorch.git;protocol=https;branch=release/1.3;submodules=1"
+  +SRC_URI = "gitsm://github.com/pytorch/executorch.git;protocol=https;branch=release/1.3"
+doc_link: https://docs.yoctoproject.org/bitbake/bitbake-user-manual/bitbake-user-manual-fetching.html#git-submodule-fetcher-gitsm
+falsifier: After switching to gitsm://, the submodule directories under the
+  source tree are non-empty (e.g. third-party/flatbuffers contains
+  CMakeLists.txt) and do_configure proceeds past add_subdirectory.
+verified: false
+source: user-recorded

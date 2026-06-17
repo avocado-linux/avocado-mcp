@@ -1,0 +1,34 @@
+# Real bringup case (feed-bringup-zeromq): building the wrong target left the
+# local feed without SDK packages, so consume could not bootstrap.
+
+normalized_signature: "avocado sdk install: Error: Unable to find a match: avocado-sdk-bootstrap"
+
+failed_task: "avocado sdk install (consume bootstrap) against a locally-built feed"
+
+build_system: "kas / bitbake (avocado target: avocado-distro vs avocado-complete)"
+
+root_cause: |
+  The local build used the `avocado-distro` target (the kas machine yml's
+  default via kas/target/distro.yml), which builds only the distro - it does
+  NOT produce the SDK-side packages (avocado-sdk-bootstrap, nativesdk toolchain).
+  The rendered feed therefore had the target packages plus a thin sdk/all, but
+  no avocado-sdk-bootstrap. `avocado sdk install` (prerequisite for rootfs/ext
+  install during consume) could not find it.
+
+fix_diff: |
+  Build the `avocado-complete` target instead, which builds the distro AND one
+  SDK (host arch by default; SDKMACHINE=<arch> to cross). This is what CI runs:
+
+    SDKMACHINE=x86_64 kas build meta-avocado/kas/machine/qemux86-64.yml \
+      --target avocado-complete
+
+  (bakar: pass `--target avocado-complete`; the feed-validation suite sets
+  FVL_BUILD_TARGET=avocado-complete by default.)
+
+doc_link: "meta-avocado/.github/workflows/pr-build-labeled.yml (CI uses --target avocado-complete); KB peridio/avocado-local-feed-validation"
+
+falsifier: |
+  After building avocado-complete, build-<machine>/build/tmp/deploy/rpm contains
+  the SDK packages (*avocadosdk*/avocado-sdk-bootstrap*) and `avocado sdk install`
+  resolves them. Building avocado-distro: avocado-sdk-bootstrap is absent and
+  `avocado sdk install` fails with "Unable to find a match".

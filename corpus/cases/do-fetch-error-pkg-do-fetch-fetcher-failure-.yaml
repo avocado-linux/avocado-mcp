@@ -1,0 +1,22 @@
+normalized_signature: |-
+  ERROR: <PKG> do_fetch: Fetcher failure: Unable to find revision <HASH> in branch main even from upstream
+  ERROR: <PKG> do_fetch: Bitbake Fetcher Error: FetchError('Unable to fetch URL from any source.', 'git://github.com/pytorch/executorch.git;protocol=https;branch=main;submodules=1')
+failed_task: do_fetch
+build_system: cmake
+root_cause: The pinned SRCREV is a release-tag commit that lives on a release
+  branch, not main, so the git fetcher cannot reach it from branch=main.
+fix_diff: >-
+  --- a/executorch_1.3.1.bb
+
+  +++ b/executorch_1.3.1.bb
+
+  -SRC_URI = "...;branch=main;submodules=1"
+
+  +SRC_URI = "...;branch=release/1.3"
+   # git ls-remote --tags --heads <url> shows v1.3.1 == refs/heads/release/1.3,
+   # not main; set branch= to the branch that contains the tag, or use nobranch=1.
+doc_link: https://docs.yoctoproject.org/bitbake/bitbake-user-manual/bitbake-user-manual-fetching.html#git-fetcher-git
+falsifier: git ls-remote --tags --heads <url> shows the SRCREV under the named
+  branch; do_fetch completes without "Unable to find revision ... in branch".
+verified: false
+source: user-recorded

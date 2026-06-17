@@ -1,0 +1,37 @@
+normalized_signature: |2-
+    File ".../executorch/codegen/gen.py", line 730, in translate_native_yaml
+      assert opname in schema_dict
+  AssertionError:   in .../kernels/portable/functions.yaml:630:
+  ninja: build stopped: subcommand failed.
+  ERROR: <PKG> do_compile: ExecutionError
+failed_task: do_compile
+build_system: cmake
+root_cause: The torchgen used for build-time codegen is an older torch version
+  than the project requires, so an ATen op overload referenced by the project's
+  functions.yaml (e.g. mean.dtype_out) is absent from torchgen's packaged
+  native_functions.yaml schema.
+fix_diff: >-
+  --- a/executorch_1.3.1.bb
+
+  +++ b/executorch_1.3.1.bb
+
+  -DEPENDS = "python3-native flatbuffers-native python3-pytorch-native"
+
+  +# torchgen-native pinned to the torch version the project requires (2.12.0),
+
+  +# not the older packaged python3-pytorch (2.4.1) whose schema lacks the ops.
+
+  +DEPENDS = "python3-native flatbuffers-native torchgen-native
+  python3-pyyaml-native python3-typing-extensions-native"
+
+  # new recipe torchgen_2.12.0.bb extracts pure-python torchgen from the
+  matching
+
+  # torch CPU wheel; no libtorch is built.
+doc_link: https://docs.yoctoproject.org/ref-manual/classes.html#native
+falsifier: do_compile advances past codegen.gen (translate_native_yaml no longer
+  asserts) once torchgen matches the project's required torch version; confirm
+  the failing op (functions.yaml:630) exists in the staged torchgen
+  native_functions.yaml.
+verified: false
+source: user-recorded

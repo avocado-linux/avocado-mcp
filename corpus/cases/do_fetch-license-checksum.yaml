@@ -1,0 +1,37 @@
+# Generic QA-catalog case (package-agnostic): LIC_FILES_CHKSUM no longer
+# matches the upstream license text. Sourced from the Yocto qa-checks
+# reference, not a specific bringup run.
+
+normalized_signature: "<PKG>: The LIC_FILES_CHKSUM does not match for <WORKDIR>/LICENSE [license-checksum]"
+
+failed_task: do_fetch
+
+build_system: kas
+
+root_cause: |
+  Upstream changed the license file (a copyright year bump, a reflow, or a new
+  SPDX header) so its md5 no longer matches the LIC_FILES_CHKSUM the recipe
+  pins. The license-checksum check fails during do_fetch's license sanity step
+  because Yocto refuses to build when the audited license text drifts from what
+  the recipe recorded, guarding against a silent relicensing.
+
+fix_diff: |
+  --- a/<WORKDIR>/<PKG>.bb
+  +++ b/<WORKDIR>/<PKG>.bb
+  @@
+  -LIC_FILES_CHKSUM = "file://LICENSE;md5=<old-md5>"
+  +LIC_FILES_CHKSUM = "file://LICENSE;md5=<new-md5>"
+  # Only after diffing the new LICENSE against the old one and confirming the
+  # license terms themselves did not change.
+
+doc_link: "https://docs.yoctoproject.org/ref-manual/qa-checks.html#license-checksum"
+
+falsifier: |
+  After updating LIC_FILES_CHKSUM to the new md5, do_fetch still reports a
+  license-checksum mismatch for <PKG>, or a diff of the new LICENSE against the
+  prior text shows the actual license terms changed (not just formatting),
+  meaning the bump masked a real relicensing rather than fixing a benign drift.
+
+verified: true
+
+source: qa-catalog

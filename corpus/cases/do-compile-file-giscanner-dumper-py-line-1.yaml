@@ -1,0 +1,27 @@
+normalized_signature: >2-
+    File ".../giscanner/dumper.py", line 189, in _compile
+      return self._compiler.compile(cflags,
+  distutils.errors.DistutilsExecError: command
+  '.../recipe-sysroot-native/usr/bin/ccache' failed with exit code 1
+    File ".../usr/bin/g-ir-scanner", line 104, in <module>
+      sys.exit(scanner_main(sys.argv))
+  ninja: build stopped: subcommand failed.
+
+  ERROR: <PKG> do_compile: ExecutionError
+failed_task: do_compile
+build_system: meson
+root_cause: g-ir-scanner's gobject-introspection probe compile execs the
+  compiler as the bare ccache argv[0] via distutils, a path that does not
+  tolerate the ccache wrapper and exits 1.
+fix_diff: |-
+  --- /dev/null
+  +++ b/meta-avocado-distro/recipes-graphics/pango/pango_%.bbappend
+  @@
+  +# g-ir-scanner's introspection compile does not tolerate the ccache wrapper.
+  +CCACHE_DISABLE = "1"
+doc_link: https://docs.yoctoproject.org/ref-manual/classes.html#ccache
+falsifier: do_compile completes once CCACHE_DISABLE=1 is set for the recipe
+  (bbappend); applies to GObject-introspection-heavy recipes (pango, gtk,
+  gdk-pixbuf, librsvg).
+verified: false
+source: user-recorded

@@ -1,0 +1,38 @@
+# Illustrative template — NOT a real bringup case.
+#
+# This file demonstrates the v0 bringup-corpus case schema (see ../README.md).
+# Plan 2 (yocto-engineer) validates real error->fix cases against this shape.
+# Replace every value below when authoring an actual case; all seven
+# top-level keys are required and must be non-empty.
+
+normalized_signature: "do_package_qa: ELF binary contains a relocation in .text [textrel]"
+
+failed_task: do_package_qa
+
+build_system: cmake
+
+root_cause: |
+  The recipe built shared objects without position-independent code, so the
+  linker emitted text relocations. Yocto's package QA flags textrel because
+  it breaks ASLR and forces the loader to make .text writable at runtime.
+  The upstream CMakeLists did not pass -fPIC for the object library that the
+  shared target links, and the recipe did not compensate.
+
+fix_diff: |
+  --- a/recipes-connectivity/example/example_1.0.bb
+  +++ b/recipes-connectivity/example/example_1.0.bb
+  @@ -8,6 +8,8 @@ inherit cmake
+
+   EXTRA_OECMAKE = "-DBUILD_SHARED_LIBS=ON"
+
+  +# Force PIC so the shared object has no text relocations (do_package_qa textrel).
+  +CFLAGS:append = " -fPIC"
+  +CXXFLAGS:append = " -fPIC"
+
+doc_link: "https://docs.yoctoproject.org/ref-manual/qa-checks.html#textrel"
+
+falsifier: |
+  After applying fix_diff, `bitbake example` reaches do_package_qa without a
+  textrel warning AND `readelf -d tmp/work/<tune>/example/1.0/packages-split/example/usr/lib/libexample.so | grep TEXTREL`
+  returns no match. If the textrel warning persists or readelf still reports a
+  TEXTREL dynamic tag, this case's root_cause is wrong.

@@ -1,0 +1,53 @@
+normalized_signature: >-
+  [69/339] flatc --cpp --cpp-std c++11 --gen-mutable --scoped-enums -o
+  build/schema/include/executorch/schema scalar_type.fbs
+
+  FAILED: schema/include/executorch/schema/scalar_type_generated.h
+
+  qemu-aarch64-static: Could not open '/usr/lib/ld-linux-aarch64.so.1': No such
+  file or directory
+
+  ninja: build stopped: subcommand failed.
+
+  ERROR: <PKG> do_compile: ExecutionError
+failed_task: do_compile
+build_system: cmake
+root_cause: A build-time code generator (flatc) was built for the target and
+  cannot run on the build host; unsetting CMAKE_TOOLCHAIN_FILE does not force a
+  host build under OE because the cross compiler comes from CC/CXX.
+fix_diff: >-
+  --- a/executorch_1.3.1.bb
+
+  +++ b/executorch_1.3.1.bb
+
+  -DEPENDS = "python3-native"
+
+  +DEPENDS = "python3-native flatbuffers-native"
+   SRC_URI = "gitsm://github.com/pytorch/executorch.git;protocol=https;branch=release/1.3;destsuffix=executorch \
+  +           file://0001-use-native-flatc-for-cross-compilation.patch"
+
+  --- a/third-party/CMakeLists.txt
+
+  +++ b/third-party/CMakeLists.txt
+
+  -# build flatc via ExternalProject (targets the project toolchain under OE)
+
+  -ExternalProject_Add(flatbuffers_ep ...)
+
+  -add_executable(flatc IMPORTED GLOBAL)
+
+  -set_target_properties(flatc PROPERTIES IMPORTED_LOCATION
+  ${INSTALL_DIR}/bin/flatc)
+
+  +find_program(FLATC_EXECUTABLE flatc REQUIRED)
+
+  +add_executable(flatc IMPORTED GLOBAL)
+
+  +set_target_properties(flatc PROPERTIES IMPORTED_LOCATION
+  "${FLATC_EXECUTABLE}")
+doc_link: https://docs.yoctoproject.org/ref-manual/classes.html#native
+falsifier: do_compile advances past the schema-generation ninja step (flatc runs
+  on the host with no qemu loader error); add flatbuffers-native to DEPENDS and
+  confirm ${STAGING_BINDIR_NATIVE}/flatc exists.
+verified: false
+source: user-recorded

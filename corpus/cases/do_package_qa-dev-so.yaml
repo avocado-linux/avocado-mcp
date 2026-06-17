@@ -1,0 +1,35 @@
+# Generic QA-catalog case (package-agnostic): versionless .so symlink shipped
+# in a non-dev package. Sourced from the Yocto qa-checks reference, not a
+# specific bringup run.
+
+normalized_signature: "QA Issue: <PKG>: non -dev/-dbg package contains symlink .so: <LIB>.so [dev-so]"
+
+failed_task: do_package_qa
+
+build_system: kas
+
+root_cause: |
+  A versionless development symlink (<LIB>.so) landed in the main runtime
+  package instead of the -dev package. The dev-so QA check fails because the
+  bare <LIB>.so symlink is only used at link time; runtime consumers load the
+  versioned <LIB>.so.N. Shipping it in the runtime package pulls dev content
+  into the deployed image and breaks the runtime/dev split.
+
+fix_diff: |
+  --- a/<WORKDIR>/<PKG>.bb
+  +++ b/<WORKDIR>/<PKG>.bb
+  @@
+  +FILES:${PN}-dev += "${libdir}/<LIB>.so"
+  +FILES:${PN} = "${libdir}/<LIB>.so.*"
+
+doc_link: "https://docs.yoctoproject.org/ref-manual/qa-checks.html#dev-so"
+
+falsifier: |
+  After applying fix_diff, do_package_qa still reports the dev-so warning for
+  <LIB>.so, or the versionless <LIB>.so symlink still appears in the runtime
+  <PKG> package's packages-split tree instead of <PKG>-dev. Either observation
+  proves the root_cause wrong.
+
+verified: true
+
+source: qa-catalog

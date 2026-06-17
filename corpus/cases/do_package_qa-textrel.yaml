@@ -1,0 +1,34 @@
+# Generic QA-catalog case (package-agnostic): text relocation in a shared ELF.
+# Sourced from the Yocto qa-checks reference, not a specific bringup run.
+
+normalized_signature: "QA Issue: ELF binary <WORKDIR>/<LIB>.so has relocations in .text [textrel]"
+
+failed_task: do_package_qa
+
+build_system: kas
+
+root_cause: |
+  The shared object was built without position-independent code, so the linker
+  emitted relocations into .text. The textrel QA check fails because text
+  relocations defeat ASLR and force the loader to make code pages writable at
+  runtime. The upstream build did not pass -fPIC for the objects linked into
+  the shared target, and the recipe did not compensate.
+
+fix_diff: |
+  --- a/<WORKDIR>/<PKG>.bb
+  +++ b/<WORKDIR>/<PKG>.bb
+  @@
+  +# Force PIC so the shared object has no text relocations (do_package_qa textrel).
+  +CFLAGS:append = " -fPIC"
+  +CXXFLAGS:append = " -fPIC"
+
+doc_link: "https://docs.yoctoproject.org/ref-manual/qa-checks.html#textrel"
+
+falsifier: |
+  After applying fix_diff, do_package_qa still reports the textrel warning for
+  <LIB>.so, or `readelf -d <LIB>.so | grep TEXTREL` still reports a TEXTREL
+  dynamic tag. Either observation proves the root_cause wrong.
+
+verified: true
+
+source: qa-catalog

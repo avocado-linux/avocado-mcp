@@ -1,0 +1,39 @@
+# Generic QA-catalog case (package-agnostic): a host system path leaked into
+# the build, producing host-user-contaminated content. Sourced from the Yocto
+# qa-checks reference, not a specific bringup run.
+
+normalized_signature: "QA Issue: <PKG>: <WORKDIR> is owned by uid <N>, which is the same as the user running bitbake [host-user-contaminated]"
+
+failed_task: do_compile
+
+build_system: kas
+
+root_cause: |
+  The recipe's build referenced a host path (an absolute /usr or /opt include,
+  a host-installed library, or a host toolchain) instead of the sysroot, so a
+  host-owned artifact or path leaked into the staged output. The
+  host-user-contaminated check fails because anything built against the host
+  rather than the recipe sysroot is non-reproducible and breaks cross-compile
+  and multi-host parity.
+
+fix_diff: |
+  --- a/<WORKDIR>/<PKG>.bb
+  +++ b/<WORKDIR>/<PKG>.bb
+  @@
+  +# Pin the build to the recipe sysroot so no host path leaks in
+  +# (do_compile host-user-contaminated). Drop the host include/lib search dirs.
+  +EXTRA_OECMAKE += "-DCMAKE_FIND_ROOT_PATH=${STAGING_DIR_HOST} \
+  +                  -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=ONLY \
+  +                  -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY"
+
+doc_link: "https://docs.yoctoproject.org/ref-manual/qa-checks.html#host-user-contaminated"
+
+falsifier: |
+  After applying fix_diff, do_compile (or do_package_qa) still flags
+  host-user-contaminated for <PKG>, or the staged tree under packages-split
+  still contains a host-owned absolute path outside the sysroot. Either
+  observation proves the root_cause wrong.
+
+verified: true
+
+source: qa-catalog

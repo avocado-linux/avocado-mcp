@@ -1,0 +1,36 @@
+# Generic QA-catalog case (package-agnostic): binary missing the mandated
+# build LDFLAGS. Sourced from the Yocto qa-checks reference, not a specific
+# bringup run.
+
+normalized_signature: "QA Issue: <WORKDIR>/<PKG> was skipped due to LDFLAGS QA test [ldflags]"
+
+failed_task: do_package_qa
+
+build_system: kas
+
+root_cause: |
+  The package's binary did not carry the LDFLAGS that OE injects (for example
+  the RELRO/now hardening and build-id flags from ${TARGET_LDFLAGS}). The
+  ldflags QA check fails because the recipe's build system dropped or
+  overrode LDFLAGS instead of appending to them, so the mandated link-time
+  flags never reached the linker.
+
+fix_diff: |
+  --- a/<WORKDIR>/<PKG>.bb
+  +++ b/<WORKDIR>/<PKG>.bb
+  @@
+  +# Make the build honor OE's injected LDFLAGS instead of clobbering them
+  +# (do_package_qa ldflags). Pass them through to the upstream build.
+  +TARGET_CC_ARCH:append = " ${LDFLAGS}"
+
+doc_link: "https://docs.yoctoproject.org/ref-manual/qa-checks.html#ldflags"
+
+falsifier: |
+  After applying fix_diff, do_package_qa still reports the ldflags warning for
+  <PKG>, or the packaged binary still lacks the OE-injected hardening flags
+  (e.g. no GNU_RELRO program header under `readelf -l`). Either observation
+  proves the root_cause wrong.
+
+verified: true
+
+source: qa-catalog
