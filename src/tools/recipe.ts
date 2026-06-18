@@ -408,6 +408,145 @@ function registerExplainBitbake(server: McpServer): void {
       };
     },
   );
+
+  registerValidateRecipeParse(server);
+}
+
+const validateRecipeParseResultSchema = {
+  ok: z.boolean(),
+  errors: z.array(z.string()),
+  warnings: z.array(z.string()),
+  hint: z.string().optional(),
+};
+
+/**
+ * Probe whether `bitbake` is resolvable on the current PATH without invoking
+ * a parse. `execFileSync("bitbake", ["--version"])` throws an ENOENT-coded
+ * error when the binary is absent (e.g. outside a kas/build environment); any
+ * other failure (a bitbake that exists but errors) still proves the binary is
+ * present, so only ENOENT counts as "unavailable". This keeps the tool from
+ * letting an unhandled ENOENT escape the later `bitbake -e` call.
+ */
+function isBitbakeAvailable(): boolean {
+  try {
+    execFileSync("bitbake", ["--version"], {
+      stdio: ["ignore", "ignore", "ignore"],
+      timeout: 30_000,
+    });
+    return true;
+  } catch (error) {
+    const code =
+      error && typeof error === "object" && "code" in error
+        ? String((error as Record<string, unknown>).code)
+        : "";
+    return code !== "ENOENT";
+  }
+}
+
+/**
+ * Derive the recipe name (PN) bitbake should parse from a `.bb` file path.
+ * BitBake parses by recipe name, not file path, so a path like
+ * `…/foo_1.2.3.bb` resolves to the recipe `foo`. Strips the directory, the
+ * `.bb` extension, and the trailing `_<version>` segment.
+ */
+function recipeNameFromPath(recipePath: string): string {
+  const base = recipePath.replace(/^.*[/\\]/, "").replace(/\.bb$/, "");
+  const underscore = base.indexOf("_");
+  return underscore === -1 ? base : base.slice(0, underscore);
+}
+
+/**
+ * Parse-only correctness gate: run `bitbake -e <PN>` and report whether the
+ * recipe parses. Returns the structured `{ ok, errors, warnings }` contract.
+ * Outside a build environment (no bitbake on PATH) it returns a structured
+ * `ok:false` error rather than throwing, so the skill's fix loop can surface
+ * "needs a build environment" without a crash.
+ */
+function registerValidateRecipeParse(server: McpServer): void {
+  server.registerTool(
+    "validate-recipe-parse",
+    {
+      title: "Validate that a recipe parses (parse-only bitbake gate)",
+      description:
+        "Gate an authored recipe through a parse-only `bitbake -e <PN>` invocation and return `{ ok, errors, warnings }`. This is the final correctness gate before claiming a recipe is ready — call it after `lint-recipe` in the build-fix loop. The recipe name (PN) is derived from the `.bb` filename unless `pn` is given explicitly. When `bitbake` is not on PATH (outside a kas/build environment) it returns `ok:false` with a structured error rather than throwing — the caller must check `ok` and surface that a build environment is needed (enter one via `kas shell meta-avocado/kas/machine/qemuarm64.yml`). When bitbake exits non-zero (e.g. the deprecated underscore override syntax like `SRC_URI_append`, which scarthgap rejects with a hard `bb.fatal` from `data_smart.py`), its stderr lands in `errors`.",
+      inputSchema: {
+        recipe: z
+          .string()
+          .min(1)
+          .describe(
+            "Path to the `.bb` recipe file to parse. Examples: 'meta-avocado/recipes-foo/foo/foo_1.0.bb'.",
+          ),
+        pn: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            "Recipe name (PN) to parse, overriding the name derived from the filename. Examples: 'foo', 'python3-numpy'.",
+          ),
+      },
+      outputSchema: validateRecipeParseResultSchema,
+      annotations: {
+        title: "Validate that a recipe parses (parse-only bitbake gate)",
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async ({ recipe, pn }) => {
+      const name = pn ?? recipeNameFromPath(recipe);
+
+      if (!isBitbakeAvailable()) {
+        const hint = "kas shell meta-avocado/kas/machine/qemuarm64.yml";
+        const message =
+          "bitbake is not available on PATH; enter a build environment first";
+        return {
+          content: [
+            {
+              type: "text",
+              text: `# validate-recipe-parse\n\n❌ ${message}\n\n    ${hint}\n`,
+            },
+          ],
+          structuredContent: { ok: false, errors: [message], warnings: [], hint },
+        };
+      }
+
+      try {
+        // execFileSync (no shell) so the recipe name cannot inject commands.
+        // bitbake -e dumps the full resolved environment; we discard stdout and
+        // care only that the parse succeeded (exit 0). A parse failure throws
+        // with the bb.fatal/ParseError text on stderr, which we surface as a
+        // structured `errors` entry.
+        execFileSync("bitbake", ["-e", name], {
+          timeout: 120_000,
+          stdio: ["ignore", "ignore", "pipe"],
+          encoding: "utf8",
+          maxBuffer: 64 * 1024 * 1024,
+        });
+      } catch (error) {
+        const message = execErrorMessage(error, "stderr");
+        return {
+          content: [
+            {
+              type: "text",
+              text: `# validate-recipe-parse: \`${name}\`\n\n❌ parse failed\n\n\`\`\`\n${message}\n\`\`\`\n`,
+            },
+          ],
+          structuredContent: { ok: false, errors: [message], warnings: [] },
+        };
+      }
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `# validate-recipe-parse: \`${name}\`\n\n✅ recipe parses cleanly\n`,
+          },
+        ],
+        structuredContent: { ok: true, errors: [], warnings: [] },
+      };
+    },
+  );
 }
 
 /**

@@ -115,7 +115,7 @@ registerDiagnosticsTools(server, repoClient);
 registerDebuggingTools(server);
 registerDocsTools(server);
 registerConnectTools(server);
-registerRecipeTools(server, repoClient);
+registerRecipeTools(server, repoClient); // includes validate-recipe-parse
 registerCorpusTools(server, repoClient);
 registerPreflightTools(server);
 registerLayerAnalysisTools(server);
