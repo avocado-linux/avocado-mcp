@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { registerLayerAnalysisTools } from "../src/tools/layer-analysis.js";
+import { registerRecipeTools } from "../src/tools/recipe.js";
+import { RepoClient } from "../src/lib/repo-client.js";
 
 type ToolResult = {
   structuredContent?: Record<string, unknown>;
@@ -579,5 +581,77 @@ describe("kas composition resolution", () => {
     expect(
       findings.find((f) => f.kind === "dangling_append" && f.target === "foo"),
     ).toBeDefined();
+  });
+});
+
+describe("find-recipe-examples multi-layer workspace scan", () => {
+  // find-recipe-examples has no workspace_root override; its `.bb` scan walks
+  // defaultWorkspaceRoot() = the parent of avocado-mcp (resolve(cwd, "..")).
+  // To exercise the broadened multi-layer scan deterministically we plant a
+  // uniquely-named temp fixture UNDER that real root holding two distinct
+  // layers, each with a conf/layer.conf and a `.bb` that inherits the same
+  // unique class. The class string is unique per run so no real workspace
+  // recipe can match the needle, making the result set exactly our two recipes
+  // regardless of what real layers sit alongside the fixture.
+  let exClient: Client;
+  let fixtureRoot: string;
+  let uniqueClass: string;
+
+  beforeEach(async () => {
+    // Mirror recipe.ts defaultWorkspaceRoot(): parent of the avocado-mcp repo.
+    const workspaceRoot = resolve(process.cwd(), "..");
+    fixtureRoot = mkdtempSync(join(workspaceRoot, "frex-fixture-"));
+    uniqueClass = `frexclass${Math.random().toString(36).slice(2, 10)}`;
+
+    // Layer A: a meta-avocado-like layer.
+    const layerA = makeLayer(fixtureRoot, "meta-avocado", "avocado");
+    write(
+      join(layerA, "recipes-x", "alpha", "alpha_1.0.bb"),
+      `SUMMARY = "alpha"\ninherit ${uniqueClass}\n`,
+    );
+    // Layer B: a sibling layer (e.g. meta-openembedded-style).
+    const layerB = makeLayer(fixtureRoot, "meta-extra", "extra");
+    write(
+      join(layerB, "recipes-y", "beta", "beta_2.0.bb"),
+      `SUMMARY = "beta"\ninherit ${uniqueClass}\n`,
+    );
+
+    const server = new McpServer({ name: "test-recipe", version: "0.0.0" });
+    registerRecipeTools(server, new RepoClient());
+    const [clientTransport, serverTransport] =
+      InMemoryTransport.createLinkedPair();
+    exClient = new Client({ name: "test-client", version: "0.0.0" });
+    await Promise.all([
+      server.connect(serverTransport),
+      exClient.connect(clientTransport),
+    ]);
+  });
+
+  afterEach(async () => {
+    await exClient.close();
+    rmSync(fixtureRoot, { recursive: true, force: true });
+  });
+
+  it("returns inherit-matching .bb examples from BOTH workspace layers, not just one", async () => {
+    const result = (await exClient.callTool({
+      name: "find-recipe-examples",
+      arguments: { intent: uniqueClass, inherit: uniqueClass, limit: 50 },
+    })) as ToolResult;
+
+    expect(result.isError).not.toBe(true);
+    const out = result.structuredContent ?? {};
+    expect(out.error).toBeUndefined();
+    expect(out.found).toBe(true);
+
+    const examples = (out.examples ?? []) as Array<{ path: string }>;
+    // Exactly the two fixture recipes match the unique inherit class.
+    expect(examples.length).toBe(2);
+    const paths = examples.map((e) => e.path);
+    expect(
+      paths.some((p) => p.includes("meta-avocado") && p.endsWith("alpha_1.0.bb")),
+    ).toBe(true);
+    expect(
+      paths.some((p) => p.includes("meta-extra") && p.endsWith("beta_2.0.bb")),
+    ).toBe(true);
   });
 });
