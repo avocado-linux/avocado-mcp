@@ -61,6 +61,26 @@ describe("searchDocs source tagging", () => {
     // The yocto-refs entry comes from the local corpus: no GitHub blob SHA.
     expect(yoctoHits[0].entry.sha).toBe("");
   });
+
+  it("returns both peridio-docs and yocto-refs hits for one mixed query", async () => {
+    // One query carrying tokens from both corpora: "var partition seeding"
+    // matches the mocked peridio entry, "SRC_URI" matches the vendored
+    // variables.rst entry. A single merged result array containing both sources
+    // proves buildIndex() scores the GitHub-backed and local corpora together,
+    // not in isolation (spec: "Mixed search returns tagged results").
+    const hits = await searchDocs("SRC_URI var partition seeding");
+
+    const sources = new Set(hits.map((h) => h.entry.source));
+    expect(sources.has("peridio-docs")).toBe(true);
+    expect(sources.has("yocto-refs")).toBe(true);
+
+    // Each contributing hit carries a non-empty excerpt so a caller can render
+    // it without re-fetching.
+    const peridioHit = hits.find((h) => h.entry.source === "peridio-docs");
+    const yoctoHit = hits.find((h) => h.entry.source === "yocto-refs");
+    expect(peridioHit?.excerpt.length).toBeGreaterThan(0);
+    expect(yoctoHit?.excerpt.length).toBeGreaterThan(0);
+  });
 });
 
 describe("loadYoctoRefsEntries", () => {
