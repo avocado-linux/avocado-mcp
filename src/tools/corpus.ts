@@ -100,6 +100,115 @@ function loadCorpusCases(corpusDir: string): CorpusCase[] {
   return cases;
 }
 
+/**
+ * A static QA-check case as loaded from `<corpus_dir>/qa-checks/*.yaml`.
+ * These use a different schema than the learned `cases/` corpus: they carry an
+ * `identifier`, a `literal_message` (with printf placeholders), a `severity`,
+ * and a `fix` — no `normalized_signature`. They are derived from upstream Yocto
+ * documentation and are authoritative.
+ */
+type QaStaticCase = Record<string, unknown> & {
+  identifier?: unknown;
+  literal_message?: unknown;
+  severity?: unknown;
+  fix?: unknown;
+};
+
+/**
+ * Load every parseable static QA-check case from `<corpus_dir>/qa-checks/*.yaml`.
+ * Mirrors `loadCorpusCases` semantics: a missing directory yields an empty
+ * list, and an unreadable or unparseable file is skipped rather than failing
+ * the whole scan.
+ */
+function loadQaStaticCases(corpusDir: string): QaStaticCase[] {
+  const qaDir = resolve(corpusDir, "qa-checks");
+  let entries: string[];
+  try {
+    entries = readdirSync(qaDir);
+  } catch {
+    return [];
+  }
+
+  const cases: QaStaticCase[] = [];
+  for (const entry of entries) {
+    if (!entry.endsWith(".yaml") && !entry.endsWith(".yml")) continue;
+    try {
+      const raw = readFileSync(resolve(qaDir, entry), "utf8");
+      const parsed = parseYaml(raw);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        cases.push(parsed as QaStaticCase);
+      }
+    } catch {
+      // Skip this file; a single bad case must not sink the scan.
+    }
+  }
+  return cases;
+}
+
+/**
+ * Split a printf-style `literal_message` template on its `%s`/`%d`/`%c`/`%u`/
+ * `%x` placeholders and return the non-trivial literal fragments. These are the
+ * parts of the message BitBake emits verbatim regardless of which file,
+ * package, or uid triggered the check, so they are what an input log must
+ * contain to be a match. Fragments shorter than 4 chars (e.g. `" in "`) are
+ * dropped to avoid spuriously matching common English on unrelated logs.
+ */
+function literalFragments(template: string): string[] {
+  return template
+    .split(/%[sdcuxleEfgG]/g)
+    .map((f) => f.trim())
+    .filter((f) => f.length >= 4);
+}
+
+interface QaStaticMatch {
+  source: "qa-static";
+  identifier: string;
+  literal_message: string;
+  severity: string;
+  fix: string;
+  explanation?: string;
+  doc_url?: string;
+}
+
+/**
+ * Match a raw build log against the static QA-check cases. A case matches when
+ * every literal fragment of its `literal_message` template appears as a
+ * substring of the log (placeholder-tolerant: the `%s`/`%d` values in the log
+ * are ignored). Matching is done on the RAW log, not the normalized signature,
+ * because `literal_message` carries upstream printf placeholders rather than a
+ * normalized signature.
+ */
+function matchQaStaticCases(log: string, cases: QaStaticCase[]): QaStaticMatch[] {
+  const matches: QaStaticMatch[] = [];
+  for (const c of cases) {
+    const id = c.identifier;
+    const msg = c.literal_message;
+    const fix = c.fix;
+    if (
+      typeof id !== "string" ||
+      typeof msg !== "string" ||
+      typeof fix !== "string"
+    ) {
+      continue;
+    }
+
+    const fragments = literalFragments(msg);
+    if (fragments.length === 0) continue;
+    if (!fragments.every((frag) => log.includes(frag))) continue;
+
+    matches.push({
+      source: "qa-static",
+      identifier: id,
+      literal_message: msg,
+      severity: typeof c.severity === "string" ? c.severity : "",
+      fix,
+      explanation: typeof c.explanation === "string" ? c.explanation : undefined,
+      doc_url: typeof c.doc_url === "string" ? c.doc_url : undefined,
+    });
+  }
+  return matches;
+}
+
 type MatchType = "exact" | "fuzzy" | "none";
 
 interface DiagnoseResult {
@@ -109,6 +218,7 @@ interface DiagnoseResult {
   case: CorpusCase | null;
   normalized_key: string;
   kb_hint?: string;
+  static_matches?: QaStaticMatch[];
 }
 
 /**
@@ -157,17 +267,77 @@ function matchCorpus(key: string, cases: CorpusCase[]): DiagnoseResult {
   };
 }
 
+/**
+ * Run the full diagnosis: rank the learned `cases/` corpus against the
+ * normalized log key, then merge in any static QA-check matches from
+ * `qa-checks/` (matched against the raw log, since their `literal_message`
+ * carries printf placeholders rather than a normalized signature).
+ *
+ * When a static case and the learned case share the same QA `identifier`, the
+ * static case is authoritative (upstream-documented fix) and the learned case
+ * is dropped from the result so a stale learned entry cannot shadow it.
+ */
+function diagnose(
+  log: string,
+  learnedCases: CorpusCase[],
+  staticCases: QaStaticCase[],
+): DiagnoseResult {
+  const key = normalizeSignature(log);
+  const learned = matchCorpus(key, learnedCases);
+  const staticMatches = matchQaStaticCases(log, staticCases);
+
+  if (staticMatches.length === 0) {
+    return learned;
+  }
+
+  // Prefer the static case when both name the same QA identifier: drop the
+  // learned hit so the authoritative upstream fix is what surfaces.
+  const staticIds = new Set(staticMatches.map((m) => m.identifier));
+  const learnedId =
+    learned.case && typeof learned.case.identifier === "string"
+      ? learned.case.identifier
+      : undefined;
+  if (learnedId !== undefined && staticIds.has(learnedId)) {
+    return {
+      match_type: "none",
+      confidence: 0.0,
+      case: null,
+      normalized_key: key,
+      static_matches: staticMatches,
+    };
+  }
+
+  return { ...learned, static_matches: staticMatches };
+}
+
+function renderStaticMatches(matches: QaStaticMatch[]): string {
+  if (matches.length === 0) return "";
+  let out = `\n## Static QA-check matches (source: qa-static)\n`;
+  for (const m of matches) {
+    out += `\n**[${m.identifier}]** (severity ${m.severity})\n`;
+    out += `- Message: ${m.literal_message}\n`;
+    out += `- Fix: ${m.fix}\n`;
+    if (m.explanation) out += `- Why: ${m.explanation}\n`;
+    if (m.doc_url) out += `- Doc: ${m.doc_url}\n`;
+  }
+  return out;
+}
+
 function renderDiagnosis(result: DiagnoseResult): string {
   let out = `# diagnose-build-failure\n\n`;
   out += `**Normalized key:** \`${result.normalized_key}\`\n`;
   out += `**Match:** ${result.match_type} (confidence ${result.confidence})\n`;
 
+  const staticSection = renderStaticMatches(result.static_matches ?? []);
+
   if (result.match_type === "none" || result.case === null) {
-    out += `\nNo corpus case matched this signature. This is a novel failure: extract the error, route to the relevant Yocto docs, and record the fix with \`record-recipe-fix\` once verified.\n`;
-    if (result.kb_hint) {
-      out += `\n**KB fallback:** run \`${result.kb_hint}\` for compiled KB knowledge on similar failures.\n`;
+    if (staticSection === "") {
+      out += `\nNo corpus case matched this signature. This is a novel failure: extract the error, route to the relevant Yocto docs, and record the fix with \`record-recipe-fix\` once verified.\n`;
+      if (result.kb_hint) {
+        out += `\n**KB fallback:** run \`${result.kb_hint}\` for compiled KB knowledge on similar failures.\n`;
+      }
     }
-    return out;
+    return out + staticSection;
   }
 
   const c = result.case;
@@ -181,7 +351,7 @@ function renderDiagnosis(result: DiagnoseResult): string {
   out += `**Fix:**\n\n\`\`\`\n${field("fix_diff")}\n\`\`\`\n`;
   out += `**Doc:** ${field("doc_link")}\n`;
   out += `**Falsifier:** ${field("falsifier")}\n`;
-  return out;
+  return out + staticSection;
 }
 
 /**
@@ -200,7 +370,7 @@ export function registerCorpusTools(
     {
       title: "Diagnose a BitBake build failure against the corpus",
       description:
-        "Normalize a raw BitBake build-log error and match it against the verified error-learning corpus. Pass the failing log snippet as `log`; the tool computes its normalized signature and scans `<corpus_dir>/cases/*.yaml` for a case with the same signature. An exact signature match returns confidence 1.0; a substring (fuzzy) match returns 0.5; no match returns 0.0 with a null case (a novel failure to route to docs and later record). `corpus_dir` defaults to the `corpus/` directory beside avocado-mcp in the workspace.",
+        "Normalize a raw BitBake build-log error and match it against the verified error-learning corpus. Pass the failing log snippet as `log`; the tool computes its normalized signature and scans `<corpus_dir>/cases/*.yaml` for a case with the same signature. An exact signature match returns confidence 1.0; a substring (fuzzy) match returns 0.5; no match returns 0.0 with a null case (a novel failure to route to docs and later record). It also matches the raw log against the static, upstream-derived QA-check cases in `<corpus_dir>/qa-checks/*.yaml` (placeholder-tolerant match on each case's `literal_message`) and returns any hits in `static_matches`, each tagged `source: \"qa-static\"`. When a static and a learned case name the same QA identifier, the static (authoritative) case is preferred. `corpus_dir` defaults to the `corpus/` directory beside avocado-mcp in the workspace.",
       inputSchema: {
         log: z
           .string()
@@ -221,6 +391,19 @@ export function registerCorpusTools(
         case: z.record(z.unknown()).nullable(),
         normalized_key: z.string(),
         kb_hint: z.string().optional(),
+        static_matches: z
+          .array(
+            z.object({
+              source: z.literal("qa-static"),
+              identifier: z.string(),
+              literal_message: z.string(),
+              severity: z.string(),
+              fix: z.string(),
+              explanation: z.string().optional(),
+              doc_url: z.string().optional(),
+            }),
+          )
+          .optional(),
       },
       annotations: {
         title: "Diagnose a BitBake build failure against the corpus",
@@ -232,9 +415,9 @@ export function registerCorpusTools(
     },
     async ({ log, corpus_dir }) => {
       const corpusDir = corpus_dir ?? defaultCorpusDir();
-      const key = normalizeSignature(log);
-      const cases = loadCorpusCases(corpusDir);
-      const result = matchCorpus(key, cases);
+      const learnedCases = loadCorpusCases(corpusDir);
+      const staticCases = loadQaStaticCases(corpusDir);
+      const result = diagnose(log, learnedCases, staticCases);
 
       return {
         content: [{ type: "text", text: renderDiagnosis(result) }],

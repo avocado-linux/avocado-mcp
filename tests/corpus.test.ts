@@ -159,6 +159,122 @@ describe("diagnose-build-failure", () => {
   });
 });
 
+// The real scarthgap ldflags QA case (insane.bbclass:442). literal_message
+// carries printf placeholders, so a matcher must split on %s and check the
+// literal fragments appear in the log — not exact-equality.
+function ldflagsQaCase(): Record<string, unknown> {
+  return {
+    identifier: "ldflags",
+    literal_message:
+      "File %s in package %s doesn't have GNU_HASH (didn't pass LDFLAGS?)",
+    severity: "error",
+    fix: 'Pass LDFLAGS through to the linker, e.g. TARGET_CC_ARCH += "${LDFLAGS}".',
+    explanation:
+      "Binaries were not linked with the build system's LDFLAGS, so they lack the GNU_HASH section.",
+    doc_url:
+      "https://docs.yoctoproject.org/ref-manual/qa-checks.html#qa-check-ldflags",
+  };
+}
+
+// A real-world ldflags QA failure line. The %s placeholders are filled with a
+// concrete binary path and package name; the surrounding literal text matches
+// the case template's fragments.
+const LDFLAGS_RAW_LOG = [
+  "ERROR: zeromq-4.3.5-r0 do_package_qa: QA Issue:",
+  "File /usr/bin/curve_keygen in package zeromq doesn't have GNU_HASH",
+  "(didn't pass LDFLAGS?) [ldflags]",
+].join(" ");
+
+// A learned cmake do_compile case with no QA identifier — it must keep
+// surfacing through the learned-corpus path, unaffected by static QA matching.
+function cmakeCompileCase(): Record<string, unknown> {
+  const raw =
+    "ERROR: mylib-1.2.0-r0 do_compile: cmake: CMake Error: " +
+    "could not find FooConfig.cmake provided by Foo";
+  return {
+    normalized_signature: normalizeSignature(raw),
+    failed_task: "do_compile",
+    build_system: "cmake",
+    root_cause: "A required CMake package config was not found.",
+    fix_diff: 'DEPENDS += "foo"',
+    doc_link: "https://docs.yoctoproject.org/ref-manual/tasks.html",
+    falsifier: "do_compile still fails to find FooConfig.cmake after the fix.",
+    verified: true,
+    source: "bringup-seed",
+  };
+}
+
+const CMAKE_RAW_LOG =
+  "ERROR: mylib-1.2.0-r0 do_compile: cmake: CMake Error: " +
+  "could not find FooConfig.cmake provided by Foo";
+
+describe("diagnose-build-failure static QA-check merge", () => {
+  let h: Harness;
+  beforeEach(async () => {
+    h = await makeHarness();
+  });
+  afterEach(async () => {
+    await h.cleanup();
+  });
+
+  it("returns a qa-static result with a non-empty fix for the ldflags GNU_HASH error", async () => {
+    await mkdir(join(h.corpusDir, "qa-checks"), { recursive: true });
+    await writeFile(
+      join(h.corpusDir, "qa-checks", "ldflags.yaml"),
+      stringify(ldflagsQaCase()),
+    );
+
+    const result = await h.client.callTool({
+      name: "diagnose-build-failure",
+      arguments: { log: LDFLAGS_RAW_LOG, corpus_dir: h.corpusDir },
+    });
+
+    const out = payload(result as never);
+    const staticMatches = out.static_matches as Array<Record<string, unknown>>;
+    expect(Array.isArray(staticMatches)).toBe(true);
+    expect(staticMatches.length).toBeGreaterThanOrEqual(1);
+
+    const ldflags = staticMatches.find((m) => m.identifier === "ldflags");
+    expect(ldflags).toBeDefined();
+    expect(ldflags?.source).toBe("qa-static");
+    expect(typeof ldflags?.fix).toBe("string");
+    expect((ldflags?.fix as string).length).toBeGreaterThan(0);
+  });
+
+  it("still surfaces a learned cmake do_compile case unchanged when no static case matches", async () => {
+    await mkdir(join(h.corpusDir, "cases"), { recursive: true });
+    await mkdir(join(h.corpusDir, "qa-checks"), { recursive: true });
+    // A static case is present but its literal fragments do not appear in the
+    // cmake log, so it must not match and must not shadow the learned hit.
+    await writeFile(
+      join(h.corpusDir, "qa-checks", "ldflags.yaml"),
+      stringify(ldflagsQaCase()),
+    );
+    await writeFile(
+      join(h.corpusDir, "cases", "cmake-do-compile-foo.yaml"),
+      stringify(cmakeCompileCase()),
+    );
+
+    const result = await h.client.callTool({
+      name: "diagnose-build-failure",
+      arguments: { log: CMAKE_RAW_LOG, corpus_dir: h.corpusDir },
+    });
+
+    const out = payload(result as never);
+    expect(out.match_type).toBe("exact");
+    expect(out.confidence).toBe(1.0);
+    expect(out.case).toMatchObject({
+      failed_task: "do_compile",
+      build_system: "cmake",
+      fix_diff: 'DEPENDS += "foo"',
+    });
+    // No static case matched the cmake log.
+    const staticMatches =
+      (out.static_matches as Array<Record<string, unknown>> | undefined) ?? [];
+    expect(staticMatches).toHaveLength(0);
+  });
+});
+
 describe("record-recipe-fix", () => {
   let h: Harness;
   beforeEach(async () => {
