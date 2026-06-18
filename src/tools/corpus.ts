@@ -70,34 +70,40 @@ function defaultCorpusDir(): string {
 type CorpusCase = Record<string, unknown> & { normalized_signature?: unknown };
 
 /**
+ * Load every parseable YAML object from a directory. A missing directory yields
+ * an empty list; an unreadable or unparseable file is skipped so one corrupt
+ * file cannot blind the caller to every other file.
+ */
+function loadYamlDir(dir: string): Record<string, unknown>[] {
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return [];
+  }
+  const out: Record<string, unknown>[] = [];
+  for (const entry of entries) {
+    if (!entry.endsWith(".yaml") && !entry.endsWith(".yml")) continue;
+    try {
+      const parsed = parseYaml(readFileSync(resolve(dir, entry), "utf8"));
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        out.push(parsed as Record<string, unknown>);
+      }
+    } catch {
+      // Skip this file; a single bad file must not sink the scan.
+    }
+  }
+  return out;
+}
+
+/**
  * Load every parseable case from `<corpus_dir>/cases/*.yaml`. A missing
  * directory yields an empty list; an unreadable or unparseable individual file
  * is skipped rather than failing the whole scan, so one corrupt case cannot
  * blind the diagnoser to every other case.
  */
 function loadCorpusCases(corpusDir: string): CorpusCase[] {
-  const casesDir = resolve(corpusDir, "cases");
-  let entries: string[];
-  try {
-    entries = readdirSync(casesDir);
-  } catch {
-    return [];
-  }
-
-  const cases: CorpusCase[] = [];
-  for (const entry of entries) {
-    if (!entry.endsWith(".yaml") && !entry.endsWith(".yml")) continue;
-    try {
-      const raw = readFileSync(resolve(casesDir, entry), "utf8");
-      const parsed = parseYaml(raw);
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        cases.push(parsed as CorpusCase);
-      }
-    } catch {
-      // Skip this file; a single bad case must not sink the scan.
-    }
-  }
-  return cases;
+  return loadYamlDir(resolve(corpusDir, "cases")) as CorpusCase[];
 }
 
 /**
@@ -121,28 +127,7 @@ type QaStaticCase = Record<string, unknown> & {
  * the whole scan.
  */
 function loadQaStaticCases(corpusDir: string): QaStaticCase[] {
-  const qaDir = resolve(corpusDir, "qa-checks");
-  let entries: string[];
-  try {
-    entries = readdirSync(qaDir);
-  } catch {
-    return [];
-  }
-
-  const cases: QaStaticCase[] = [];
-  for (const entry of entries) {
-    if (!entry.endsWith(".yaml") && !entry.endsWith(".yml")) continue;
-    try {
-      const raw = readFileSync(resolve(qaDir, entry), "utf8");
-      const parsed = parseYaml(raw);
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        cases.push(parsed as QaStaticCase);
-      }
-    } catch {
-      // Skip this file; a single bad case must not sink the scan.
-    }
-  }
-  return cases;
+  return loadYamlDir(resolve(corpusDir, "qa-checks")) as QaStaticCase[];
 }
 
 /**

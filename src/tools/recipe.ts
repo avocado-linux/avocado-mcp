@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, relative, resolve } from "node:path";
@@ -6,7 +6,12 @@ import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { RepoClient } from "../lib/repo-client.js";
-import { findLayerDirs } from "./layer-analysis.js";
+import {
+  defaultWorkspaceRoot,
+  escapeRegExp,
+  findLayerDirs,
+  listFiles,
+} from "./layer-analysis.js";
 
 /**
  * Recipe-authoring MCP tools backed by the OpenEmbedded layer-index REST API.
@@ -834,18 +839,6 @@ function renderValidateParse(name: string, warnings: string[]): string {
 }
 
 /**
- * Default workspace root: the directory that holds avocado-mcp and
- * `meta-avocado/` as siblings. The compiled module lives at
- * `build/tools/recipe.js`, so three `..` hops land on avocado-mcp's parent.
- * Used for `.bb` example scanning and the meta-avocado feed-validation script;
- * the corpus now ships in-repo (see `defaultCorpusRoot()`).
- */
-function defaultWorkspaceRoot(): string {
-  const here = dirname(fileURLToPath(import.meta.url));
-  return resolve(here, "../../../");
-}
-
-/**
  * Default corpus root: the avocado-mcp repo root, which now ships `corpus/`
  * in-repo. The compiled module lives at `build/tools/recipe.js`, so two `..`
  * hops land on the avocado-mcp root. Distinct from `defaultWorkspaceRoot()`,
@@ -965,36 +958,6 @@ function collectCorpusExamples(
 }
 
 /**
- * Recursively list every `.bb` file under `dir`. A directory that cannot be
- * read is skipped silently so a permission hiccup in one subtree does not abort
- * the whole walk.
- */
-function listBbFiles(dir: string): string[] {
-  let entries: string[];
-  try {
-    entries = readdirSync(dir);
-  } catch {
-    return [];
-  }
-  const out: string[] = [];
-  for (const entry of entries) {
-    const full = resolve(dir, entry);
-    let isDir: boolean;
-    try {
-      isDir = statSync(full).isDirectory();
-    } catch {
-      continue;
-    }
-    if (isDir) {
-      out.push(...listBbFiles(full));
-    } else if (entry.endsWith(".bb")) {
-      out.push(full);
-    }
-  }
-  return out;
-}
-
-/**
  * Collect `.bb` recipe examples that `inherit` the given class from every
  * workspace layer (each dir carrying `conf/layer.conf`, up to two levels under
  * `root` — e.g. meta-avocado, meta-openembedded layers). The score is fixed at
@@ -1013,7 +976,7 @@ function collectBbExamples(
   const examples: RecipeExample[] = [];
   const seen = new Set<string>();
   for (const layerDir of layerDirs) {
-    for (const file of listBbFiles(layerDir)) {
+    for (const file of listFiles(layerDir, [".bb"])) {
       if (seen.has(file)) continue;
       seen.add(file);
       let content: string;
@@ -1032,10 +995,6 @@ function collectBbExamples(
     }
   }
   return examples;
-}
-
-function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 const recipeExampleSchema = z.object({
@@ -1709,12 +1668,8 @@ function registerStageRecipeToFeed(server: McpServer): void {
           },
         );
       } catch (error) {
-        const errObj =
-          error && typeof error === "object"
-            ? (error as { stdout?: unknown; stderr?: unknown })
-            : {};
-        const outText = String(errObj.stdout ?? "");
-        const errText = String(errObj.stderr ?? "");
+        const outText = capturedStream(error, "stdout");
+        const errText = capturedStream(error, "stderr");
         const verdict = parseFeedVerdict(outText);
         const qgaOutput =
           errText.trim().length > 0

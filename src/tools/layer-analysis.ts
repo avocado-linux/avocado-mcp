@@ -27,12 +27,12 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
  * `build/tools/layer-analysis.js`, so three `..` hops land on avocado-mcp's
  * parent. Mirrors recipe.ts' `defaultWorkspaceRoot()`.
  */
-function defaultWorkspaceRoot(): string {
+export function defaultWorkspaceRoot(): string {
   const here = dirname(fileURLToPath(import.meta.url));
   return resolve(here, "../../../");
 }
 
-function escapeRegExp(s: string): string {
+export function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
@@ -41,7 +41,7 @@ function escapeRegExp(s: string): string {
  * A directory that cannot be read is skipped silently so a permission hiccup in
  * one subtree does not abort the whole walk.
  */
-function listFiles(dir: string, exts: string[]): string[] {
+export function listFiles(dir: string, exts: string[]): string[] {
   let entries: string[];
   try {
     entries = readdirSync(dir);
@@ -485,7 +485,6 @@ interface AuditContext {
   localConfBbmask: string[];
   presentPns: Set<string>;
   presentClasses: Set<string>;
-  presentLayerRoots: string[];
   workspaceLayers: LayerInfo[];
   presentDirSet: Set<string>;
 }
@@ -535,7 +534,7 @@ function requireResolves(
   fileDir: string,
 ): boolean {
   if (existsSync(resolve(fileDir, reqPath))) return true;
-  for (const root of ctx.presentLayerRoots) {
+  for (const root of ctx.presentLayerDirs) {
     if (existsSync(resolve(root, reqPath))) return true;
   }
   return false;
@@ -612,32 +611,6 @@ function auditFile(
   }
 }
 
-/** Build the set of PNs provided by present layers. */
-function presentPnsFor(presentLayerDirs: string[]): Set<string> {
-  const out = new Set<string>();
-  for (const dir of presentLayerDirs) {
-    for (const file of listFiles(dir, [".bb"])) {
-      out.add(pnFromFile(file.split(/[/\\]/).pop() as string));
-    }
-  }
-  return out;
-}
-
-/** Build the set of classes provided by present layers. */
-function presentClassesFor(presentLayerDirs: string[]): Set<string> {
-  const out = new Set<string>();
-  for (const dir of presentLayerDirs) {
-    for (const classDir of ["classes", "classes-recipe", "classes-global"]) {
-      for (const file of listFiles(resolve(dir, classDir), [".bbclass"])) {
-        out.add(
-          (file.split(/[/\\]/).pop() as string).replace(/\.bbclass$/, ""),
-        );
-      }
-    }
-  }
-  return out;
-}
-
 interface CoverageResult {
   clean: boolean;
   findings: CoverageFinding[];
@@ -654,8 +627,9 @@ function runCoverage(
 
   const workspaceLayers = scanWorkspaceLayers(workspaceRoot);
   const presentDirSet = new Set(presentLayerDirs);
-  const presentPns = presentPnsFor(presentLayerDirs);
-  const presentClasses = presentClassesFor(presentLayerDirs);
+  const presentLayers = workspaceLayers.filter((l) => presentDirSet.has(l.dir));
+  const presentPns = new Set(presentLayers.flatMap((l) => [...l.pns]));
+  const presentClasses = new Set(presentLayers.flatMap((l) => [...l.classes]));
 
   const ctx: AuditContext = {
     workspaceRoot,
@@ -664,7 +638,6 @@ function runCoverage(
     localConfBbmask,
     presentPns,
     presentClasses,
-    presentLayerRoots: presentLayerDirs,
     workspaceLayers,
     presentDirSet,
   };
