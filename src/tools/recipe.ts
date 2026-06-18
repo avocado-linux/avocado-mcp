@@ -344,8 +344,70 @@ const explainBitbakeResultSchema = {
   type: z.enum(["string", "list", "path", "task"]).optional(),
   description: z.string().optional(),
   doc_url: z.string().optional(),
-  error: z.string().optional(),
+  alternatives: z.string().optional(),
 };
+
+/**
+ * Path to the vendored Yocto variable glossary, resolved relative to the
+ * compiled module (`build/tools/recipe.js` -> `../../yocto-refs/...`), matching
+ * how `defaultCorpusRoot()` resolves the in-repo corpus. A symbol not in the
+ * 12-entry table falls through to a text scan of this file.
+ */
+function variablesRstPath(): string {
+  return resolve(
+    defaultCorpusRoot(),
+    "yocto-refs/yocto-docs/documentation/ref-manual/variables.rst",
+  );
+}
+
+/**
+ * Scan the vendored `variables.rst` glossary for a `:term:`<SYMBOL>`` entry and
+ * return its description as a single collapsed paragraph, or undefined when the
+ * symbol is absent. The glossary lists each variable as
+ *   `   :term:`VARNAME``
+ * followed by 6-space-indented body lines until the next `   :term:` anchor (or
+ * a dedent to a shallower directive). The first body paragraph is enough for an
+ * explanation; later code blocks and cross-references are dropped. A missing or
+ * unreadable file yields undefined rather than throwing, so the caller degrades
+ * to the structured not-found.
+ */
+function lookupVariableInRst(symbol: string): string | undefined {
+  let text: string;
+  try {
+    text = readFileSync(variablesRstPath(), "utf8");
+  } catch {
+    return undefined;
+  }
+
+  const lines = text.split("\n");
+  const anchor = new RegExp(`^   :term:\`${escapeRegExp(symbol)}\`\\s*$`);
+  let start = -1;
+  for (let i = 0; i < lines.length; i += 1) {
+    if (anchor.test(lines[i])) {
+      start = i + 1;
+      break;
+    }
+  }
+  if (start === -1) return undefined;
+
+  // Collect the first body paragraph: 6-space-indented prose lines, stopping at
+  // the first blank line (paragraph break) once prose has started, or at the
+  // next term anchor / dedent.
+  const para: string[] = [];
+  for (let i = start; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (/^   :term:`/.test(line)) break; // next glossary entry
+    if (line.trim().length === 0) {
+      if (para.length > 0) break; // end of first paragraph
+      continue; // leading blank line
+    }
+    if (!/^ {6}/.test(line)) break; // dedent out of the entry body
+    para.push(line.trim());
+  }
+
+  const description = para.join(" ").trim();
+  return description.length > 0 ? description : undefined;
+}
 
 function registerExplainBitbake(server: McpServer): void {
   server.registerTool(
@@ -353,7 +415,7 @@ function registerExplainBitbake(server: McpServer): void {
     {
       title: "Explain a common BitBake recipe variable",
       description:
-        "Explain one of the 12 most common BitBake recipe variables or tasks (DESCRIPTION, LICENSE, LIC_FILES_CHKSUM, SRC_URI, SRCREV, DEPENDS, RDEPENDS, S, B, do_configure, do_compile, do_install). Returns the variable's type (string/list/path/task), a one-line description, and a link to the Yocto reference manual. Lookup is case-insensitive. Unknown names return an `error` listing the known variables.",
+        "Explain a BitBake recipe variable or task. The 12 most common ones (DESCRIPTION, LICENSE, LIC_FILES_CHKSUM, SRC_URI, SRCREV, DEPENDS, RDEPENDS, S, B, do_configure, do_compile, do_install) return from a hardcoded fast-path table with a type (string/list/path/task), a one-line description, and a reference-manual link. Any other symbol falls through to a text scan of the vendored Yocto variable glossary (variables.rst); a glossary hit returns `found: true` with the extracted description and a doc_url. A symbol in neither returns `found: false` with `alternatives: \"search-docs\"` (no `error` field) — use search-docs as the fallback. Lookup is case-insensitive.",
       inputSchema: {
         symbol: z
           .string()
@@ -374,16 +436,40 @@ function registerExplainBitbake(server: McpServer): void {
     async ({ symbol }) => {
       const key = BITBAKE_VAR_LOOKUP.get(symbol.trim().toLowerCase());
       if (key === undefined) {
-        const known = Object.keys(BITBAKE_VARS).join(", ");
-        const error = `unknown variable ${symbol}; known: [${known}]`;
+        // Fall through to a text scan of the vendored variable glossary for
+        // symbols outside the 12-entry fast-path table.
+        const trimmed = symbol.trim();
+        const description = lookupVariableInRst(trimmed);
+        if (description !== undefined) {
+          const doc_url = `${REF_VARS}${trimmed}`;
+          return {
+            content: [
+              {
+                type: "text",
+                text:
+                  `# explain-bitbake: \`${trimmed}\`\n\n` +
+                  `${description}\n\n` +
+                  `[Reference manual](${doc_url})\n`,
+              },
+            ],
+            structuredContent: {
+              found: true,
+              variable: trimmed,
+              description,
+              doc_url,
+            },
+          };
+        }
+        // Not in the table nor the glossary: structured not-found, no error
+        // field, so the caller falls back to search-docs.
         return {
           content: [
             {
               type: "text",
-              text: `# explain-bitbake\n\n❌ ${error}`,
+              text: `# explain-bitbake\n\n\`${trimmed}\` is not in the common-variable table or the Yocto glossary. Try \`search-docs\` with the variable name as the query.`,
             },
           ],
-          structuredContent: { found: false, error },
+          structuredContent: { found: false, alternatives: "search-docs" },
         };
       }
       const entry = BITBAKE_VARS[key];

@@ -91,6 +91,43 @@ describe("explain-bitbake", () => {
     expect(typeof out.doc_url).toBe("string");
     expect(String(out.doc_url).length).toBeGreaterThan(0);
   });
+
+  it("returns the hardcoded list entry unchanged for SRC_URI (fast path)", async () => {
+    const result = await callTool("explain-bitbake", { symbol: "SRC_URI" });
+
+    expect(result.isError).not.toBe(true);
+    const out = result.structuredContent ?? {};
+    expect(out.found).toBe(true);
+    expect(out.type).toBe("list");
+    expect(out.variable).toBe("SRC_URI");
+    expect(String(out.doc_url).length).toBeGreaterThan(0);
+  });
+
+  it("falls through to variables.rst for an unknown-but-real var (PACKAGE_CLASSES)", async () => {
+    const result = await callTool("explain-bitbake", {
+      symbol: "PACKAGE_CLASSES",
+    });
+
+    expect(result.isError).not.toBe(true);
+    const out = result.structuredContent ?? {};
+    expect(out.found).toBe(true);
+    expect(typeof out.description).toBe("string");
+    expect(String(out.description).length).toBeGreaterThan(0);
+    expect(String(out.doc_url)).toContain("term-PACKAGE_CLASSES");
+    expect(out.error).toBeUndefined();
+  });
+
+  it("returns structured not-found for a bogus symbol (no error field)", async () => {
+    const result = await callTool("explain-bitbake", {
+      symbol: "NOTAREALYOCTOVARIABLE",
+    });
+
+    expect(result.isError).not.toBe(true);
+    const out = result.structuredContent ?? {};
+    expect(out.found).toBe(false);
+    expect(out.alternatives).toBe("search-docs");
+    expect(out.error).toBeUndefined();
+  });
 });
 
 describe("lint-recipe", () => {
