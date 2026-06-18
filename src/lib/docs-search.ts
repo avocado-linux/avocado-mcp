@@ -16,6 +16,9 @@
  */
 
 import { listDocs, fetchDocContent, type DocEntry } from "./docs-client.js";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, resolve } from "node:path";
 
 interface DocVec {
   entry: DocEntry;
@@ -130,6 +133,252 @@ function addWeighted(
     added += weight;
   }
   return added;
+}
+
+/**
+ * A yocto-refs corpus section: a synthetic {@link DocEntry} plus the raw body
+ * text of the section. `DocEntry` has no body field (GitHub-backed entries
+ * fetch their body lazily via `fetchDocContent`), so a local-file corpus must
+ * carry the body alongside the metadata for the index to score it without a
+ * network round-trip. `buildIndex()` (task 3.3) consumes these.
+ */
+export interface YoctoRefsEntry {
+  entry: DocEntry;
+  body: string;
+}
+
+/**
+ * Resolve the in-repo `yocto-refs/` directory relative to the compiled module.
+ * The compiled file is `build/lib/docs-search.js`, so two `..` hops reach the
+ * avocado-mcp root and `yocto-refs/` is its child — the same pattern
+ * `corpus.ts:defaultCorpusDir()` uses for `corpus/`.
+ */
+function yoctoRefsDir(): string {
+  const here = dirname(fileURLToPath(import.meta.url));
+  return resolve(here, "../../yocto-refs");
+}
+
+/**
+ * Each vendored file in the yocto-refs corpus, with the metadata needed to
+ * build a real docs.yoctoproject.org URL per section. `urlBase` is the page
+ * the file maps to upstream; `anchorKind` selects how a section title becomes
+ * the in-page anchor (the RST `:term:` glossary builds `#term-NAME` anchors,
+ * headings build slug anchors, source files have no upstream HTML page).
+ */
+interface YoctoRefsFile {
+  /** Path relative to `yocto-refs/`. */
+  relPath: string;
+  /** Logical corpus name used in the synthetic sitePath. */
+  name: string;
+  /** Upstream HTML page URL, or null for source files with no doc page. */
+  urlBase: string | null;
+  /** How section titles map to in-page anchors. */
+  anchorKind: "term" | "heading" | "none";
+}
+
+const YOCTO_REFS_FILES: YoctoRefsFile[] = [
+  {
+    relPath: "yocto-docs/documentation/ref-manual/variables.rst",
+    name: "variables",
+    urlBase: "https://docs.yoctoproject.org/ref-manual/variables.html",
+    anchorKind: "term",
+  },
+  {
+    relPath: "yocto-docs/documentation/ref-manual/qa-checks.rst",
+    name: "qa-checks",
+    urlBase: "https://docs.yoctoproject.org/ref-manual/qa-checks.html",
+    anchorKind: "heading",
+  },
+  {
+    relPath: "bitbake/doc/bitbake-user-manual/bitbake-user-manual-metadata.rst",
+    name: "bitbake-metadata",
+    urlBase:
+      "https://docs.yoctoproject.org/bitbake/bitbake-user-manual/bitbake-user-manual-metadata.html",
+    anchorKind: "heading",
+  },
+  {
+    relPath: "openembedded-core/meta/classes-global/insane.bbclass",
+    name: "insane-bbclass",
+    urlBase: null,
+    anchorKind: "none",
+  },
+  {
+    relPath: "openembedded-core/meta/lib/oe/qa.py",
+    name: "oe-qa",
+    urlBase: null,
+    anchorKind: "none",
+  },
+];
+
+/** Slugify a section heading into a docs.yoctoproject.org-style anchor. */
+function slugifyHeading(title: string): string {
+  return title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+interface RawSection {
+  title: string;
+  body: string;
+}
+
+/**
+ * Split the RST glossary in `variables.rst` into one section per `:term:`
+ * entry. Each glossary term is a line `   :term:`NAME`` followed by its
+ * (further-indented) description until the next `:term:` line. Falls back to
+ * an empty list if no `:term:` entries are present.
+ */
+function splitGlossary(text: string): RawSection[] {
+  const lines = text.split(/\r?\n/);
+  const termRe = /^\s+:term:`([A-Za-z0-9_${}]+)`\s*$/;
+  const sections: RawSection[] = [];
+  let current: RawSection | null = null;
+  for (const line of lines) {
+    const m = line.match(termRe);
+    if (m) {
+      if (current) sections.push(current);
+      current = { title: m[1], body: line + "\n" };
+    } else if (current) {
+      current.body += line + "\n";
+    }
+  }
+  if (current) sections.push(current);
+  return sections;
+}
+
+/**
+ * Split an RST document on its section-heading underlines (a heading line
+ * immediately followed by a run of `=`, `-`, `~`, `*`, `^`, or `"`). Each
+ * section spans from one heading to the next. Falls back to a single section
+ * (title from the file name) when no headings are found.
+ */
+function splitByHeadings(text: string, fallbackTitle: string): RawSection[] {
+  const lines = text.split(/\r?\n/);
+  const underlineRe = /^[=\-~*^"]{3,}\s*$/;
+  const sections: RawSection[] = [];
+  let current: RawSection | null = null;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const next = lines[i + 1];
+    const isHeading =
+      line.trim().length > 0 &&
+      !underlineRe.test(line) &&
+      next !== undefined &&
+      underlineRe.test(next) &&
+      next.trim().length >= Math.min(line.trim().length, 3);
+    if (isHeading) {
+      if (current) sections.push(current);
+      current = { title: line.trim(), body: line + "\n" + next + "\n" };
+      i++; // consume the underline
+      continue;
+    }
+    if (current) {
+      current.body += line + "\n";
+    }
+  }
+  if (current) sections.push(current);
+  if (sections.length === 0) {
+    return [{ title: fallbackTitle, body: text }];
+  }
+  return sections;
+}
+
+/**
+ * Split source files (no RST headings) into blank-line-delimited blocks. Each
+ * block becomes a section whose title is its first non-empty line, truncated.
+ * Empty/whitespace-only blocks are dropped.
+ */
+function splitByBlankLines(text: string, fallbackTitle: string): RawSection[] {
+  const blocks = text.split(/\r?\n\s*\r?\n/);
+  const sections: RawSection[] = [];
+  for (const block of blocks) {
+    const trimmed = block.trim();
+    if (!trimmed) continue;
+    const firstLine = trimmed.split(/\r?\n/, 1)[0].trim();
+    const title = (firstLine || fallbackTitle).slice(0, 80);
+    sections.push({ title, body: block });
+  }
+  if (sections.length === 0) {
+    return [{ title: fallbackTitle, body: text }];
+  }
+  return sections;
+}
+
+/**
+ * Load the vendored Yocto/BitBake reference corpus from local files under
+ * `yocto-refs/` and return one {@link YoctoRefsEntry} per indexable section,
+ * each tagged `source: "yocto-refs"`.
+ *
+ * This performs NO network access — it only reads files from disk, so it works
+ * with `GITHUB_TOKEN` unset. A missing `yocto-refs/` directory (or any
+ * unreadable individual file) yields no entries for that file rather than
+ * throwing, so a partial corpus degrades gracefully instead of failing the
+ * whole index build.
+ *
+ * Each section becomes a synthetic `DocEntry`:
+ *   - `repoPath` / `sitePath` live under a `yocto-refs/` namespace,
+ *   - `title` is the section/variable name,
+ *   - `url` points at docs.yoctoproject.org when the file maps to a doc page
+ *     (with a `#term-NAME` or `#slug` anchor), else a `yocto-refs://` placeholder,
+ *   - `section` is set to `"guides"` (the closest existing `DocEntry` section),
+ *   - `sha` is `""` (local file; no blob SHA),
+ *   - `source` is `"yocto-refs"`.
+ */
+export function loadYoctoRefsEntries(): YoctoRefsEntry[] {
+  const baseDir = yoctoRefsDir();
+  const out: YoctoRefsEntry[] = [];
+
+  for (const file of YOCTO_REFS_FILES) {
+    let text: string;
+    try {
+      text = readFileSync(resolve(baseDir, file.relPath), "utf8");
+    } catch {
+      // Missing or unreadable file: skip it, don't sink the whole corpus.
+      continue;
+    }
+
+    let sections: RawSection[];
+    if (file.anchorKind === "term") {
+      sections = splitGlossary(text);
+      // A glossary file with no :term: entries (corrupt/empty) falls back to
+      // heading-split so we still index something.
+      if (sections.length === 0) {
+        sections = splitByHeadings(text, file.name);
+      }
+    } else if (file.anchorKind === "heading") {
+      sections = splitByHeadings(text, file.name);
+    } else {
+      sections = splitByBlankLines(text, file.name);
+    }
+
+    for (const sec of sections) {
+      const url =
+        file.urlBase === null
+          ? `yocto-refs://${file.name}`
+          : file.anchorKind === "term"
+            ? `${file.urlBase}#term-${sec.title}`
+            : file.anchorKind === "heading"
+              ? `${file.urlBase}#${slugifyHeading(sec.title)}`
+              : file.urlBase;
+
+      const slug = slugifyHeading(sec.title) || "section";
+      const sitePath = `yocto-refs/${file.name}/${slug}`;
+      const entry: DocEntry = {
+        repoPath: `yocto-refs/${file.relPath}`,
+        sitePath,
+        url,
+        section: "guides",
+        title: sec.title,
+        description: "",
+        sha: "",
+        source: "yocto-refs",
+      };
+      out.push({ entry, body: sec.body });
+    }
+  }
+
+  return out;
 }
 
 async function buildIndex(): Promise<IndexState> {

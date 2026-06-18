@@ -23,7 +23,11 @@ vi.mock("../src/lib/docs-client.js", () => ({
   ),
 }));
 
-import { searchDocs, clearSearchIndex } from "../src/lib/docs-search.js";
+import {
+  searchDocs,
+  clearSearchIndex,
+  loadYoctoRefsEntries,
+} from "../src/lib/docs-search.js";
 
 describe("searchDocs source tagging", () => {
   beforeEach(() => {
@@ -44,5 +48,46 @@ describe("searchDocs source tagging", () => {
     expect(hit.entry.source).toBe("peridio-docs");
     // Confirm we matched the seeded entry, not some unrelated default.
     expect(hit.entry.sitePath).toBe("developer-reference/seeding-var");
+  });
+});
+
+describe("loadYoctoRefsEntries", () => {
+  // loadYoctoRefsEntries reads the vendored corpus from local files only —
+  // never GitHub. Unset every token the docs-client would use so a stray
+  // network call would surface as a thrown error rather than a silent fetch.
+  const savedToken = process.env.GITHUB_TOKEN;
+  const savedAlt = process.env.AVOCADO_MCP_GITHUB_TOKEN;
+  beforeEach(() => {
+    delete process.env.GITHUB_TOKEN;
+    delete process.env.AVOCADO_MCP_GITHUB_TOKEN;
+  });
+  afterEach(() => {
+    if (savedToken === undefined) delete process.env.GITHUB_TOKEN;
+    else process.env.GITHUB_TOKEN = savedToken;
+    if (savedAlt === undefined) delete process.env.AVOCADO_MCP_GITHUB_TOKEN;
+    else process.env.AVOCADO_MCP_GITHUB_TOKEN = savedAlt;
+  });
+
+  it("loads the vendored corpus from local files with GITHUB_TOKEN unset", () => {
+    expect(process.env.GITHUB_TOKEN).toBeUndefined();
+
+    // Must not throw a network error: the function is pure local-file I/O.
+    const entries = loadYoctoRefsEntries();
+
+    // The vendored corpus is present in-repo, so the result is non-empty.
+    expect(entries.length).toBeGreaterThan(0);
+    // Every entry is tagged with the yocto-refs source discriminator.
+    for (const e of entries) {
+      expect(e.entry.source).toBe("yocto-refs");
+    }
+    // The variables glossary contributes a recognizable BitBake variable as a
+    // section title, confirming the :term: split actually ran.
+    const titles = entries.map((e) => e.entry.title);
+    expect(titles).toContain("SRC_URI");
+    // Each entry carries a non-empty body so the index can score it without a
+    // network fetch.
+    const srcUri = entries.find((e) => e.entry.title === "SRC_URI");
+    expect(srcUri).toBeDefined();
+    expect(srcUri!.body.length).toBeGreaterThan(0);
   });
 });
