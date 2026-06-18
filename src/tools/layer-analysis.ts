@@ -288,8 +288,40 @@ interface LayerInfo {
   dir: string;
   pns: Set<string>;
   classes: Set<string>;
+  /** PROVIDES tokens parsed from recipe text, plus BBCLASSEXTEND virtuals. */
+  provides: Set<string>;
+  /** RPROVIDES tokens parsed from recipe text. */
+  rprovides: Set<string>;
   /** Repo-relative file paths under common require dirs. */
   requirePaths: Set<string>;
+}
+
+/**
+ * Parse a static recipe-text variable assignment value. Matches the named
+ * variable with an optional `:${PN}` (or other) override suffix and any of the
+ * BitBake assignment operators (`=`, `+=`, `?=`, etc.), returning every
+ * whitespace-separated token across all matching lines. Lines whose value
+ * still contains an unexpanded `${...}` token are kept verbatim per-token —
+ * tokens that themselves expand (e.g. `${PN}`) are dropped, the rest retained.
+ */
+function parseAssignmentTokens(text: string, variable: string): string[] {
+  const out: string[] = [];
+  const re = new RegExp(
+    `^\\s*${escapeRegExp(variable)}(?::[^=\\s]+)?\\s*(?:\\??\\+?\\.?:?=|=\\.?\\+?)\\s*"([^"]*)"`,
+  );
+  for (const rawLine of text.split("\n")) {
+    const line = rawLine.trim();
+    if (line.startsWith("#")) continue;
+    const match = line.match(re);
+    if (!match) continue;
+    for (const tok of match[1].split(/\s+/)) {
+      const t = tok.trim();
+      if (t.length === 0) continue;
+      if (t.includes("${")) continue;
+      out.push(t);
+    }
+  }
+  return out;
 }
 
 /**
@@ -345,8 +377,30 @@ function findLayerDirs(root: string, maxDepth: number): string[] {
 function buildLayerInfo(dir: string): LayerInfo {
   const name = dir.split(/[/\\]/).filter(Boolean).pop() ?? dir;
   const pns = new Set<string>();
+  const provides = new Set<string>();
+  const rprovides = new Set<string>();
   for (const file of listFiles(dir, [".bb"])) {
-    pns.add(pnFromFile(file.split(/[/\\]/).pop() as string));
+    const pn = pnFromFile(file.split(/[/\\]/).pop() as string);
+    pns.add(pn);
+    let text: string;
+    try {
+      text = readFileSync(file, "utf8");
+    } catch {
+      continue;
+    }
+    for (const tok of parseAssignmentTokens(text, "PROVIDES")) {
+      provides.add(tok);
+    }
+    for (const tok of parseAssignmentTokens(text, "RPROVIDES")) {
+      rprovides.add(tok);
+    }
+    // BBCLASSEXTEND virtuals: `native`/`nativesdk` extend the PN with the
+    // corresponding `-native`/`-nativesdk` suffix (e.g. flatbuffers-native).
+    for (const ext of parseAssignmentTokens(text, "BBCLASSEXTEND")) {
+      if (ext === "native" || ext === "nativesdk") {
+        provides.add(`${pn}-${ext}`);
+      }
+    }
   }
   const classes = new Set<string>();
   for (const classDir of ["classes", "classes-recipe", "classes-global"]) {
@@ -362,7 +416,7 @@ function buildLayerInfo(dir: string): LayerInfo {
   for (const file of listFiles(dir, [".bb", ".bbappend", ".inc", ".conf"])) {
     requirePaths.add(relative(dir, file));
   }
-  return { name, dir, pns, classes, requirePaths };
+  return { name, dir, pns, classes, provides, rprovides, requirePaths };
 }
 
 // ---------------------------------------------------------------------------
@@ -760,7 +814,7 @@ function registerFindRecipeProviders(server: McpServer): void {
     {
       title: "Find which layer provides a recipe or class",
       description:
-        "Find which workspace layer provides a given recipe (PN) or bbclass by scanning every layer (a dir carrying conf/layer.conf) up to two levels under the workspace root. For kind=recipe it matches the PN derived from each `.bb` filename (basename minus the version after the first `_`); for kind=class it matches `<name>.bbclass` under classes/, classes-recipe/, or classes-global/. Returns the providing layers as `{layer, path}` rows, or `found: false` when nothing in the workspace provides it.",
+        "Find which workspace layer provides a given recipe (PN) or bbclass by scanning every layer (a dir carrying conf/layer.conf) up to two levels under the workspace root. For kind=recipe it matches the PN derived from each `.bb` filename (basename minus the version after the first `_`), plus any `PROVIDES`/`RPROVIDES` tokens parsed statically from recipe text and the `-native`/`-nativesdk` virtuals implied by `BBCLASSEXTEND` (so `virtual/kernel` or `flatbuffers-native` resolve); for kind=class it matches `<name>.bbclass` under classes/, classes-recipe/, or classes-global/. PROVIDES/RPROVIDES resolution is a best-effort static text scan, not a bitbake parse. Returns the providing layers as `{layer, path}` rows, or `found: false` when nothing in the workspace provides it.",
       inputSchema: {
         name: z
           .string()
@@ -807,7 +861,9 @@ function registerFindRecipeProviders(server: McpServer): void {
         for (const layer of layers) {
           const hit =
             lookupKind === "recipe"
-              ? layer.pns.has(name)
+              ? layer.pns.has(name) ||
+                layer.provides.has(name) ||
+                layer.rprovides.has(name)
               : layer.classes.has(name);
           if (hit) {
             providers.push({
