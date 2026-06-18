@@ -182,7 +182,13 @@ The sentinel re-triggers automatically when the required-tool set changes
    resource for the grounded recipe template and conventions.
 5. **Explain every variable.** Call `explain-bitbake` for each variable the new
    recipe will set (`SRC_URI`, `SRCREV`, `LIC_FILES_CHKSUM`, `DEPENDS`,
-   `RDEPENDS`, `inherit`, ...) so each line is grounded, not cargo-culted.
+   `RDEPENDS`, ...) so each line is grounded, not cargo-culted. `explain-bitbake`
+   covers the variables known to the server: a curated table plus a glossary
+   lookup over the vendored `variables.rst`. When it returns `found: false`
+   (e.g. for `inherit`, `PACKAGECONFIG`, `FILES`, `EXTRA_OECMAKE`, or override
+   operators), call `search-docs` with the symbol as the query as the fallback
+   before emitting any explanation - `search-docs` also indexes the vendored
+   Yocto reference corpus.
 6. **Emit the dossier.** Output a table:
 
    | Field | Value |
