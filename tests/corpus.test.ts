@@ -1,7 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdtemp, readdir, rm, writeFile, mkdir } from "node:fs/promises";
+import {
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  writeFile,
+  mkdir,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { stringify } from "yaml";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -337,5 +344,77 @@ describe("record-recipe-fix", () => {
     // The pre-existing case is the only file; no duplicate was written.
     const files = await readdir(join(h.corpusDir, "cases"));
     expect(files).toHaveLength(1);
+  });
+
+  it("writes a fix for a known static QA identifier into cases/, leaving qa-checks/ untouched", async () => {
+    // Seed an authoritative static ldflags case. record-recipe-fix must never
+    // overwrite it, even when the recorded fix names the same QA identifier.
+    await mkdir(join(h.corpusDir, "qa-checks"), { recursive: true });
+    const staticPath = join(h.corpusDir, "qa-checks", "ldflags.yaml");
+    const staticYaml = stringify(ldflagsQaCase());
+    await writeFile(staticPath, staticYaml);
+
+    const result = await h.client.callTool({
+      name: "record-recipe-fix",
+      arguments: {
+        normalized_signature:
+          "do_package_qa: QA Issue: <PKG> doesn't have GNU_HASH [ldflags]",
+        failed_task: "ldflags",
+        build_system: "cmake",
+        root_cause: "Binaries were not linked with the build system's LDFLAGS.",
+        fix_diff: 'TARGET_CC_ARCH += "${LDFLAGS}"',
+        doc_link:
+          "https://docs.yoctoproject.org/ref-manual/qa-checks.html#qa-check-ldflags",
+        falsifier: "do_package_qa still reports ldflags after the fix.",
+        corpus_dir: h.corpusDir,
+      },
+    });
+
+    const out = payload(result as never);
+    expect(out.written).toBe(true);
+
+    // The learned case lands under cases/, never qa-checks/.
+    const writtenPath = out.path as string;
+    expect(writtenPath).toContain(`${sep}cases${sep}`);
+    expect(writtenPath).not.toContain(`${sep}qa-checks${sep}`);
+
+    const caseFiles = await readdir(join(h.corpusDir, "cases"));
+    expect(caseFiles).toHaveLength(1);
+    expect(caseFiles[0].endsWith(".yaml")).toBe(true);
+
+    // The static qa-checks/ directory is unchanged: same single file, same bytes.
+    const qaFiles = await readdir(join(h.corpusDir, "qa-checks"));
+    expect(qaFiles).toEqual(["ldflags.yaml"]);
+    const qaContentAfter = await readFile(staticPath, "utf8");
+    expect(qaContentAfter).toBe(staticYaml);
+  });
+
+  it("rejects a write when corpus_dir points into a qa-checks tree", async () => {
+    // Pathological caller: corpus_dir is the qa-checks directory itself, so the
+    // naive cases/ join would land under qa-checks/. The guard must reject it.
+    const qaCorpus = join(h.corpusDir, "qa-checks");
+    await mkdir(qaCorpus, { recursive: true });
+
+    const result = await h.client.callTool({
+      name: "record-recipe-fix",
+      arguments: {
+        normalized_signature: "QA Issue: <PKG>: some error [new-check]",
+        failed_task: "do_compile",
+        build_system: "cmake",
+        root_cause: "A concrete root cause.",
+        fix_diff: "some fix",
+        doc_link: "https://docs.yoctoproject.org/ref-manual/qa-checks.html",
+        falsifier: "A non-empty falsifier.",
+        corpus_dir: qaCorpus,
+      },
+    });
+
+    const out = payload(result as never);
+    expect(out.error).toBe("record-recipe-fix may only write to corpus/cases/");
+    expect(out.written).toBeUndefined();
+
+    // No case file was written anywhere under the qa-checks tree.
+    const cases = await readdir(join(qaCorpus, "cases")).catch(() => []);
+    expect(cases).toHaveLength(0);
   });
 });

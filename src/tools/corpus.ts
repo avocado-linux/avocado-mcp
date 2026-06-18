@@ -6,7 +6,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { dirname, resolve } from "node:path";
+import { dirname, resolve, sep } from "node:path";
 import { createHash } from "node:crypto";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { z } from "zod";
@@ -154,10 +154,16 @@ function loadQaStaticCases(corpusDir: string): QaStaticCase[] {
  * dropped to avoid spuriously matching common English on unrelated logs.
  */
 function literalFragments(template: string): string[] {
-  return template
-    .split(/%[sdcuxleEfgG]/g)
-    .map((f) => f.trim())
-    .filter((f) => f.length >= 4);
+  return (
+    template
+      // Match a full printf conversion: optional flags, width, and precision
+      // before the conversion letter (e.g. %s, %d, %02d, %-20s, %.3f, %#x). A
+      // literal `%%` has no trailing letter so it is not split here; collapse
+      // it to a single `%` in each fragment to match the emitted log.
+      .split(/%[-+ #0]*\d*(?:\.\d+)?[a-zA-Z]/g)
+      .map((f) => f.replace(/%%/g, "%").trim())
+      .filter((f) => f.length >= 4)
+  );
 }
 
 interface QaStaticMatch {
@@ -178,7 +184,10 @@ interface QaStaticMatch {
  * because `literal_message` carries upstream printf placeholders rather than a
  * normalized signature.
  */
-function matchQaStaticCases(log: string, cases: QaStaticCase[]): QaStaticMatch[] {
+function matchQaStaticCases(
+  log: string,
+  cases: QaStaticCase[],
+): QaStaticMatch[] {
   const matches: QaStaticMatch[] = [];
   for (const c of cases) {
     const id = c.identifier;
@@ -202,7 +211,8 @@ function matchQaStaticCases(log: string, cases: QaStaticCase[]): QaStaticMatch[]
       literal_message: msg,
       severity: typeof c.severity === "string" ? c.severity : "",
       fix,
-      explanation: typeof c.explanation === "string" ? c.explanation : undefined,
+      explanation:
+        typeof c.explanation === "string" ? c.explanation : undefined,
       doc_url: typeof c.doc_url === "string" ? c.doc_url : undefined,
     });
   }
@@ -273,9 +283,9 @@ function matchCorpus(key: string, cases: CorpusCase[]): DiagnoseResult {
  * `qa-checks/` (matched against the raw log, since their `literal_message`
  * carries printf placeholders rather than a normalized signature).
  *
- * When a static case and the learned case share the same QA `identifier`, the
- * static case is authoritative (upstream-documented fix) and the learned case
- * is dropped from the result so a stale learned entry cannot shadow it.
+ * The learned and static corpora are keyed differently (normalized signature vs
+ * literal-message fragments) and share no identifier, so both are surfaced: the
+ * learned match with any static matches attached in `static_matches`.
  */
 function diagnose(
   log: string,
@@ -290,23 +300,9 @@ function diagnose(
     return learned;
   }
 
-  // Prefer the static case when both name the same QA identifier: drop the
-  // learned hit so the authoritative upstream fix is what surfaces.
-  const staticIds = new Set(staticMatches.map((m) => m.identifier));
-  const learnedId =
-    learned.case && typeof learned.case.identifier === "string"
-      ? learned.case.identifier
-      : undefined;
-  if (learnedId !== undefined && staticIds.has(learnedId)) {
-    return {
-      match_type: "none",
-      confidence: 0.0,
-      case: null,
-      normalized_key: key,
-      static_matches: staticMatches,
-    };
-  }
-
+  // Learned cases (keyed by normalized_signature) and static QA cases (keyed by
+  // literal_message fragments) share no common identifier, so they are surfaced
+  // independently: the learned match plus any static matches alongside it.
   return { ...learned, static_matches: staticMatches };
 }
 
@@ -370,7 +366,7 @@ export function registerCorpusTools(
     {
       title: "Diagnose a BitBake build failure against the corpus",
       description:
-        "Normalize a raw BitBake build-log error and match it against the verified error-learning corpus. Pass the failing log snippet as `log`; the tool computes its normalized signature and scans `<corpus_dir>/cases/*.yaml` for a case with the same signature. An exact signature match returns confidence 1.0; a substring (fuzzy) match returns 0.5; no match returns 0.0 with a null case (a novel failure to route to docs and later record). It also matches the raw log against the static, upstream-derived QA-check cases in `<corpus_dir>/qa-checks/*.yaml` (placeholder-tolerant match on each case's `literal_message`) and returns any hits in `static_matches`, each tagged `source: \"qa-static\"`. When a static and a learned case name the same QA identifier, the static (authoritative) case is preferred. `corpus_dir` defaults to the `corpus/` directory beside avocado-mcp in the workspace.",
+        'Normalize a raw BitBake build-log error and match it against the verified error-learning corpus. Pass the failing log snippet as `log`; the tool computes its normalized signature and scans `<corpus_dir>/cases/*.yaml` for a case with the same signature. An exact signature match returns confidence 1.0; a substring (fuzzy) match returns 0.5; no match returns 0.0 with a null case (a novel failure to route to docs and later record). It also matches the raw log against the static, upstream-derived QA-check cases in `<corpus_dir>/qa-checks/*.yaml` (placeholder-tolerant match on each case\'s `literal_message`) and returns any hits in `static_matches`, each tagged `source: "qa-static"`. Learned and static cases are surfaced independently (they share no identifier). `corpus_dir` defaults to the `corpus/` directory beside avocado-mcp in the workspace.',
       inputSchema: {
         log: z
           .string()
@@ -523,10 +519,20 @@ export function registerCorpusTools(
       const slug = slugSource.replace(/[^a-zA-Z0-9]+/g, "-").toLowerCase();
 
       const casesDir = resolve(corpusDir, "cases");
+      const path = resolve(casesDir, `${slug}.yaml`);
+
+      // Hardening guard: the static QA-check cases under `qa-checks/` are
+      // authoritative and read-only (design.md D3). A learned case must never
+      // land there, even if `corpus_dir` is pointed at or into a `qa-checks/`
+      // tree. Reject any resolved write path with a `qa-checks` segment rather
+      // than overwrite an upstream-derived case.
+      if (path.split(sep).includes("qa-checks")) {
+        return fail("record-recipe-fix may only write to corpus/cases/");
+      }
+
       if (!existsSync(casesDir)) {
         mkdirSync(casesDir, { recursive: true });
       }
-      const path = resolve(casesDir, `${slug}.yaml`);
 
       const record = {
         normalized_signature,
