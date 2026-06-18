@@ -425,7 +425,7 @@ function registerExplainBitbake(server: McpServer): void {
     {
       title: "Explain a common BitBake recipe variable",
       description:
-        "Explain a BitBake recipe variable or task. The 12 most common ones (DESCRIPTION, LICENSE, LIC_FILES_CHKSUM, SRC_URI, SRCREV, DEPENDS, RDEPENDS, S, B, do_configure, do_compile, do_install) return from a hardcoded fast-path table with a type (string/list/path/task), a one-line description, and a reference-manual link. Any other symbol falls through to a text scan of the vendored Yocto variable glossary (variables.rst); a glossary hit returns `found: true` with the extracted description and a doc_url. A symbol in neither returns `found: false` with `alternatives: \"search-docs\"` (no `error` field) — use search-docs as the fallback. Lookup is case-insensitive.",
+        'Explain a BitBake recipe variable or task. The 12 most common ones (DESCRIPTION, LICENSE, LIC_FILES_CHKSUM, SRC_URI, SRCREV, DEPENDS, RDEPENDS, S, B, do_configure, do_compile, do_install) return from a hardcoded fast-path table with a type (string/list/path/task), a one-line description, and a reference-manual link. Any other symbol falls through to a text scan of the vendored Yocto variable glossary (variables.rst); a glossary hit returns `found: true` with the extracted description and a doc_url. A symbol in neither returns `found: false` with `alternatives: "search-docs"` (no `error` field) — use search-docs as the fallback. Lookup is case-insensitive.',
       inputSchema: {
         symbol: z
           .string()
@@ -446,9 +446,84 @@ function registerExplainBitbake(server: McpServer): void {
     async ({ symbol }) => {
       const key = BITBAKE_VAR_LOOKUP.get(symbol.trim().toLowerCase());
       if (key === undefined) {
-        // Fall through to a text scan of the vendored variable glossary for
-        // symbols outside the 12-entry fast-path table.
         const trimmed = symbol.trim();
+        if (trimmed.includes(":")) {
+          // Colon override expression (e.g. do_install:append, SRC_URI:prepend).
+          // These are operator expressions, not variable names; intercept before
+          // the glossary scan so the caller gets override-syntax guidance.
+          const docUrl =
+            "https://docs.yoctoproject.org/bitbake/bitbake-user-manual/bitbake-user-manual-metadata.html#appending-and-prepending-override-style-syntax";
+          const description =
+            "Colon override expression. In scarthgap (BitBake 2.8+) the colon form " +
+            "(VAR:append, VAR:prepend, VAR:remove, do_task:append) replaced the " +
+            "deprecated underscore form (VAR_append). Hard parse error in scarthgap.";
+          return {
+            content: [
+              {
+                type: "text",
+                text:
+                  "# explain-bitbake: colon override syntax\n\n" +
+                  "`" +
+                  trimmed +
+                  "` is a BitBake colon override expression, not a variable.\n\n" +
+                  "In scarthgap (BitBake 2.8+), the colon syntax replaced the old underscore form:\n" +
+                  "- `VAR:append = value` -- appends to a variable\n" +
+                  "- `VAR:prepend = value` -- prepends to a variable\n" +
+                  "- `VAR:remove = value` -- removes a word from a list variable\n" +
+                  "- `do_task:append() { ... }` -- appends shell code to a task\n\n" +
+                  "The old underscore form (`VAR_append`, `do_task_append`) is a hard error in scarthgap.\n\n" +
+                  "[BitBake manual: override-style syntax](" +
+                  docUrl +
+                  ")\n",
+              },
+            ],
+            structuredContent: {
+              found: true,
+              variable: trimmed,
+              description,
+              doc_url: docUrl,
+            },
+          };
+        }
+        if (trimmed.toLowerCase() === "inherit") {
+          // "inherit" is the recipe directive. The glossary returns the INHERIT config
+          // variable instead, which misleads recipe authors.
+          const docUrl =
+            "https://docs.yoctoproject.org/bitbake/bitbake-user-manual/bitbake-user-manual-metadata.html#inherit-directive";
+          const description =
+            "Recipe directive that includes a class, injecting its standard task " +
+            "implementations (do_configure, do_compile, do_install). Examples: " +
+            "`inherit cmake`, `inherit meson`, `inherit setuptools3`. " +
+            "Distinct from the INHERIT config variable, which applies classes globally.";
+          return {
+            content: [
+              {
+                type: "text",
+                text:
+                  "# explain-bitbake: `inherit` directive\n\n" +
+                  "The `inherit` statement includes a class in a recipe:\n\n" +
+                  "```\n" +
+                  "inherit cmake       # CMake build system\n" +
+                  "inherit meson       # Meson build system\n" +
+                  "inherit setuptools3 # Python package\n" +
+                  "```\n\n" +
+                  "Classes live in `classes/` or `classes-global/` directories across layers.\n\n" +
+                  "If you meant the **INHERIT** config variable (global class inheritance), " +
+                  "try search-docs with query INHERIT.\n\n" +
+                  "[BitBake manual: inherit directive](" +
+                  docUrl +
+                  ")\n",
+              },
+            ],
+            structuredContent: {
+              found: true,
+              variable: "inherit",
+              description,
+              doc_url: docUrl,
+            },
+          };
+        }
+        // Fall through to the vendored variable glossary.
         const hit = lookupVariableInRst(trimmed);
         if (hit !== undefined) {
           const doc_url = `${REF_VARS}${hit.name}`;
@@ -566,7 +641,8 @@ function parseSrcUriEntries(recipeText: string): string[] {
   const entries: string[] = [];
   // Match any SRC_URI assignment (with optional override suffix and operator)
   // capturing the double-quoted body. Single-line after the join above.
-  const re = /^\s*SRC_URI(?::[A-Za-z0-9_${}.:-]+)?\s*(?:\+=|=\+|\?\?=|\?=|:=|\.=|=\.|=)\s*"([^"]*)"/gm;
+  const re =
+    /^\s*SRC_URI(?::[A-Za-z0-9_${}.:-]+)?\s*(?:\+=|=\+|\?\?=|\?=|:=|\.=|=\.|=)\s*"([^"]*)"/gm;
   let match: RegExpExecArray | null;
   while ((match = re.exec(joined)) !== null) {
     for (const token of match[1].split(/\s+/)) {
@@ -1016,7 +1092,10 @@ function registerFindRecipeExamples(server: McpServer): void {
         const cap = limit ?? 5;
         const intentTokens = new Set(tokenize(intent));
 
-        const examples = collectCorpusExamples(defaultCorpusRoot(), intentTokens);
+        const examples = collectCorpusExamples(
+          defaultCorpusRoot(),
+          intentTokens,
+        );
         if (typeof inherit === "string" && inherit.trim().length > 0) {
           examples.push(...collectBbExamples(root, inherit.trim()));
         }
