@@ -63,6 +63,8 @@ export interface DocEntry {
   description: string;
   /** GitHub blob SHA — used as the cache key for content. */
   sha: string;
+  /** Origin corpus this entry came from. */
+  source: "peridio-docs" | "yocto-refs";
 }
 
 interface Manifest {
@@ -290,6 +292,7 @@ async function buildManifest(): Promise<Manifest> {
         title,
         description,
         sha: blob.sha,
+        source: "peridio-docs",
       });
     }
     entries.sort((a, b) => a.sitePath.localeCompare(b.sitePath));

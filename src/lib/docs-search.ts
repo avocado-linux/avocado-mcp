@@ -183,6 +183,7 @@ async function getIndex(): Promise<IndexState> {
 }
 
 export interface SearchHit {
+  /** The matched doc. Carries `source` (`peridio-docs` | `yocto-refs`) via DocEntry. */
   entry: DocEntry;
   score: number;
   excerpt: string;
