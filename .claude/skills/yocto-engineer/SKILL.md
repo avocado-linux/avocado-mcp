@@ -146,6 +146,25 @@ Relocate the stragglers to `${libdir}` in `do_install:append` and `rm -rf
 ${D}/work`; route a bundled dep's nonstandard installs (cmake files under
 `${datadir}`, a header in `${libdir}`) into `-dev` explicitly.
 
+## BitBake scarthgap override syntax
+
+Use the colon override forms. The underscore forms were removed in Yocto 3.4
+and are **REJECTED by scarthgap at parse time** - `data_smart.py` raises a hard
+`bb.fatal`, failing the parse outright. They do not merely warn or "deprecate";
+the recipe will not parse.
+
+| Correct (colon) | Rejected by scarthgap (underscore) |
+|---|---|
+| `VAR:append` | `VAR_append` |
+| `VAR:prepend` | `VAR_prepend` |
+| `VAR:remove` | `VAR_remove` |
+| `VAR:class-target` (e.g. `:class-native`) | `VAR_class-target` (e.g. `_class-native`) |
+
+```
+SRC_URI:append = " file://x.patch"   # correct - parses on scarthgap
+SRC_URI_append = " file://x.patch"   # REJECTED - bb.fatal at parse time
+```
+
 ## Preflight (first run only)
 
 Before step 1, call `preflight-recipe-tools`. It verifies the host-side tools
