@@ -1,0 +1,14 @@
+identifier: host-user-contaminated
+literal_message: "%s: %s is owned by uid %d, which is the same as the user running bitbake. This may be due to host contamination"
+severity: warning
+fix: >-
+  Fix the ownership of installed files so they are not owned by the build user.
+  Set explicit ownership in do_install (e.g. via chown to root or by passing the
+  right install flags) instead of inheriting the uid/gid of the user running
+  bitbake. Files outside /home owned by the build user signal host contamination.
+explanation: >-
+  An installed path outside /home is owned by the same uid (or gid) as the user
+  running bitbake. Emitted by package_qa_check_host_user via
+  oe.qa.add_message("host-user-contaminated", ...) in insane.bbclass; the value
+  lives in WARN_QA. A second message variant reports the gid case.
+doc_url: https://docs.yoctoproject.org/ref-manual/qa-checks.html#qa-check-host-user-contaminated

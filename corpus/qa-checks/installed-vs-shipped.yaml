@@ -1,0 +1,12 @@
+identifier: installed-vs-shipped
+literal_message: "%s: Files/directories were installed but not shipped in any package"
+severity: error
+fix: >-
+  Account for every file produced by do_install. Either add the orphaned files
+  to FILES for the package that should ship them (e.g. FILES:${PN} for the main
+  package), or delete them at the end of do_install if no package needs them.
+explanation: >-
+  Files were placed into the install tree by do_install but no FILES entry
+  claims them, so they cannot reach an image. Literal message from
+  qa-checks.rst (installed-vs-shipped); the value lives in ERROR_QA.
+doc_url: https://docs.yoctoproject.org/ref-manual/qa-checks.html#qa-check-installed-vs-shipped

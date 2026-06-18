@@ -1,0 +1,14 @@
+identifier: build-deps
+literal_message: "%s rdepends on %s, but it isn't a build dependency, missing %s in DEPENDS or PACKAGECONFIG?"
+severity: warning
+fix: >-
+  Add an explicit build dependency for the package that the runtime dependency
+  resolves to. Put the providing recipe in DEPENDS (or enable the relevant
+  PACKAGECONFIG) so the build system can guarantee it is built. The runtime link
+  is usually added automatically at packaging time without a matching DEPENDS.
+explanation: >-
+  A runtime dependency exists between two packages but nothing in the recipe
+  ensures the dependency is built. Emitted by package_qa_check_rdepends via
+  oe.qa.handle_error("build-deps", ...) in insane.bbclass; the value lives in
+  WARN_QA.
+doc_url: https://docs.yoctoproject.org/ref-manual/qa-checks.html#qa-check-build-deps

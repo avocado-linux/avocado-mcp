@@ -1,0 +1,14 @@
+identifier: already-stripped
+literal_message: "File '%s' from %s was already stripped, this will prevent future debugging!"
+severity: error
+fix: >-
+  Disable upstream stripping so the build system can extract debug symbols into
+  the -dbg package itself. Look for "strip"/"STRIP" references or "-s"/"-S"
+  linker options (sometimes via -Wl,) in the build scripts and turn them off,
+  often through a configure option or a patch. The final packaged binaries are
+  still stripped afterwards by OpenEmbedded.
+explanation: >-
+  The produced binaries were stripped before the build system could split out
+  debug symbols, which breaks target debugging through -dbg packages. Literal
+  message from qa-checks.rst (already-stripped); the value lives in ERROR_QA.
+doc_url: https://docs.yoctoproject.org/ref-manual/qa-checks.html#qa-check-already-stripped

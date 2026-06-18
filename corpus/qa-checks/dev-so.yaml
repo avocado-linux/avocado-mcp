@@ -1,0 +1,12 @@
+identifier: dev-so
+literal_message: "non -dev/-dbg/nativesdk- package %s contains symlink .so '%s'"
+severity: error
+fix: >-
+  Move the development symlink .so file into the -dev package. This usually
+  happens when FILES adds "*.so*" rather than "*.so.*" to a runtime package.
+  Adjust FILES (and possibly PACKAGES) so the unversioned .so symlink lands in
+  an appropriate -dev package, e.g. FILES:${PN}-dev += "${libdir}/libfoo.so".
+explanation: >-
+  Symlink .so files are for development only and belong in the -dev package.
+  Emitted by package_qa_check_dev via oe.qa.add_message in insane.bbclass.
+doc_url: https://docs.yoctoproject.org/ref-manual/qa-checks.html#qa-check-dev-so

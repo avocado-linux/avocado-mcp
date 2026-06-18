@@ -1,0 +1,13 @@
+identifier: textrel
+literal_message: "%s: ELF binary %s has relocations in .text"
+severity: warning
+fix: >-
+  Add -fPIC (or -fpic) to the compiler command line so the ELF binary is built
+  as position-independent code and no longer carries .text relocations. For a
+  build that honours CFLAGS, append it in the recipe, e.g.
+  CFLAGS:append = " -fPIC ".
+explanation: >-
+  The ELF binary contains relocations in its .text section, which costs runtime
+  performance. Emitted by package_qa_textrel via oe.qa.add_message in
+  insane.bbclass.
+doc_url: https://docs.yoctoproject.org/ref-manual/qa-checks.html#qa-check-textrel

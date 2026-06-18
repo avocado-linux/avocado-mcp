@@ -1,0 +1,14 @@
+identifier: rpaths
+literal_message: "package %s contains bad RPATH %s in file %s"
+severity: error
+fix: >-
+  Remove build-system paths (such as TMPDIR) from the binary's RPATH. Check the
+  do_compile log for bad -rpath options being passed to the linker. Many build
+  systems expose a configure option to disable rpath usage entirely; otherwise
+  patch the build scripts to stop embedding the host path.
+explanation: >-
+  The binary embeds dynamic library load paths (RPATH) pointing at build-system
+  directories like TMPDIR, which are wrong for the target and a potential
+  security issue. Emitted by package_qa_check_rpath via oe.qa.add_message in
+  insane.bbclass.
+doc_url: https://docs.yoctoproject.org/ref-manual/qa-checks.html#qa-check-rpaths

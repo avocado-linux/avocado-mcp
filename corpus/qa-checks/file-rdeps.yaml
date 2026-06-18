@@ -1,0 +1,15 @@
+identifier: file-rdeps
+literal_message: "%s contained in package %s requires %s, but no providers found in RDEPENDS:%s?"
+severity: error
+fix: >-
+  Declare the missing runtime dependency. A file in the package needs another
+  file (interpreter, shared object, or executable) at runtime, but no RDEPENDS
+  entry provides it. Add the providing package to RDEPENDS:${PN} (or the
+  affected sub-package) in the recipe.
+explanation: >-
+  A file-level runtime requirement was detected with no corresponding RDEPENDS
+  entry. Emitted by package_qa_check_rdepends via
+  oe.qa.handle_error("file-rdeps", ...) in insane.bbclass; the value lives in
+  ERROR_QA. Substituted for the suggested rdepends identifier, which does not
+  exist verbatim in scarthgap.
+doc_url: https://docs.yoctoproject.org/ref-manual/qa-checks.html#qa-check-file-rdeps

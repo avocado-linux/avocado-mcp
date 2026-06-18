@@ -1,0 +1,13 @@
+identifier: files-invalid
+literal_message: "FILES variable for package %s contains '//' which is invalid. Attempting to fix this but you should correct the metadata."
+severity: warning
+fix: >-
+  Remove the doubled slash from the FILES value. The string "//" is invalid in a
+  Unix path; collapse every occurrence in the package's FILES variable to a
+  single "/".
+explanation: >-
+  A FILES entry contains "//", which is an invalid Unix path. The build system
+  fixes it automatically but the metadata should be corrected. Literal message
+  from qa-checks.rst (files-invalid); the value lives in WARN_QA. Substituted for
+  the suggested files-invalid-uid identifier, which does not exist in scarthgap.
+doc_url: https://docs.yoctoproject.org/ref-manual/qa-checks.html#qa-check-files-invalid

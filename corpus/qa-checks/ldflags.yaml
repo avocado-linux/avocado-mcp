@@ -1,0 +1,13 @@
+identifier: ldflags
+literal_message: "File %s in package %s doesn't have GNU_HASH (didn't pass LDFLAGS?)"
+severity: error
+fix: >-
+  Ensure LDFLAGS reaches the linker so binaries are built with the GNU hash
+  style. The build system's LDFLAGS already carries -Wl,--hash-style=gnu (from
+  TUNE_LDARGS); the recipe must not drop or override it. When a build system
+  ignores LDFLAGS, pass them through explicitly, e.g. TARGET_CC_ARCH += "${LDFLAGS}".
+explanation: >-
+  Binaries produced by the recipe were not linked with the LDFLAGS supplied by
+  the build system, so they lack the GNU_HASH section. Emitted by
+  package_qa_hash_style via oe.qa.add_message in insane.bbclass.
+doc_url: https://docs.yoctoproject.org/ref-manual/qa-checks.html#qa-check-ldflags
