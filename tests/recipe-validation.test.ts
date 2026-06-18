@@ -88,4 +88,67 @@ describe("validate-recipe-parse", () => {
       else process.env.BUILDDIR = savedBuilddir;
     }
   });
+
+  it("warns about a git fetcher missing ;branch= even when bitbake is absent", async () => {
+    // SRC_URI checks are static text checks on the recipe content; they must
+    // surface regardless of bitbake availability. Point PATH at an empty dir so
+    // bitbake cannot resolve, then assert the missing-branch warning still lands
+    // in warnings[].
+    const recipe = writeRecipe(
+      "foo_1.0.bb",
+      'SRC_URI = "git://github.com/org/repo;protocol=https"\n',
+    );
+    const savedPath = process.env.PATH;
+    const savedBuilddir = process.env.BUILDDIR;
+    process.env.PATH = tmpDir;
+    process.env.BUILDDIR = tmpDir;
+    try {
+      const result = await callTool("validate-recipe-parse", { recipe });
+
+      expect(result.isError).not.toBe(true);
+      const out = result.structuredContent ?? {};
+      const warnings = out.warnings as string[];
+      expect(Array.isArray(warnings)).toBe(true);
+      const branchWarning = warnings.find((w) =>
+        w.toLowerCase().includes("branch"),
+      );
+      expect(branchWarning).toBeDefined();
+      expect(branchWarning).toContain(";branch=");
+    } finally {
+      if (savedPath === undefined) delete process.env.PATH;
+      else process.env.PATH = savedPath;
+      if (savedBuilddir === undefined) delete process.env.BUILDDIR;
+      else process.env.BUILDDIR = savedBuilddir;
+    }
+  });
+
+  it("emits no scheme warning for an https-only recipe", async () => {
+    // An https git fetcher with a branch flag and an https file source must not
+    // trigger either the missing-branch or the non-HTTPS-scheme warning.
+    const recipe = writeRecipe(
+      "foo_1.0.bb",
+      'SRC_URI = "git://github.com/org/repo;protocol=https;branch=main \\\n' +
+        '           https://example.com/patch.patch"\n',
+    );
+    const savedPath = process.env.PATH;
+    const savedBuilddir = process.env.BUILDDIR;
+    process.env.PATH = tmpDir;
+    process.env.BUILDDIR = tmpDir;
+    try {
+      const result = await callTool("validate-recipe-parse", { recipe });
+
+      expect(result.isError).not.toBe(true);
+      const out = result.structuredContent ?? {};
+      const warnings = (out.warnings as string[]) ?? [];
+      const schemeWarning = warnings.find((w) =>
+        w.toLowerCase().includes("https"),
+      );
+      expect(schemeWarning).toBeUndefined();
+    } finally {
+      if (savedPath === undefined) delete process.env.PATH;
+      else process.env.PATH = savedPath;
+      if (savedBuilddir === undefined) delete process.env.BUILDDIR;
+      else process.env.BUILDDIR = savedBuilddir;
+    }
+  });
 });

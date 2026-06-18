@@ -456,6 +456,85 @@ function recipeNameFromPath(recipePath: string): string {
 }
 
 /**
+ * Extract the individual SRC_URI fetcher entries from recipe text. Handles the
+ * three shapes the linter cares about: `SRC_URI = "..."`, `SRC_URI:append`
+ * (and any override/operator form like `SRC_URI:append:class-target += "..."`),
+ * and backslash-continued multi-line values. This is a best-effort static scan,
+ * not a bitbake parse: it concatenates every quoted SRC_URI assignment body and
+ * splits the result on whitespace into URI tokens. Tokens with no `://` scheme
+ * (bare `file` names, expansion fragments) are dropped.
+ */
+function parseSrcUriEntries(recipeText: string): string[] {
+  // Join backslash-continued lines so a multi-line SRC_URI value is one string.
+  const joined = recipeText.replace(/\\\r?\n/g, " ");
+  const entries: string[] = [];
+  // Match any SRC_URI assignment (with optional override suffix and operator)
+  // capturing the double-quoted body. Single-line after the join above.
+  const re = /^\s*SRC_URI(?::[A-Za-z0-9_${}.:-]+)?\s*(?:\+=|=\+|\?\?=|\?=|:=|\.=|=\.|=)\s*"([^"]*)"/gm;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(joined)) !== null) {
+    for (const token of match[1].split(/\s+/)) {
+      const trimmed = token.trim();
+      if (trimmed.length > 0 && trimmed.includes("://")) {
+        entries.push(trimmed);
+      }
+    }
+  }
+  return entries;
+}
+
+/**
+ * Run the SRC_URI fetcher-syntax checks that oelint-adv's `src-uri` lints do
+ * NOT cover: a git fetcher missing both `;branch=` and `;nobranch=1`, and a
+ * remote source on a non-HTTPS scheme. Each finding is a one-line warning
+ * string. Pure text analysis, so it runs regardless of bitbake availability.
+ */
+function checkSrcUriSyntax(recipeText: string): string[] {
+  const warnings: string[] = [];
+  for (const entry of parseSrcUriEntries(recipeText)) {
+    const scheme = entry.slice(0, entry.indexOf("://")).toLowerCase();
+    const params = entry.split(";").slice(1);
+    const hasParam = (key: string): boolean =>
+      params.some((p) => p.trim().toLowerCase().startsWith(`${key}=`));
+
+    // 1. git fetcher must pin a branch (scarthgap default); `;nobranch=1` is the
+    //    explicit opt-out and is equally valid, so only warn when neither is set.
+    if (scheme === "git" || scheme === "gitsm") {
+      const hasBranch = hasParam("branch");
+      const hasNobranch = params.some(
+        (p) => p.trim().toLowerCase() === "nobranch=1",
+      );
+      if (!hasBranch && !hasNobranch) {
+        warnings.push(
+          `SRC_URI git fetcher "${entry}" is missing a ;branch= parameter ` +
+            `(scarthgap's git fetcher requires it; its absence fails do_fetch). ` +
+            `Add ;branch=<name>, or ;nobranch=1 if the revision is not on a branch.`,
+        );
+      }
+    }
+
+    // 2. Remote sources should use https. A plain http:// or ftp:// source, or a
+    //    git:///gitsm:// fetcher without protocol=https, is insecure. (file://
+    //    is local, not remote, so it is exempt.)
+    if (scheme === "http" || scheme === "ftp") {
+      warnings.push(
+        `SRC_URI entry "${entry}" uses the insecure ${scheme}:// scheme; ` +
+          `prefer https:// for remote sources.`,
+      );
+    } else if (
+      (scheme === "git" || scheme === "gitsm") &&
+      !params.some((p) => p.trim().toLowerCase() === "protocol=https")
+    ) {
+      warnings.push(
+        `SRC_URI git fetcher "${entry}" does not set protocol=https; ` +
+          `prefer https for remote git sources.`,
+      );
+    }
+  }
+  return warnings;
+}
+
+/**
  * Parse-only correctness gate: run `bitbake -e <PN>` and report whether the
  * recipe parses. Returns the structured `{ ok, errors, warnings }` contract.
  * Outside a build environment (no bitbake on PATH) it returns a structured
@@ -496,6 +575,17 @@ function registerValidateRecipeParse(server: McpServer): void {
     async ({ recipe, pn }) => {
       const name = pn ?? recipeNameFromPath(recipe);
 
+      // SRC_URI fetcher-syntax checks are a static text pass over the recipe
+      // file: they run regardless of bitbake availability so the warnings
+      // surface even outside a build environment. A missing/unreadable file
+      // yields no SRC_URI warnings rather than failing the gate.
+      let srcUriWarnings: string[] = [];
+      try {
+        srcUriWarnings = checkSrcUriSyntax(readFileSync(recipe, "utf8"));
+      } catch {
+        srcUriWarnings = [];
+      }
+
       if (!isBitbakeAvailable()) {
         const hint = "kas shell meta-avocado/kas/machine/qemuarm64.yml";
         const message =
@@ -507,7 +597,12 @@ function registerValidateRecipeParse(server: McpServer): void {
               text: `# validate-recipe-parse\n\n❌ ${message}\n\n    ${hint}\n`,
             },
           ],
-          structuredContent: { ok: false, errors: [message], warnings: [], hint },
+          structuredContent: {
+            ok: false,
+            errors: [message],
+            warnings: srcUriWarnings,
+            hint,
+          },
         };
       }
 
@@ -532,7 +627,11 @@ function registerValidateRecipeParse(server: McpServer): void {
               text: `# validate-recipe-parse: \`${name}\`\n\n❌ parse failed\n\n\`\`\`\n${message}\n\`\`\`\n`,
             },
           ],
-          structuredContent: { ok: false, errors: [message], warnings: [] },
+          structuredContent: {
+            ok: false,
+            errors: [message],
+            warnings: srcUriWarnings,
+          },
         };
       }
 
@@ -540,13 +639,26 @@ function registerValidateRecipeParse(server: McpServer): void {
         content: [
           {
             type: "text",
-            text: `# validate-recipe-parse: \`${name}\`\n\n✅ recipe parses cleanly\n`,
+            text: renderValidateParse(name, srcUriWarnings),
           },
         ],
-        structuredContent: { ok: true, errors: [], warnings: [] },
+        structuredContent: { ok: true, errors: [], warnings: srcUriWarnings },
       };
     },
   );
+}
+
+/**
+ * Render the validate-recipe-parse success message: the recipe parses, plus any
+ * SRC_URI fetcher-syntax warnings the static pass surfaced.
+ */
+function renderValidateParse(name: string, warnings: string[]): string {
+  let out = `# validate-recipe-parse: \`${name}\`\n\n✅ recipe parses cleanly\n`;
+  if (warnings.length > 0) {
+    out += `\n**SRC_URI warnings:**\n\n`;
+    for (const w of warnings) out += `- ${w}\n`;
+  }
+  return out;
 }
 
 /**
