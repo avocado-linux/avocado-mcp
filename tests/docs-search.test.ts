@@ -49,6 +49,18 @@ describe("searchDocs source tagging", () => {
     // Confirm we matched the seeded entry, not some unrelated default.
     expect(hit.entry.sitePath).toBe("developer-reference/seeding-var");
   });
+
+  it("returns a yocto-refs hit for a Yocto-flavored query", async () => {
+    // SRC_URI lives in the vendored variables.rst glossary, not in the mocked
+    // peridio corpus. A hit tagged 'yocto-refs' proves buildIndex() merged the
+    // local corpus into the scored index alongside the GitHub-backed list.
+    const hits = await searchDocs("SRC_URI fetcher git branch");
+
+    const yoctoHits = hits.filter((h) => h.entry.source === "yocto-refs");
+    expect(yoctoHits.length).toBeGreaterThan(0);
+    // The yocto-refs entry comes from the local corpus: no GitHub blob SHA.
+    expect(yoctoHits[0].entry.sha).toBe("");
+  });
 });
 
 describe("loadYoctoRefsEntries", () => {

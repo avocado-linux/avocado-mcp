@@ -411,6 +411,27 @@ async function buildIndex(): Promise<IndexState> {
     vecs.push({ entry: d, tf, length, body });
   }
 
+  // Local vendored Yocto/BitBake corpus. These entries carry their body inline
+  // (no GitHub blob SHA, no network fetch) — use it directly for tokenization
+  // and excerpts. The GitHub-backed loop above is untouched.
+  for (const { entry, body } of loadYoctoRefsEntries()) {
+    const tf = new Map<string, number>();
+    let length = 0;
+    length += addWeighted(tf, entry.title, TITLE_WEIGHT);
+    length += addWeighted(tf, entry.description, DESC_WEIGHT);
+    length += addWeighted(tf, entry.sitePath, PATH_WEIGHT);
+    length += addWeighted(tf, body, BODY_WEIGHT);
+
+    const seen = new Set<string>();
+    for (const tok of tf.keys()) {
+      if (!seen.has(tok)) {
+        df.set(tok, (df.get(tok) ?? 0) + 1);
+        seen.add(tok);
+      }
+    }
+    vecs.push({ entry, tf, length, body });
+  }
+
   const total = vecs.reduce((acc, v) => acc + v.length, 0);
   const avgLength = vecs.length > 0 ? total / vecs.length : 0;
   return { indexedAt: Date.now(), docs: vecs, df, avgLength };

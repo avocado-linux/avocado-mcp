@@ -18,6 +18,12 @@ export function registerDocsTools(server: McpServer): void {
     repoPath: z.string(),
     section: SECTION_ENUM,
     description: z.string().optional(),
+    source: z
+      .enum(["peridio-docs", "yocto-refs"])
+      .optional()
+      .describe(
+        "Which corpus the result came from: 'peridio-docs' (docs.peridio.com) or 'yocto-refs' (vendored Yocto/BitBake reference).",
+      ),
   });
 
   server.registerTool(
@@ -148,7 +154,13 @@ export function registerDocsTools(server: McpServer): void {
           out += `${h.entry.url}  •  section: \`${h.entry.section}\`  •  score: ${h.score.toFixed(2)}\n\n`;
           if (h.entry.description) out += `_${h.entry.description}_\n\n`;
           if (h.excerpt) out += `> ${h.excerpt}\n\n`;
-          out += `Fetch full content with \`get-doc({ slug: "${h.entry.sitePath}" })\`.\n\n`;
+          if (h.entry.source === "yocto-refs") {
+            // Vendored Yocto reference sections are search-only; get-doc serves
+            // peridio-docs slugs, so point at the upstream page instead.
+            out += `Vendored Yocto reference; see ${h.entry.url}.\n\n`;
+          } else {
+            out += `Fetch full content with \`get-doc({ slug: "${h.entry.sitePath}" })\`.\n\n`;
+          }
         }
         return {
           content: [{ type: "text", text: out }],
