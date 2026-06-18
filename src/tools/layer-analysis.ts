@@ -621,6 +621,7 @@ interface CoverageResult {
 function runCoverage(
   composition: string,
   workspaceRoot: string,
+  auditRoot = "meta-avocado",
 ): CoverageResult {
   const { presentLayerDirs, presentCollections, localConfBbmask } =
     resolveKasComposition(composition, workspaceRoot);
@@ -642,11 +643,11 @@ function runCoverage(
     presentDirSet,
   };
 
-  // Audit target layers = present layer dirs under <root>/meta-avocado/.
-  const metaAvocadoRoot = resolve(workspaceRoot, "meta-avocado");
+  // Audit target layers = present layer dirs under the audit root.
+  const auditRootAbs = resolve(workspaceRoot, auditRoot);
   const findings: CoverageFinding[] = [];
   for (const dir of presentLayerDirs) {
-    if (!dir.startsWith(metaAvocadoRoot)) continue;
+    if (!dir.startsWith(auditRootAbs)) continue;
     for (const file of listFiles(dir, [".bb", ".bbappend"])) {
       auditFile(ctx, file, findings);
     }
@@ -689,6 +690,12 @@ export function registerLayerAnalysisTools(server: McpServer): void {
           .describe(
             "Workspace root holding meta-avocado/ as a sibling. Defaults to avocado-mcp's parent directory.",
           ),
+        audit_root: z
+          .string()
+          .optional()
+          .describe(
+            "Subdirectory of the workspace to audit (relative to workspace_root). Defaults to 'meta-avocado'.",
+          ),
       },
       outputSchema: {
         clean: z.boolean(),
@@ -704,14 +711,14 @@ export function registerLayerAnalysisTools(server: McpServer): void {
         openWorldHint: false,
       },
     },
-    async ({ composition, workspace_root }) => {
+    async ({ composition, workspace_root, audit_root }) => {
       try {
         const root = workspace_root
           ? isAbsolute(workspace_root)
             ? workspace_root
             : resolve(defaultWorkspaceRoot(), workspace_root)
           : defaultWorkspaceRoot();
-        const result = runCoverage(composition, root);
+        const result = runCoverage(composition, root, audit_root);
         return {
           content: [
             { type: "text", text: renderCoverage(composition, result) },

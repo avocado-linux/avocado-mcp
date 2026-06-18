@@ -65,6 +65,11 @@ export interface DocEntry {
   sha: string;
   /** Origin corpus this entry came from. */
   source: "peridio-docs" | "yocto-refs";
+  /**
+   * Whether this entry can be fetched by `get-doc`. Peridio-docs entries are
+   * fetchable; yocto-refs entries are search-only (no blob SHA, no get-doc slug).
+   */
+  fetchable: boolean;
 }
 
 interface Manifest {
@@ -293,6 +298,7 @@ async function buildManifest(): Promise<Manifest> {
         description,
         sha: blob.sha,
         source: "peridio-docs",
+        fetchable: true,
       });
     }
     entries.sort((a, b) => a.sitePath.localeCompare(b.sitePath));

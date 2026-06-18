@@ -141,7 +141,10 @@ describe("check-layer-coverage", () => {
       join(audited, "conf", "layer.conf"),
       `BBFILE_COLLECTIONS += "avocado-distro"\n`,
     );
-    write(join(audited, "recipes-x", "foo", "foo_%.bbappend"), `# extend foo\n`);
+    write(
+      join(audited, "recipes-x", "foo", "foo_%.bbappend"),
+      `# extend foo\n`,
+    );
     // Present base layer providing foo.
     const base = makeLayer(tmp, "meta-base", "base");
     write(join(base, "recipes-x", "foo", "foo_1.0.bb"), "");
@@ -172,9 +175,7 @@ describe("check-layer-coverage", () => {
     const out = result.structuredContent ?? {};
     const findings = (out.findings ?? []) as Finding[];
     expect(
-      findings.find(
-        (f) => f.kind === "dangling_append" && f.target === "foo",
-      ),
+      findings.find((f) => f.kind === "dangling_append" && f.target === "foo"),
     ).toBeUndefined();
   });
 
@@ -277,9 +278,7 @@ describe("check-layer-coverage", () => {
     const absentFindings = ((absent.structuredContent ?? {}).findings ??
       []) as Finding[];
     // Gated out: no finding for the dynamic-layers recipe.
-    expect(
-      absentFindings.find((f) => f.target === "qmake5"),
-    ).toBeUndefined();
+    expect(absentFindings.find((f) => f.target === "qmake5")).toBeUndefined();
 
     // Now make a PRESENT layer declare the qt5-layer collection so the recipe
     // is audited normally.
@@ -390,8 +389,7 @@ describe("missing_require resolution", () => {
     expect(
       findings.find(
         (f) =>
-          f.kind === "missing_require" &&
-          f.target === "recipes-x/absent.inc",
+          f.kind === "missing_require" && f.target === "recipes-x/absent.inc",
       ),
     ).toBeDefined();
   });
@@ -431,95 +429,98 @@ describe("find-recipe-providers", () => {
     expect((none.structuredContent ?? {}).found).toBe(false);
   });
 
-describe("find-recipe-providers PROVIDES/RPROVIDES/BBCLASSEXTEND resolution", () => {
-  it("finds a layer via a PROVIDES assignment, not just the filename PN", async () => {
-    // A kernel recipe whose filename PN is linux-avocado but which provides
-    // virtual/kernel via a PROVIDES line.
-    const vendor = makeLayer(tmp, "meta-bsp", "bsp");
-    write(
-      join(vendor, "recipes-kernel", "linux", "linux-avocado_6.6.bb"),
-      `SUMMARY = "kernel"\nPROVIDES = "virtual/kernel"\n`,
-    );
+  describe("find-recipe-providers PROVIDES/RPROVIDES/BBCLASSEXTEND resolution", () => {
+    it("finds a layer via a PROVIDES assignment, not just the filename PN", async () => {
+      // A kernel recipe whose filename PN is linux-avocado but which provides
+      // virtual/kernel via a PROVIDES line.
+      const vendor = makeLayer(tmp, "meta-bsp", "bsp");
+      write(
+        join(vendor, "recipes-kernel", "linux", "linux-avocado_6.6.bb"),
+        `SUMMARY = "kernel"\nPROVIDES = "virtual/kernel"\n`,
+      );
 
-    const result = await callTool("find-recipe-providers", {
-      name: "virtual/kernel",
-      kind: "recipe",
-      workspace_root: tmp,
+      const result = await callTool("find-recipe-providers", {
+        name: "virtual/kernel",
+        kind: "recipe",
+        workspace_root: tmp,
+      });
+      const out = result.structuredContent ?? {};
+      expect(out.found).toBe(true);
+      const providers = (out.providers ?? []) as Array<{ layer: string }>;
+      expect(providers.some((p) => p.layer === "meta-bsp")).toBe(true);
     });
-    const out = result.structuredContent ?? {};
-    expect(out.found).toBe(true);
-    const providers = (out.providers ?? []) as Array<{ layer: string }>;
-    expect(providers.some((p) => p.layer === "meta-bsp")).toBe(true);
+
+    it("finds a layer via an RPROVIDES assignment", async () => {
+      const vendor = makeLayer(tmp, "meta-rprov", "rprov");
+      write(
+        join(vendor, "recipes-x", "thing", "thing_1.0.bb"),
+        `RPROVIDES:\${PN} = "thing-runtime"\n`,
+      );
+
+      const result = await callTool("find-recipe-providers", {
+        name: "thing-runtime",
+        kind: "recipe",
+        workspace_root: tmp,
+      });
+      const out = result.structuredContent ?? {};
+      expect(out.found).toBe(true);
+      const providers = (out.providers ?? []) as Array<{ layer: string }>;
+      expect(providers.some((p) => p.layer === "meta-rprov")).toBe(true);
+    });
+
+    it("finds the native variant derived from BBCLASSEXTEND", async () => {
+      const vendor = makeLayer(tmp, "meta-tools", "tools");
+      write(
+        join(vendor, "recipes-devtools", "flatbuffers", "flatbuffers_2.0.bb"),
+        `SUMMARY = "flatbuffers"\nBBCLASSEXTEND = "native nativesdk"\n`,
+      );
+
+      const nativeResult = await callTool("find-recipe-providers", {
+        name: "flatbuffers-native",
+        kind: "recipe",
+        workspace_root: tmp,
+      });
+      const nativeOut = nativeResult.structuredContent ?? {};
+      expect(nativeOut.found).toBe(true);
+      const nativeProviders = (nativeOut.providers ?? []) as Array<{
+        layer: string;
+      }>;
+      expect(nativeProviders.some((p) => p.layer === "meta-tools")).toBe(true);
+
+      const sdkResult = await callTool("find-recipe-providers", {
+        name: "flatbuffers-nativesdk",
+        kind: "recipe",
+        workspace_root: tmp,
+      });
+      expect((sdkResult.structuredContent ?? {}).found).toBe(true);
+
+      // The base PN is still found.
+      const baseResult = await callTool("find-recipe-providers", {
+        name: "flatbuffers",
+        kind: "recipe",
+        workspace_root: tmp,
+      });
+      expect((baseResult.structuredContent ?? {}).found).toBe(true);
+    });
+
+    it("still finds a recipe by filename PN when it has no PROVIDES line", async () => {
+      const vendor = makeLayer(tmp, "meta-core", "core");
+      write(
+        join(vendor, "recipes-core", "zlib", "zlib_1.3.bb"),
+        `SUMMARY = "zlib"\n`,
+      );
+
+      const result = await callTool("find-recipe-providers", {
+        name: "zlib",
+        kind: "recipe",
+        workspace_root: tmp,
+      });
+      const out = result.structuredContent ?? {};
+      expect(out.found).toBe(true);
+      const providers = (out.providers ?? []) as Array<{ layer: string }>;
+      expect(providers.some((p) => p.layer === "meta-core")).toBe(true);
+    });
   });
-
-  it("finds a layer via an RPROVIDES assignment", async () => {
-    const vendor = makeLayer(tmp, "meta-rprov", "rprov");
-    write(
-      join(vendor, "recipes-x", "thing", "thing_1.0.bb"),
-      `RPROVIDES:\${PN} = "thing-runtime"\n`,
-    );
-
-    const result = await callTool("find-recipe-providers", {
-      name: "thing-runtime",
-      kind: "recipe",
-      workspace_root: tmp,
-    });
-    const out = result.structuredContent ?? {};
-    expect(out.found).toBe(true);
-    const providers = (out.providers ?? []) as Array<{ layer: string }>;
-    expect(providers.some((p) => p.layer === "meta-rprov")).toBe(true);
-  });
-
-  it("finds the native variant derived from BBCLASSEXTEND", async () => {
-    const vendor = makeLayer(tmp, "meta-tools", "tools");
-    write(
-      join(vendor, "recipes-devtools", "flatbuffers", "flatbuffers_2.0.bb"),
-      `SUMMARY = "flatbuffers"\nBBCLASSEXTEND = "native nativesdk"\n`,
-    );
-
-    const nativeResult = await callTool("find-recipe-providers", {
-      name: "flatbuffers-native",
-      kind: "recipe",
-      workspace_root: tmp,
-    });
-    const nativeOut = nativeResult.structuredContent ?? {};
-    expect(nativeOut.found).toBe(true);
-    const nativeProviders = (nativeOut.providers ?? []) as Array<{
-      layer: string;
-    }>;
-    expect(nativeProviders.some((p) => p.layer === "meta-tools")).toBe(true);
-
-    const sdkResult = await callTool("find-recipe-providers", {
-      name: "flatbuffers-nativesdk",
-      kind: "recipe",
-      workspace_root: tmp,
-    });
-    expect((sdkResult.structuredContent ?? {}).found).toBe(true);
-
-    // The base PN is still found.
-    const baseResult = await callTool("find-recipe-providers", {
-      name: "flatbuffers",
-      kind: "recipe",
-      workspace_root: tmp,
-    });
-    expect((baseResult.structuredContent ?? {}).found).toBe(true);
-  });
-
-  it("still finds a recipe by filename PN when it has no PROVIDES line", async () => {
-    const vendor = makeLayer(tmp, "meta-core", "core");
-    write(join(vendor, "recipes-core", "zlib", "zlib_1.3.bb"), `SUMMARY = "zlib"\n`);
-
-    const result = await callTool("find-recipe-providers", {
-      name: "zlib",
-      kind: "recipe",
-      workspace_root: tmp,
-    });
-    const out = result.structuredContent ?? {};
-    expect(out.found).toBe(true);
-    const providers = (out.providers ?? []) as Array<{ layer: string }>;
-    expect(providers.some((p) => p.layer === "meta-core")).toBe(true);
-  });
-});
 });
 
 describe("kas composition resolution", () => {
@@ -648,7 +649,9 @@ describe("find-recipe-examples multi-layer workspace scan", () => {
     expect(examples.length).toBe(2);
     const paths = examples.map((e) => e.path);
     expect(
-      paths.some((p) => p.includes("meta-avocado") && p.endsWith("alpha_1.0.bb")),
+      paths.some(
+        (p) => p.includes("meta-avocado") && p.endsWith("alpha_1.0.bb"),
+      ),
     ).toBe(true);
     expect(
       paths.some((p) => p.includes("meta-extra") && p.endsWith("beta_2.0.bb")),

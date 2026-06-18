@@ -5,6 +5,27 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { RepoClient } from "../src/lib/repo-client.js";
 import { registerRecipeTools } from "../src/tools/recipe.js";
 
+// Top-level mock so execFileSync is interceptable in stage-recipe-to-feed tests.
+// The default mock throws ENOENT (script absent), exercising the catch path.
+// Individual tests override with mockImplementationOnce for the success path.
+vi.mock("node:child_process", async (importOriginal) => {
+  const real = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...real,
+    execFileSync: vi.fn(() => {
+      const err = Object.assign(
+        new Error("ENOENT: no such file or directory"),
+        {
+          code: "ENOENT",
+          stdout: "",
+          stderr: "",
+        },
+      );
+      throw err;
+    }),
+  };
+});
+
 // Shape of an MCP callTool result. Tools in this server return both a
 // `content` block (human-readable) and `structuredContent` (typed payload),
 // plus an optional `isError` flag for *handled* error returns. A thrown,
@@ -167,5 +188,73 @@ describe("scaffold-recipe", () => {
     const out = result.structuredContent ?? {};
     expect(out.error).toBe("build environment not initialized");
     expect(out.hint).toBe("kas shell meta-avocado/kas/machine/qemuarm64.yml");
+  });
+});
+
+describe("introspect-recipe", () => {
+  let savedBuilddir: string | undefined;
+
+  beforeEach(() => {
+    savedBuilddir = process.env.BUILDDIR;
+    delete process.env.BUILDDIR;
+  });
+
+  afterEach(() => {
+    if (savedBuilddir === undefined) {
+      delete process.env.BUILDDIR;
+    } else {
+      process.env.BUILDDIR = savedBuilddir;
+    }
+  });
+
+  it("returns env_active: false and a hint when BUILDDIR is unset", async () => {
+    const result = await callTool("introspect-recipe", {
+      recipe: "zlib",
+      variables: ["DEPENDS", "RDEPENDS"],
+    });
+
+    expect(result.isError).not.toBe(true);
+    const out = result.structuredContent ?? {};
+    expect(out.env_active).toBe(false);
+    expect(typeof out.error).toBe("string");
+    expect(String(out.error).length).toBeGreaterThan(0);
+    expect(typeof out.hint).toBe("string");
+  });
+});
+
+describe("stage-recipe-to-feed", () => {
+  it("propagates sdk_pass and boot_pass from parseFeedVerdict on exit-0 stdout", async () => {
+    // Override the top-level mock for this one call: exit 0 with mixed output.
+    // Before finding #2 the success path hardcoded sdk_pass: true unconditionally.
+    const { execFileSync } = await import("node:child_process");
+    vi.mocked(execFileSync).mockImplementationOnce(
+      () => "SDK PASS\nBOOT FAIL\n",
+    );
+
+    const result = await callTool("stage-recipe-to-feed", {
+      package: "zlib",
+      lib_file: "libz.so",
+    });
+
+    expect(result.isError).not.toBe(true);
+    const out = result.structuredContent ?? {};
+    expect(out.sdk_pass).toBe(true);
+    expect(out.boot_pass).toBe(false);
+    expect(typeof out.feed_url).toBe("string");
+  });
+
+  it("returns sdk_pass and boot_pass as false when the script throws ENOENT", async () => {
+    // Default top-level mock throws ENOENT — the catch block must return
+    // structured output with booleans, not isError: true.
+    const result = await callTool("stage-recipe-to-feed", {
+      package: "zlib",
+      lib_file: "libz.so",
+    });
+
+    expect(result.isError).not.toBe(true);
+    const out = result.structuredContent ?? {};
+    expect(out.sdk_pass).toBe(false);
+    expect(out.boot_pass).toBe(false);
+    expect(out.feed_url).toBeUndefined();
   });
 });

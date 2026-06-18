@@ -218,6 +218,21 @@ function slugifyHeading(title: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
+/**
+ * Slugify a Yocto glossary term name into the case-preserving anchor Sphinx
+ * emits for `:term:` entries. Sphinx keeps letters, digits, underscores, and
+ * hyphens as-is; everything else (brackets, spaces, dots) becomes a hyphen,
+ * with runs collapsed and leading/trailing hyphens stripped.
+ *
+ * Example: `TUNECONFLICTS[feature]` → `TUNECONFLICTS-feature`
+ */
+function slugifyTerm(title: string): string {
+  return title
+    .replace(/[^A-Za-z0-9_-]+/g, "-")
+    .replace(/-{2,}/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
 interface RawSection {
   title: string;
   body: string;
@@ -231,7 +246,7 @@ interface RawSection {
  */
 function splitGlossary(text: string): RawSection[] {
   const lines = text.split(/\r?\n/);
-  const termRe = /^\s+:term:`([A-Za-z0-9_${}]+)`\s*$/;
+  const termRe = /^\s+:term:`([A-Za-z0-9_${}\[\]-]+)`\s*$/;
   const sections: RawSection[] = [];
   let current: RawSection | null = null;
   for (const line of lines) {
@@ -357,7 +372,7 @@ export function loadYoctoRefsEntries(): YoctoRefsEntry[] {
         file.urlBase === null
           ? `yocto-refs://${file.name}`
           : file.anchorKind === "term"
-            ? `${file.urlBase}#term-${sec.title}`
+            ? `${file.urlBase}#term-${slugifyTerm(sec.title)}`
             : file.anchorKind === "heading"
               ? `${file.urlBase}#${slugifyHeading(sec.title)}`
               : file.urlBase;
@@ -373,6 +388,7 @@ export function loadYoctoRefsEntries(): YoctoRefsEntry[] {
         description: "",
         sha: "",
         source: "yocto-refs",
+        fetchable: false,
       };
       out.push({ entry, body: sec.body });
     }

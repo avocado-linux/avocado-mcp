@@ -1573,6 +1573,8 @@ function renderIntrospect(
 const FEED_URL =
   "https://github.com/avocado-linux/meta-avocado/tree/feed-bringup-zeromq";
 
+const VALIDATE_FEED_SCRIPT = "meta-avocado/scripts/validate-feed-local.sh";
+
 const stageRecipeToFeedResultSchema = {
   sdk_pass: z.boolean(),
   boot_pass: z.boolean(),
@@ -1653,13 +1655,7 @@ function registerStageRecipeToFeed(server: McpServer): void {
         // not interpolated into a shell command line.
         stdout = execFileSync(
           "bash",
-          [
-            "meta-avocado/scripts/validate-feed-local.sh",
-            "-b",
-            "-l",
-            lib_file,
-            pkg,
-          ],
+          [VALIDATE_FEED_SCRIPT, "-b", "-l", lib_file, pkg],
           {
             cwd: root,
             timeout: 300_000,
@@ -1689,9 +1685,10 @@ function registerStageRecipeToFeed(server: McpServer): void {
         };
       }
 
+      const verdict = parseFeedVerdict(stdout);
       const result = {
-        sdk_pass: true,
-        boot_pass: true,
+        sdk_pass: verdict.sdk_pass,
+        boot_pass: verdict.boot_pass,
         qga_output: lastNonEmptyLine(stdout),
         feed_url: FEED_URL,
       };

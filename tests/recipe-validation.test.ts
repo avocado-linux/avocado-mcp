@@ -37,11 +37,15 @@ let client: Client;
 let tmpDir: string;
 
 beforeEach(async () => {
-  const server = new McpServer({ name: "test-recipe-validation", version: "0.0.0" });
+  const server = new McpServer({
+    name: "test-recipe-validation",
+    version: "0.0.0",
+  });
   const repoClient = new RepoClient();
   registerRecipeTools(server, repoClient);
 
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const [clientTransport, serverTransport] =
+    InMemoryTransport.createLinkedPair();
 
   client = new Client({ name: "test-client", version: "0.0.0" });
   await Promise.all([
@@ -94,7 +98,9 @@ describe("validate-recipe-parse", () => {
       expect(out.ok).toBe(false);
       expect(Array.isArray(out.errors)).toBe(true);
       expect((out.errors as string[]).length).toBeGreaterThan(0);
-      expect((out.errors as string[]).join(" ").toLowerCase()).toContain("bitbake");
+      expect((out.errors as string[]).join(" ").toLowerCase()).toContain(
+        "bitbake",
+      );
       expect(out.warnings).toEqual([]);
     } finally {
       if (savedPath === undefined) delete process.env.PATH;
