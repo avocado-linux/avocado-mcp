@@ -823,34 +823,76 @@ function listBbFiles(dir: string): string[] {
 }
 
 /**
- * Collect `.bb` recipe examples from `<root>/meta-avocado/` that `inherit` the
- * given class. The score is fixed at 1: an inherit match is binary, not a
- * keyword overlap. A missing `meta-avocado/` tree yields no examples.
+ * Find every workspace layer dir (one carrying `conf/layer.conf`) up to two
+ * levels under `root`, e.g. `meta-avocado/`, `meta-openembedded/meta-oe/`. A
+ * layer dir can still contain nested layers, so the walk keeps descending until
+ * `maxDepth`. Mirrors `findLayerDirs()` in layer-analysis.ts. A subtree that
+ * cannot be read is skipped silently.
+ */
+function findWorkspaceLayerDirs(root: string, maxDepth: number): string[] {
+  const found: string[] = [];
+  const walk = (dir: string, depth: number): void => {
+    if (existsSync(resolve(dir, "conf", "layer.conf"))) {
+      found.push(dir);
+    }
+    if (depth >= maxDepth) return;
+    let entries: string[];
+    try {
+      entries = readdirSync(dir);
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (entry.startsWith(".")) continue;
+      const full = resolve(dir, entry);
+      let isDir: boolean;
+      try {
+        isDir = statSync(full).isDirectory();
+      } catch {
+        continue;
+      }
+      if (isDir) walk(full, depth + 1);
+    }
+  };
+  walk(root, 0);
+  return found;
+}
+
+/**
+ * Collect `.bb` recipe examples that `inherit` the given class from every
+ * workspace layer (each dir carrying `conf/layer.conf`, up to two levels under
+ * `root` — e.g. meta-avocado, meta-openembedded layers). The score is fixed at
+ * 1: an inherit match is binary, not a keyword overlap. A workspace with no
+ * layers yields no examples.
  */
 function collectBbExamples(
   root: string,
   inheritClass: string,
 ): RecipeExample[] {
-  const metaDir = resolve(root, "meta-avocado");
-  const files = listBbFiles(metaDir);
+  const layerDirs = findWorkspaceLayerDirs(root, 2);
   const needle = new RegExp(
     `^\\s*inherit\\b[^\\n]*\\b${escapeRegExp(inheritClass)}\\b`,
     "m",
   );
   const examples: RecipeExample[] = [];
-  for (const file of files) {
-    let content: string;
-    try {
-      content = readFileSync(file, "utf8");
-    } catch {
-      continue;
-    }
-    if (needle.test(content)) {
-      examples.push({
-        path: relative(root, file),
-        content,
-        score: 1,
-      });
+  const seen = new Set<string>();
+  for (const layerDir of layerDirs) {
+    for (const file of listBbFiles(layerDir)) {
+      if (seen.has(file)) continue;
+      seen.add(file);
+      let content: string;
+      try {
+        content = readFileSync(file, "utf8");
+      } catch {
+        continue;
+      }
+      if (needle.test(content)) {
+        examples.push({
+          path: relative(root, file),
+          content,
+          score: 1,
+        });
+      }
     }
   }
   return examples;
