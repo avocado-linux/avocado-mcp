@@ -6,6 +6,7 @@ import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { RepoClient } from "../lib/repo-client.js";
+import { findLayerDirs } from "./layer-analysis.js";
 
 /**
  * Recipe-authoring MCP tools backed by the OpenEmbedded layer-index REST API.
@@ -371,7 +372,9 @@ function variablesRstPath(): string {
  * unreadable file yields undefined rather than throwing, so the caller degrades
  * to the structured not-found.
  */
-function lookupVariableInRst(symbol: string): string | undefined {
+function lookupVariableInRst(
+  symbol: string,
+): { name: string; description: string } | undefined {
   let text: string;
   try {
     text = readFileSync(variablesRstPath(), "utf8");
@@ -380,10 +383,17 @@ function lookupVariableInRst(symbol: string): string | undefined {
   }
 
   const lines = text.split("\n");
-  const anchor = new RegExp(`^   :term:\`${escapeRegExp(symbol)}\`\\s*$`);
+  // Match the `:term:` anchor case-insensitively (the glossary lists names in
+  // uppercase; callers may pass any case) and recover the canonical casing
+  // from the file so the doc_url anchor (#term-NAME) stays valid.
+  const target = symbol.toLowerCase();
+  const anchor = /^   :term:`([^`]+)`\s*$/;
   let start = -1;
+  let name = symbol;
   for (let i = 0; i < lines.length; i += 1) {
-    if (anchor.test(lines[i])) {
+    const m = anchor.exec(lines[i]);
+    if (m && m[1].toLowerCase() === target) {
+      name = m[1];
       start = i + 1;
       break;
     }
@@ -406,7 +416,7 @@ function lookupVariableInRst(symbol: string): string | undefined {
   }
 
   const description = para.join(" ").trim();
-  return description.length > 0 ? description : undefined;
+  return description.length > 0 ? { name, description } : undefined;
 }
 
 function registerExplainBitbake(server: McpServer): void {
@@ -439,23 +449,23 @@ function registerExplainBitbake(server: McpServer): void {
         // Fall through to a text scan of the vendored variable glossary for
         // symbols outside the 12-entry fast-path table.
         const trimmed = symbol.trim();
-        const description = lookupVariableInRst(trimmed);
-        if (description !== undefined) {
-          const doc_url = `${REF_VARS}${trimmed}`;
+        const hit = lookupVariableInRst(trimmed);
+        if (hit !== undefined) {
+          const doc_url = `${REF_VARS}${hit.name}`;
           return {
             content: [
               {
                 type: "text",
                 text:
-                  `# explain-bitbake: \`${trimmed}\`\n\n` +
-                  `${description}\n\n` +
+                  `# explain-bitbake: \`${hit.name}\`\n\n` +
+                  `${hit.description}\n\n` +
                   `[Reference manual](${doc_url})\n`,
               },
             ],
             structuredContent: {
               found: true,
-              variable: trimmed,
-              description,
+              variable: hit.name,
+              description: hit.description,
               doc_url,
             },
           };
@@ -909,42 +919,6 @@ function listBbFiles(dir: string): string[] {
 }
 
 /**
- * Find every workspace layer dir (one carrying `conf/layer.conf`) up to two
- * levels under `root`, e.g. `meta-avocado/`, `meta-openembedded/meta-oe/`. A
- * layer dir can still contain nested layers, so the walk keeps descending until
- * `maxDepth`. Mirrors `findLayerDirs()` in layer-analysis.ts. A subtree that
- * cannot be read is skipped silently.
- */
-function findWorkspaceLayerDirs(root: string, maxDepth: number): string[] {
-  const found: string[] = [];
-  const walk = (dir: string, depth: number): void => {
-    if (existsSync(resolve(dir, "conf", "layer.conf"))) {
-      found.push(dir);
-    }
-    if (depth >= maxDepth) return;
-    let entries: string[];
-    try {
-      entries = readdirSync(dir);
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      if (entry.startsWith(".")) continue;
-      const full = resolve(dir, entry);
-      let isDir: boolean;
-      try {
-        isDir = statSync(full).isDirectory();
-      } catch {
-        continue;
-      }
-      if (isDir) walk(full, depth + 1);
-    }
-  };
-  walk(root, 0);
-  return found;
-}
-
-/**
  * Collect `.bb` recipe examples that `inherit` the given class from every
  * workspace layer (each dir carrying `conf/layer.conf`, up to two levels under
  * `root` — e.g. meta-avocado, meta-openembedded layers). The score is fixed at
@@ -955,7 +929,7 @@ function collectBbExamples(
   root: string,
   inheritClass: string,
 ): RecipeExample[] {
-  const layerDirs = findWorkspaceLayerDirs(root, 2);
+  const layerDirs = findLayerDirs(root, 2);
   const needle = new RegExp(
     `^\\s*inherit\\b[^\\n]*\\b${escapeRegExp(inheritClass)}\\b`,
     "m",

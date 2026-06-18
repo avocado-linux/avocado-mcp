@@ -342,7 +342,7 @@ function scanWorkspaceLayers(workspaceRoot: string): LayerInfo[] {
  * Find layer dirs (those carrying conf/layer.conf) up to `maxDepth` levels deep
  * under `root`. Depth 0 is `root` itself.
  */
-function findLayerDirs(root: string, maxDepth: number): string[] {
+export function findLayerDirs(root: string, maxDepth: number): string[] {
   const found: string[] = [];
   const walk = (dir: string, depth: number): void => {
     if (existsSync(resolve(dir, "conf", "layer.conf"))) {
