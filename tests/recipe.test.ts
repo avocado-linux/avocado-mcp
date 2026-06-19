@@ -3,7 +3,10 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { RepoClient } from "../src/lib/repo-client.js";
-import { registerRecipeTools } from "../src/tools/recipe.js";
+import {
+  registerRecipeTools,
+  _setSleepForTest,
+} from "../src/tools/recipe.js";
 
 // Top-level mock so execFileSync is interceptable in stage-recipe-to-feed tests.
 // The default mock throws ENOENT (script absent), exercising the catch path.
@@ -256,5 +259,78 @@ describe("stage-recipe-to-feed", () => {
     expect(out.sdk_pass).toBe(false);
     expect(out.boot_pass).toBe(false);
     expect(out.feed_url).toBeUndefined();
+  });
+});
+
+describe("search-layer-index retry behavior", () => {
+  beforeEach(() => {
+    _setSleepForTest(() => Promise.resolve());
+  });
+
+  afterEach(() => {
+    _setSleepForTest(null);
+  });
+
+  it("retries on 503 and succeeds on 200", async () => {
+    let callCount = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      async (input: RequestInfo | URL) => {
+        callCount += 1;
+        const url = typeof input === "string" ? input : input.toString();
+        // First call returns 503 regardless of URL; subsequent calls succeed.
+        if (callCount === 1) {
+          return new Response("Service Unavailable", { status: 503 });
+        }
+        const body = url.includes("branches")
+          ? [{ id: 42, name: "scarthgap" }]
+          : [];
+        return new Response(JSON.stringify(body), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    );
+
+    const result = await callTool("search-layer-index", {
+      name: "definitely-no-such-recipe-xyz",
+    });
+
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent?.error).toBeUndefined();
+    expect(callCount).toBeGreaterThan(1);
+  });
+
+  it("returns found:false with error after exhausting all retries on 504", async () => {
+    let callCount = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      callCount += 1;
+      return new Response("Gateway Timeout", { status: 504 });
+    });
+
+    const result = await callTool("search-layer-index", {
+      name: "some-recipe",
+    });
+
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent?.found).toBe(false);
+    expect(typeof result.structuredContent?.error).toBe("string");
+    expect(callCount).toBe(3);
+  });
+
+  it("does not retry on 404 (client error)", async () => {
+    let callCount = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      callCount += 1;
+      return new Response("Not Found", { status: 404 });
+    });
+
+    const result = await callTool("search-layer-index", {
+      name: "some-recipe",
+    });
+
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent?.found).toBe(false);
+    expect(typeof result.structuredContent?.error).toBe("string");
+    expect(callCount).toBe(1);
   });
 });

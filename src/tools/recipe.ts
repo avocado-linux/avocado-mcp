@@ -28,6 +28,23 @@ const LAYER_INDEX_BASE = "https://layers.openembedded.org/layerindex/api/";
 const BRANCH = "scarthgap";
 const USER_AGENT = "avocado-mcp-server";
 
+const MAX_ATTEMPTS = 3;
+const BACKOFF_BASE_MS = 200;
+
+let _sleepImpl: (ms: number) => Promise<void> = (ms) =>
+  new Promise((r) => setTimeout(r, ms));
+
+/** Override in tests to skip backoff delays. Pass null to reset. */
+export function _setSleepForTest(
+  fn: ((ms: number) => Promise<void>) | null,
+): void {
+  _sleepImpl = fn ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+}
+
+function backoffMs(attempt: number): number {
+  return BACKOFF_BASE_MS * Math.pow(2, attempt) + attempt * 37;
+}
+
 /** Recipe object as returned by the layer-index `recipes/` endpoint. */
 interface LayerIndexRecipe {
   pn: string;
@@ -66,11 +83,27 @@ interface RecipeResult {
 }
 
 async function fetchJson(url: string): Promise<unknown> {
-  const res = await fetch(url, { headers: { "User-Agent": USER_AGENT } });
-  if (!res.ok) {
-    throw new Error(`${url} returned ${res.status}`);
+  let lastError: Error | undefined;
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    let res: Response;
+    try {
+      res = await fetch(url, { headers: { "User-Agent": USER_AGENT } });
+    } catch (networkErr) {
+      lastError =
+        networkErr instanceof Error
+          ? networkErr
+          : new Error(String(networkErr));
+      if (attempt < MAX_ATTEMPTS - 1) await _sleepImpl(backoffMs(attempt));
+      continue;
+    }
+    if (res.ok) return res.json();
+    if (res.status < 500) {
+      throw new Error(`${url} returned ${res.status}`);
+    }
+    lastError = new Error(`${url} returned ${res.status}`);
+    if (attempt < MAX_ATTEMPTS - 1) await _sleepImpl(backoffMs(attempt));
   }
-  return res.json();
+  throw lastError!;
 }
 
 const recipeResultSchema = z.object({
