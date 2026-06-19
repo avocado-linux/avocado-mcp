@@ -41,6 +41,26 @@ export function _setSleepForTest(
   _sleepImpl = fn ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
 }
 
+/** In-flight fetch promises keyed by URL. Cleared on settle (success or error). */
+const _inFlight = new Map<string, Promise<unknown>>();
+
+/**
+ * Wrap fetchJson with single-flight coalescing: if a fetch for `url` is
+ * already in flight, return the existing promise instead of starting a new one.
+ */
+async function fetchJsonOnce(url: string): Promise<unknown> {
+  const existing = _inFlight.get(url);
+  if (existing) return existing;
+  const p = fetchJson(url).finally(() => _inFlight.delete(url));
+  _inFlight.set(url, p);
+  return p;
+}
+
+/** Reset in-flight map between tests. */
+export function _resetInFlightForTest(): void {
+  _inFlight.clear();
+}
+
 function backoffMs(attempt: number): number {
   return BACKOFF_BASE_MS * Math.pow(2, attempt) + attempt * 37;
 }
@@ -149,7 +169,7 @@ export function registerRecipeTools(
     async ({ name }) => {
       try {
         // 1. Resolve the scarthgap branch id.
-        const branchesRaw = await fetchJson(
+        const branchesRaw = await fetchJsonOnce(
           `${LAYER_INDEX_BASE}branches/?format=json&name=${encodeURIComponent(
             BRANCH,
           )}`,
@@ -173,7 +193,7 @@ export function registerRecipeTools(
 
         // 2. Fetch all recipes, filter client-side by branch + name substring.
         //    `?name=` is unreliable on this endpoint, so we filter ourselves.
-        const recipesRaw = await fetchJson(
+        const recipesRaw = await fetchJsonOnce(
           `${LAYER_INDEX_BASE}recipes/?format=json`,
         );
         const recipes = Array.isArray(recipesRaw)
@@ -247,7 +267,7 @@ async function resolveLayerNames(
   const out = new Map<number, string>();
   if (ids.size === 0) return out;
   try {
-    const raw = await fetchJson(
+    const raw = await fetchJsonOnce(
       `${LAYER_INDEX_BASE}layerBranches/?format=json`,
     );
     const layerBranches = Array.isArray(raw)

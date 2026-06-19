@@ -6,6 +6,7 @@ import { RepoClient } from "../src/lib/repo-client.js";
 import {
   registerRecipeTools,
   _setSleepForTest,
+  _resetInFlightForTest,
 } from "../src/tools/recipe.js";
 
 // Top-level mock so execFileSync is interceptable in stage-recipe-to-feed tests.
@@ -269,6 +270,7 @@ describe("search-layer-index retry behavior", () => {
 
   afterEach(() => {
     _setSleepForTest(null);
+    _resetInFlightForTest();
   });
 
   it("retries on 503 and succeeds on 200", async () => {
@@ -332,5 +334,40 @@ describe("search-layer-index retry behavior", () => {
     expect(result.structuredContent?.found).toBe(false);
     expect(typeof result.structuredContent?.error).toBe("string");
     expect(callCount).toBe(1);
+  });
+
+  it("coalesces concurrent fetches for the same URL into one in-flight request", async () => {
+    _setSleepForTest(() => Promise.resolve());
+
+    let fetchCallCount = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      fetchCallCount++;
+      const url = input.toString();
+      // Slow down to let concurrent calls queue up
+      await new Promise((r) => setTimeout(r, 10));
+      if (url.includes("branches")) {
+        return new Response(JSON.stringify([{ id: 42, name: "scarthgap" }]), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+
+    // Fire 3 concurrent searches
+    await Promise.all([
+      callTool("search-layer-index", { name: "zlib" }),
+      callTool("search-layer-index", { name: "openssl" }),
+      callTool("search-layer-index", { name: "curl" }),
+    ]);
+
+    // branches/ and recipes/ are shared across all 3 calls (single-flight)
+    // layerBranches/ is only fetched when there are matched recipes (none here)
+    // So branches/ should be fetched once, recipes/ once = 2 total (not 6)
+    expect(fetchCallCount).toBeLessThan(6);
+    expect(fetchCallCount).toBe(2); // branches once + recipes once
   });
 });
