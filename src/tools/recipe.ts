@@ -61,6 +61,42 @@ export function _resetInFlightForTest(): void {
   _inFlight.clear();
 }
 
+const CACHE_TTL_MS = 600_000; // 10 minutes
+
+interface CacheEntry {
+  value: unknown;
+  expires: number;
+}
+const _cache = new Map<string, CacheEntry>();
+
+let _nowImpl: () => number = () => Date.now();
+
+/** Override in tests to simulate time passage. Pass null to reset. */
+export function _setNowForTest(fn: (() => number) | null): void {
+  _nowImpl = fn ?? (() => Date.now());
+}
+
+/** Reset URL cache between tests. */
+export function _resetCacheForTest(): void {
+  _cache.clear();
+}
+
+/**
+ * Wrap fetchJsonOnce with a per-URL TTL cache. If the cached value is still
+ * fresh, return it immediately. Otherwise fetch, store, and return.
+ */
+async function cachedFetchJson(
+  url: string,
+  ttlMs: number = CACHE_TTL_MS,
+): Promise<unknown> {
+  const now = _nowImpl();
+  const entry = _cache.get(url);
+  if (entry && entry.expires > now) return entry.value;
+  const value = await fetchJsonOnce(url);
+  _cache.set(url, { value, expires: now + ttlMs });
+  return value;
+}
+
 function backoffMs(attempt: number): number {
   return BACKOFF_BASE_MS * Math.pow(2, attempt) + attempt * 37;
 }
@@ -169,7 +205,7 @@ export function registerRecipeTools(
     async ({ name }) => {
       try {
         // 1. Resolve the scarthgap branch id.
-        const branchesRaw = await fetchJsonOnce(
+        const branchesRaw = await cachedFetchJson(
           `${LAYER_INDEX_BASE}branches/?format=json&name=${encodeURIComponent(
             BRANCH,
           )}`,
@@ -193,7 +229,7 @@ export function registerRecipeTools(
 
         // 2. Fetch all recipes, filter client-side by branch + name substring.
         //    `?name=` is unreliable on this endpoint, so we filter ourselves.
-        const recipesRaw = await fetchJsonOnce(
+        const recipesRaw = await cachedFetchJson(
           `${LAYER_INDEX_BASE}recipes/?format=json`,
         );
         const recipes = Array.isArray(recipesRaw)
@@ -267,7 +303,7 @@ async function resolveLayerNames(
   const out = new Map<number, string>();
   if (ids.size === 0) return out;
   try {
-    const raw = await fetchJsonOnce(
+    const raw = await cachedFetchJson(
       `${LAYER_INDEX_BASE}layerBranches/?format=json`,
     );
     const layerBranches = Array.isArray(raw)

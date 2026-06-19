@@ -7,6 +7,8 @@ import {
   registerRecipeTools,
   _setSleepForTest,
   _resetInFlightForTest,
+  _resetCacheForTest,
+  _setNowForTest,
 } from "../src/tools/recipe.js";
 
 // Top-level mock so execFileSync is interceptable in stage-recipe-to-feed tests.
@@ -61,6 +63,8 @@ beforeEach(async () => {
 
 afterEach(async () => {
   vi.restoreAllMocks();
+  _resetCacheForTest();
+  _resetInFlightForTest();
   await client.close();
 });
 
@@ -265,12 +269,14 @@ describe("stage-recipe-to-feed", () => {
 
 describe("search-layer-index retry behavior", () => {
   beforeEach(() => {
+    _resetCacheForTest();
     _setSleepForTest(() => Promise.resolve());
   });
 
   afterEach(() => {
     _setSleepForTest(null);
     _resetInFlightForTest();
+    _resetCacheForTest();
   });
 
   it("retries on 503 and succeeds on 200", async () => {
@@ -369,5 +375,80 @@ describe("search-layer-index retry behavior", () => {
     // So branches/ should be fetched once, recipes/ once = 2 total (not 6)
     expect(fetchCallCount).toBeLessThan(6);
     expect(fetchCallCount).toBe(2); // branches once + recipes once
+  });
+});
+
+describe("search-layer-index TTL cache", () => {
+  beforeEach(() => {
+    _setSleepForTest(() => Promise.resolve());
+  });
+
+  afterEach(() => {
+    _setSleepForTest(null);
+    _resetInFlightForTest();
+    _resetCacheForTest();
+    _setNowForTest(null);
+  });
+
+  it("serves second search from cache (zero new upstream fetches)", async () => {
+    _resetCacheForTest();
+    _setSleepForTest(() => Promise.resolve());
+
+    let fetchCallCount = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      fetchCallCount++;
+      const url = input.toString();
+      if (url.includes("branches")) {
+        return new Response(JSON.stringify([{ id: 42, name: "scarthgap" }]), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+
+    await callTool("search-layer-index", { name: "zlib" });
+    const countAfterFirst = fetchCallCount;
+
+    await callTool("search-layer-index", { name: "openssl" }); // different name, same endpoints
+    expect(fetchCallCount).toBe(countAfterFirst); // no new fetches
+  });
+
+  it("re-fetches after TTL expires", async () => {
+    _resetCacheForTest();
+    _setSleepForTest(() => Promise.resolve());
+
+    let fetchCallCount = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      fetchCallCount++;
+      const url = input.toString();
+      if (url.includes("branches")) {
+        return new Response(JSON.stringify([{ id: 42, name: "scarthgap" }]), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+
+    // First search - populates cache
+    await callTool("search-layer-index", { name: "zlib" });
+    const countAfterFirst = fetchCallCount;
+
+    // Advance clock past TTL
+    _setNowForTest(() => Date.now() + 700_000);
+
+    // Second search - cache expired, should re-fetch
+    await callTool("search-layer-index", { name: "openssl" });
+    expect(fetchCallCount).toBeGreaterThan(countAfterFirst);
+
+    // Reset now
+    _setNowForTest(null);
   });
 });
