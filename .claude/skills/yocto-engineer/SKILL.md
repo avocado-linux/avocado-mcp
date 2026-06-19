@@ -335,22 +335,36 @@ fix that worked - so the next recipe that hits it gets a confidence-1 hit
 instead of re-deriving the fix. Verified-only: record a fix **only** after the
 green build that proves it; never record a hypothesis.
 
-## Wire into a packagegroup
+## Wire into a feature group
 
 Authoring the `.bb` is not enough - a recipe that no image or packagegroup
-pulls in is never built. Add the package to
-`meta-avocado/recipes-avocado/packagegroups/packagegroup-avocado-extra.bb`,
-in the alphabetically-sorted `RDEPENDS:${PN}` list, before the build will
-include it and before the SDK tier of feed validation can assert it.
+pulls in is never built. ENG-2003 (PR meta-avocado#229) replaced the
+monolithic `packagegroup-avocado-extra` with opt-in feature groups. Add the
+package to the appropriate `packagegroup-avocado-feature-<group>.bb` in
+`meta-avocado/recipes-avocado/packagegroups/`, in the alphabetically-sorted
+`RDEPENDS:${PN}` list.
+
+Group selection by RPM category: `networking` (iperf3, network tools),
+`printing` (cups, ghostscript, PDF tools), `smartcard` (pcsc-lite, ccid,
+yubikey tools), `multimedia`, `python`, `ai`, etc. When the right group does
+not exist, create a new `packagegroup-avocado-feature-<group>.bb` with the
+same structure as the siblings, add a `kas/feature/<group>.yml` fragment, and
+register the group token in `AVOCADO_FEATURE_GROUPS` so
+`packagegroup-avocado-extra` expands it.
+
+Before wiring, call `find-recipe-providers` to confirm the provider exists in
+the composition. After wiring, call `check-layer-coverage` to confirm no
+dangling bbappend or missing provider.
 
 Add the package variant that produces the artifact you need. A recipe that
 builds only static libraries and headers (no shared `.so`, no runtime binary)
 ships its content in `<pn>-staticdev`, so add `<pn>-staticdev`, not `<pn>`.
 Check the recipe's `FILES`/`ALLOW_EMPTY` to know which variant is non-empty.
 
-Precedent: zeromq was wired in this way; executorch was added as
-`executorch-staticdev` during the ENG-1969 dogfood because its recipe disables
-all shared-library backends and emits static libs only.
+Historical note: before PR meta-avocado#229, zeromq and executorch were wired
+directly into `packagegroup-avocado-extra.bb` (executorch as
+`executorch-staticdev` because it emits static libs only). New recipes go into
+their feature group instead.
 
 ## E2E gate
 
