@@ -1,0 +1,25 @@
+# Mirrors CI (scripts/checks.sh) so prettier/type errors are caught locally
+# before they reach the remote. Run `pre-commit install` once to enable, and
+# `pre-commit install --hook-type pre-push` for the build hook.
+repos:
+  - repo: local
+    hooks:
+      - id: prettier-check
+        name: prettier --check
+        entry: npm run format:check
+        language: system
+        types: [ts]
+        pass_filenames: false
+      - id: typecheck
+        name: tsc --noEmit
+        entry: npm run typecheck
+        language: system
+        types: [ts]
+        pass_filenames: false
+      - id: build
+        name: npm run build
+        entry: npm run build
+        language: system
+        types: [ts]
+        pass_filenames: false
+        stages: [pre-push]
