@@ -109,10 +109,17 @@ environment. Fixes, cheapest first:
 - If no `-native` exists, author it first (build leaves first) or pre-generate
   the sources on a dev host and ship them as recipe files.
 
-Real cases: executorch's flatc (fixed with `flatbuffers-native` + a patch
-repointing the imported `flatc` target) and its `codegen.tools.gen_oplist` /
+Real cases: executorch's flatc and its `codegen.tools.gen_oplist` /
 `codegen.gen` (needs `torchgen` plus the executorch package on `PYTHONPATH`).
 Expect this class to recur in any recipe with codegen.
+
+**Version-skew warning (this cost a post-merge fix).** Reaching for an ambient
+`-native` of a tool the source *bundles* is a trap. executorch's first flatc fix
+used `flatbuffers-native`; it built on qemu but broke on i.MX, where meta-ml
+pins flatbuffers 23.5.26 vs executorch's bundled 24.3.25 and the generated
+schema tripped the flatbuffers version `static_assert`. When the source bundles
+the codegen tool, build it for the host from that bundle and drop the `-native`
+dep, so the generator and the headers are always the same version.
 
 Four follow-on traps that bit the executorch codegen, in order:
 
@@ -373,6 +380,15 @@ Add a one-line case to meta-avocado's `scripts/feed-validation-cases`
 `scripts/run-feed-validation.sh` (all cases) or `scripts/validate-feed-local.sh
 -m <machine> -l <libs> <pkgs>` (one package). Validate on qemuarm64 by default -
 most avocado boards are arm64.
+
+**qemuarm64-green is necessary, not sufficient.** qemu runs the default layer
+set, so layer-pinned version skew and TOPDIR-sensitive bugs do not surface there
+- they only appear on real hardware (executorch passed qemu 3/3, then a reviewer
+found two bugs that only show on i.MX: the flatbuffers version skew above and a
+`${D}/work` cleanup that assumed `TOPDIR=/work`). For a recipe that uses an
+ambient `-native` codegen tool, an absolute build path, or a version-sensitive
+dep, build it on a second differently-pinned target before merge, or flag it for
+one. See the recipe-authoring guide's "Portability traps".
 
 Pick the tiers by what the package actually ships:
 

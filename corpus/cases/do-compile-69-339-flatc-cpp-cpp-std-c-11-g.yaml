@@ -1,3 +1,9 @@
+# ExecuTorch bringup. The bundled flatc is built for the target and can't run on
+# the build host. The first fix (DEPENDS += flatbuffers-native) makes it build
+# on qemu but is a TRAP: it introduces a flatbuffers version skew that breaks on
+# differently-pinned targets (see do-compile-flatbuffers-version-static-assert).
+# The durable fix is to build flatc/flatcc from the source's bundled third-party.
+
 normalized_signature: >-
   [69/339] flatc --cpp --cpp-std c++11 --gen-mutable --scoped-enums -o
   build/schema/include/executorch/schema scalar_type.fbs
@@ -16,38 +22,28 @@ root_cause: A build-time code generator (flatc) was built for the target and
   cannot run on the build host; unsetting CMAKE_TOOLCHAIN_FILE does not force a
   host build under OE because the cross compiler comes from CC/CXX.
 fix_diff: >-
+  Build flatc AND flatcc from the source's bundled third-party flatbuffers for
+  the BUILD HOST, via a SRC_URI patch, so the generator and the headers compiled
+  against it are guaranteed the same flatbuffers version on every target. Do NOT
+  reach for an ambient flatbuffers-native: its version is set by the target's
+  layer set and a mismatch with the bundled headers trips the schema version
+  static_assert on differently-pinned targets (qemu passes, i.MX fails).
+
   --- a/executorch_1.3.1.bb
 
   +++ b/executorch_1.3.1.bb
 
-  -DEPENDS = "python3-native"
+  -           file://0001-use-native-flatc-for-cross-compilation.patch"
 
-  +DEPENDS = "python3-native flatbuffers-native"
-   SRC_URI = "gitsm://github.com/pytorch/executorch.git;protocol=https;branch=release/1.3;destsuffix=executorch \
-  +           file://0001-use-native-flatc-for-cross-compilation.patch"
+  +           file://0001-build-bundled-flatc-flatcc-for-the-build-host.patch"
 
-  --- a/third-party/CMakeLists.txt
+  -DEPENDS = "python3-native flatbuffers-native torchgen-native ..."
 
-  +++ b/third-party/CMakeLists.txt
-
-  -# build flatc via ExternalProject (targets the project toolchain under OE)
-
-  -ExternalProject_Add(flatbuffers_ep ...)
-
-  -add_executable(flatc IMPORTED GLOBAL)
-
-  -set_target_properties(flatc PROPERTIES IMPORTED_LOCATION
-  ${INSTALL_DIR}/bin/flatc)
-
-  +find_program(FLATC_EXECUTABLE flatc REQUIRED)
-
-  +add_executable(flatc IMPORTED GLOBAL)
-
-  +set_target_properties(flatc PROPERTIES IMPORTED_LOCATION
-  "${FLATC_EXECUTABLE}")
-doc_link: https://docs.yoctoproject.org/ref-manual/classes.html#native
-falsifier: do_compile advances past the schema-generation ninja step (flatc runs
-  on the host with no qemu loader error); add flatbuffers-native to DEPENDS and
-  confirm ${STAGING_BINDIR_NATIVE}/flatc exists.
-verified: false
-source: user-recorded
+  +DEPENDS = "python3-native torchgen-native ..."
+doc_link: https://docs.yoctoproject.org/ref-manual/qa-checks.html
+falsifier: do_compile passes on qemu AND on a differently-pinned target (e.g.
+  imx93-frdm, whose meta-ml stack pins flatbuffers 23.5.26 vs ExecuTorch's
+  bundled 24.3.25); the schema version static_assert does not trip because the
+  generator is built from the bundled sources.
+verified: true
+source: dogfood-imx93-frdm

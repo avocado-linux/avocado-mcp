@@ -1,3 +1,8 @@
+# ExecuTorch leaks an absolute build-dir tree into DESTDIR. The first fix
+# (rm -rf ${D}/work) is a TRAP: it only cleans the leak when TOPDIR happens to
+# be /work. Under a different TOPDIR (e.g. /avocado-build) the tree survives and
+# fails the installed-vs-shipped QA. The durable fix is TOPDIR-independent.
+
 normalized_signature: >-
   ERROR: QA Issue: executorch: Files/directories were installed but not shipped
   in any package:
@@ -12,17 +17,22 @@ normalized_signature: >-
   ERROR: <PKG> do_package: Fatal QA errors were found, failing task.
 failed_task: do_package
 build_system: cmake
-root_cause: The cmake install put some static libs at an absolute build-dir path
-  (leaking a /work tree into ${D}) and a bundled dep installed cmake files and a
-  header to nonstandard locations, none of which the default FILES capture.
+root_cause: The cmake install put static libs at an absolute build-dir path
+  (leaking the whole ${B} tree into ${D}) and a bundled dep installed cmake
+  files and a header to nonstandard locations, none of which the default FILES
+  capture. The leaked tree is at ${B} (absolute), NOT at a fixed /work - it
+  moves with TOPDIR.
 fix_diff: >-
+  Relocate the libs to ${libdir} and capture the stray cmake/header in FILES,
+  then remove the leaked tree TOPDIR-INDEPENDENTLY. Do not hardcode ${D}/work:
+  ${B} is absolute, so ${D}${B} is the leaked dir under any TOPDIR; rm it and
+  rmdir -p the now-empty parents (which stops at the non-empty ${D}).
+
   --- a/executorch_1.3.1.bb
 
   +++ b/executorch_1.3.1.bb
 
   +do_install:append() {
-
-  +    # libs installed to an absolute build path instead of ${libdir}
 
   +    if [ -d "${D}${B}/lib" ]; then
 
@@ -30,7 +40,11 @@ fix_diff: >-
 
   +    fi
 
-  +    rm -rf "${D}/work"
+  -    rm -rf "${D}/work"
+
+  +    rm -rf "${D}${B}"
+
+  +    rmdir -p "$(dirname "${D}${B}")" 2>/dev/null || true
 
   +}
 
@@ -39,8 +53,8 @@ fix_diff: >-
 
   +ALLOW_EMPTY:${PN} = "1"
 doc_link: https://docs.yoctoproject.org/ref-manual/qa-checks.html#installed-vs-shipped
-falsifier: do_package and do_package_qa pass; the -staticdev package ships the
-  lib*.a (including the relocated ones) and no /work tree or unshipped
-  cmake/header remains.
-verified: false
-source: user-recorded
+falsifier: do_package and do_package_qa pass under any TOPDIR (verified with
+  TOPDIR=/work and TOPDIR=/avocado-build); the -staticdev package ships the
+  lib*.a and no leaked build tree or unshipped cmake/header remains.
+verified: true
+source: dogfood-imx93-frdm

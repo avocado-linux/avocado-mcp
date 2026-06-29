@@ -74,6 +74,30 @@ Once the recipe builds in isolation, wire it into the Avocado feed:
 2. From inside a kas shell, run \`devtool build <name>\` to build it within the
    full layer context and confirm it resolves against the feed's dependencies
    and configuration — not just standalone.
+
+## Portability traps - "qemu-green" is not the finish line
+
+A recipe that builds 3/3 on qemuarm64 is necessary, not sufficient. qemu runs
+the default layer set, so bugs that depend on layer-pinned versions or the build
+layout never surface there - they only show up on real hardware. Three traps the
+ExecuTorch dogfood hit, all green on qemu and broken on i.MX:
+
+- **Ambient \`-native\` codegen causes version skew.** If the source bundles a
+  codegen tool or library (flatbuffers, protobuf, capnp, ...), do not point it at
+  an ambient \`-native\` recipe. That tool's version is set by the target's layer
+  set, and a mismatch with the bundled headers breaks generated code - e.g. a
+  flatbuffers version \`static_assert\` - on differently-pinned targets (the i.MX
+  meta-ml stack pins flatbuffers 23.5.26 vs ExecuTorch's bundled 24.3.25). Build
+  the generator from the source's own bundled third-party so generator and
+  headers always match, then drop the \`-native\` dependency.
+- **Never hardcode a build-dir leaf in cleanup.** A cleanup like \`/work\` only
+  matches when \`TOPDIR\` is \`/work\`. Use the absolute \`B\` build dir instead
+  (remove the dir at \`D\`+\`B\`, then \`rmdir -p\` the empty parents), which is
+  \`TOPDIR\`-independent.
+- **Validate beyond qemu before merge.** For any recipe that uses an ambient
+  \`-native\` codegen tool, an absolute build path, or a version-sensitive dep,
+  build it on a second differently-pinned target, or flag it for one - that is
+  where these bugs surface.
 `;
 
 export function registerRecipeAuthoringResource(server: McpServer): void {

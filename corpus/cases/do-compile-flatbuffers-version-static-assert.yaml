@@ -1,0 +1,34 @@
+# ExecuTorch on a target whose layer set pins a different flatbuffers than the
+# one ExecuTorch bundles. Surfaced on imx93-frdm (meta-ml pins 23.5.26) after
+# the ambient-flatbuffers-native fix passed on qemu. Representative signature -
+# the value is the root cause and fix; match is fuzzy.
+
+normalized_signature: >-
+  error: static assertion failed: Non-compatible flatbuffers version included
+
+  FLATBUFFERS_VERSION_MAJOR == <NUM> && FLATBUFFERS_VERSION_MINOR == <NUM>
+
+  schema_generated.h: included from executorch schema codegen
+
+  ERROR: <PKG> do_compile: ExecutionError
+failed_task: do_compile
+build_system: cmake
+root_cause: |
+  The schema codegen ran with an ambient flatbuffers-native (flatc) whose
+  version is set by the target's layer set, while the generated headers are
+  compiled against the version the source BUNDLES. When they differ the
+  generated-schema flatbuffers version static_assert fails. It only shows up on
+  targets whose layers pin a different flatbuffers (e.g. the i.MX / meta-ml
+  stack ships 23.5.26 vs ExecuTorch's bundled 24.3.25); qemu with the default
+  layer set happens to align, so a qemu-only build hides it.
+fix_diff: |
+  Build flatc (and flatcc) from the source's own bundled third-party sources for
+  the build host instead of depending on flatbuffers-native, so the generator
+  and the headers are always the same version. Then drop flatbuffers-native from
+  DEPENDS. See do-compile-69-339-flatc for the patch shape.
+doc_link: https://docs.yoctoproject.org/ref-manual/qa-checks.html
+falsifier: |
+  do_compile passes on the differently-pinned target (imx93-frdm) as well as
+  qemu, because flatc and the bundled headers report the same FLATBUFFERS_VERSION.
+verified: true
+source: dogfood-imx93-frdm
