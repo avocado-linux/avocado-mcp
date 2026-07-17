@@ -16,6 +16,12 @@ MCP server that turns an AI assistant into a working Avocado OS co-pilot. It hel
 Stdio-only over npm. No hosted endpoint, no API key. All data sources are public:
 `repo.avocadolinux.org`, `github.com/avocado-linux/references`, `docs.peridio.com`. The `avocado.yaml` schema ships bundled with the server.
 
+> **Safety:** this server lets an AI assistant run real operations on your
+> behalf — editing project files and running `avocado` commands that can flash
+> media and provision/update devices. It is arbitrary code execution: review
+> actions before approving them, work in version control, and run with scoped
+> credentials. See [SECURITY.md](./SECURITY.md).
+
 ## Installation
 
 Add to your MCP client config (Claude Desktop, Claude Code, Cursor, etc.):
@@ -195,3 +201,21 @@ Caches under `~/.cache/avocado-mcp/` (override with `$AVOCADO_MCP_CACHE_DIR` or 
 - References repo: https://github.com/avocado-linux/references
 - Package feed: https://repo.avocadolinux.org
 - Targets manifest: https://repo.avocadolinux.org/2024/edge/targets.json
+
+## Safety & responsibility
+
+This is an AI-agent tool that executes operations on your behalf. Before using
+it, read [SECURITY.md](./SECURITY.md) — it covers the security model, the list
+of destructive operations (provisioning flashes and erases media; deploy changes
+running devices; project tools write files), and the safeguards you are expected
+to apply (review-before-approve, version control, backups, least privilege).
+
+You are responsible for the environment the server runs in and for the actions
+you approve.
+
+## License
+
+Licensed under the [Apache License, Version 2.0](./LICENSE). The software is
+provided on an "AS IS" basis, without warranties or conditions of any kind, and
+without liability for damages arising from its use, to the maximum extent
+permitted by law. See [LICENSE](./LICENSE) and [NOTICE](./NOTICE).

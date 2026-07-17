@@ -1,0 +1,20 @@
+Avocado OS MCP Server
+Copyright 2024-2026 Peridio, Inc.
+
+This product is licensed under the Apache License, Version 2.0 (the
+"License"); you may not use this software except in compliance with the
+License. A copy of the License is provided in the LICENSE file in this
+repository and is also available at:
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+
+--------------------------------------------------------------------------
+
+This software is an AI-agent tool that can execute commands on the user's
+behalf, including operations that modify files and provision or update
+physical devices. See SECURITY.md for the security model, the list of
+destructive operations, and the safeguards users are expected to apply.
