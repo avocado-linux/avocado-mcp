@@ -66,11 +66,20 @@ recommend:
 
 ## Data and privacy
 
-- The server reads from **public HTTPS endpoints only** (`repo.avocadolinux.org`,
-  `github.com/avocado-linux/references`, `github.com/peridio/docs`). See the
-  *How it talks to the world* section of the README.
+- The server itself makes outbound requests to **public HTTPS endpoints only**:
+  - `repo.avocadolinux.org` — RPM package feed.
+  - `api.github.com` and `raw.githubusercontent.com` — reference projects and
+    documentation manifests/content (an optional, read-only `GITHUB_TOKEN`
+    only raises GitHub API rate limits).
+  - `docs.peridio.com` — documentation content.
+
+  See the *How it talks to the world* section of the README for details.
 - It is **stdio-only**: there is no hosted endpoint, no listening port, and no
   API key issued by us.
+- The `connect-*` fleet tools do not call those endpoints directly — they invoke
+  your locally installed `avocado` CLI, which reaches Peridio services using the
+  credentials you have already configured for that CLI. Those credentials and
+  their handling are managed by you and the CLI, not by this server.
 - Caches are written locally under `~/.cache/avocado-mcp/`. No usage data is
   sent to Peridio by the server itself. Your AI client and any CLI/credentials
   you configure have their own data-handling terms, which are outside this
