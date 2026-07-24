@@ -14,6 +14,7 @@ import * as appDevelopment from "../resources/app-development.js";
 import * as avocadoCliExecution from "../resources/avocado-cli-execution.js";
 import * as avocadoConnect from "../resources/avocado-connect.js";
 import * as upstreamSources from "../resources/upstream-sources.js";
+import * as packageCoverage from "../resources/package-coverage.js";
 
 interface Skill {
   uri: string;
@@ -38,6 +39,7 @@ const SKILLS: Skill[] = [
   toSkill(avocadoCliExecution),
   toSkill(avocadoConnect),
   toSkill(upstreamSources),
+  toSkill(packageCoverage),
 ];
 
 function toSkill(mod: {
