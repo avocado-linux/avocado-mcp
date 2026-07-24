@@ -551,6 +551,31 @@ export function registerPackageTools(
           chan,
         );
 
+        // fetchTargetPackages does NOT throw when repos are unreachable — it
+        // returns an empty package list plus per-repo errors. Reporting that as
+        // a confident 0% coverage would tell a maintainer every dependency is a
+        // genuine gap. Treat "no packages AND fetch errors" as unknown, not 0%.
+        if (packages.length === 0 && errors.length > 0) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `# check-package-coverage — feed unavailable\n\nCouldn't read the package feed for \`${target}\` on \`${rel}/${chan}\`, so coverage is unknown (not 0%). Retry shortly — this is often transient for a freshly-added target.\n\nErrors:\n${errors.map((e) => `- ${e}`).join("\n")}`,
+              },
+            ],
+            structuredContent: {
+              target,
+              release: rel,
+              channel: chan,
+              targetAvailable: null,
+              summary: emptySummary,
+              results: [],
+              feedErrors: errors,
+            },
+            isError: true,
+          };
+        }
+
         const results = dependencies.map((dep) => {
           let best: SearchResult | null = null;
           let matchedQuery: string | null = null;
@@ -587,13 +612,20 @@ export function registerPackageTools(
         });
 
         const present = results.filter((r) => r.status === "present").length;
+        const missing = results.length - present;
+        // Round, but never let rounding show a false 100% while something is
+        // missing (199/200 → 99, not 100) or a false 0% while something is
+        // present (1/200 → 1, not 0). The headline must not contradict counts.
+        let coveragePercent = results.length
+          ? Math.round((present / results.length) * 100)
+          : 0;
+        if (coveragePercent === 100 && missing > 0) coveragePercent = 99;
+        if (coveragePercent === 0 && present > 0) coveragePercent = 1;
         const summary = {
           total: results.length,
           present,
-          missing: results.length - present,
-          coveragePercent: results.length
-            ? Math.round((present / results.length) * 100)
-            : 0,
+          missing,
+          coveragePercent,
           exact: results.filter((r) => r.confidence === "exact").length,
           strong: results.filter((r) => r.confidence === "strong").length,
           fuzzy: results.filter((r) => r.confidence === "fuzzy").length,
@@ -646,7 +678,6 @@ interface CoverageRow {
   status: "present" | "missing";
   confidence: "exact" | "strong" | "fuzzy" | null;
   match: { name: string; version: string } | null;
-  matchedQuery: string | null;
   alternatives: string[];
 }
 
