@@ -197,8 +197,12 @@ export class RepoClient {
     release: string = DEFAULT_RELEASE,
     channel: string = DEFAULT_CHANNEL,
   ): Promise<TargetManifest | null> {
-    if (!isSafeSegment(release)) throw new Error(`Invalid release: ${release}`);
-    if (!isSafeSegment(channel)) throw new Error(`Invalid channel: ${channel}`);
+    // Invalid stream segments fail soft (null), not throw: release/channel are
+    // user-supplied tool args, and every caller maps null to a structured
+    // "couldn't fetch targets.json — check release/channel" error. Returning
+    // early here also preserves the anti-path-injection guarantee (we never
+    // build a URL from an unsafe segment).
+    if (!isSafeSegment(release) || !isSafeSegment(channel)) return null;
 
     const cacheKey = `${release}::${channel}`;
     const now = Date.now();

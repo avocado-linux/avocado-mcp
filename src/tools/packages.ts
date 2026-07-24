@@ -484,10 +484,13 @@ export function registerPackageTools(
       const chan = channel ?? DEFAULT_CHANNEL;
       const maxAlt = maxAlternatives ?? 3;
 
+      // All-zero: used only on early-return / error paths where nothing was
+      // analyzed, so results is [] and the summary must agree (isError signals
+      // the failure separately).
       const emptySummary = {
-        total: dependencies.length,
+        total: 0,
         present: 0,
-        missing: dependencies.length,
+        missing: 0,
         coveragePercent: 0,
         exact: 0,
         strong: 0,
@@ -626,7 +629,7 @@ export function registerPackageTools(
           content: [
             {
               type: "text",
-              text: `# check-package-coverage failed\n\n❌ ${error}`,
+              text: `# check-package-coverage failed\n\n❌ ${error instanceof Error ? error.message : String(error)}`,
             },
           ],
           structuredContent: {
@@ -683,6 +686,10 @@ function renderCoverage(
     out += `\n> ⚠️ Some repos failed to fetch (results may be incomplete): ${errors.join("; ")}\n`;
   }
 
+  // Dependency name / ecosystem are input-derived; escape pipes and collapse
+  // newlines so a stray `|` or line break can't break the markdown table.
+  const cell = (s: string): string =>
+    s.replace(/\r?\n/g, " ").replace(/\|/g, "\\|").trim();
   out += `\n| Dependency | Ecosystem | Status | Feed package | Version | Confidence | Alternatives |\n`;
   out += `|---|---|---|---|---|---|---|\n`;
   for (const r of results) {
@@ -694,7 +701,7 @@ function renderCoverage(
       r.alternatives.length > 0
         ? r.alternatives.map((a) => `\`${a}\``).join(", ")
         : "—";
-    out += `| ${r.name} | ${r.ecosystem ?? "—"} | ${status} | ${pkg} | ${ver} | ${conf} | ${alts} |\n`;
+    out += `| ${cell(r.name)} | ${r.ecosystem ? cell(r.ecosystem) : "—"} | ${status} | ${pkg} | ${ver} | ${conf} | ${alts} |\n`;
   }
   out += `\n_\`fuzzy\` = summary-only hit, optimistically counted as present — a maintainer should confirm. Missing rows need upstream research (see the \`/package-coverage\` flow)._`;
   return out;

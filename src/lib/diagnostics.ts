@@ -459,15 +459,23 @@ function renderInvestigation(
   let out = `### \`${inv.name}\`\n\n`;
 
   if (present.length === 0) {
-    const allErrored = inv.streams.every((s) => s.error);
-    if (allErrored) {
+    const errored = inv.streams.filter((s) => s.error);
+    if (errored.length === inv.streams.length) {
       out += `Could not reach the package feed for any stream (network / feed availability?). Retry, or check manually with \`search-packages\`.\n\n`;
       return out;
     }
-    const streamList = INVESTIGATION_STREAMS.map(
-      (s) => `${s.release}/${s.channel}`,
-    ).join(", ");
-    out += `Not found on any live stream (${streamList}) for the listed targets. Either the name is wrong (try \`search-packages\` with a partial name) or the package is target-specific (BSP packages typically carry a target suffix).\n\n`;
+    const checked = inv.streams
+      .filter((s) => !s.error)
+      .map((s) => `${s.release}/${s.channel}`)
+      .join(", ");
+    out += `Not found on the stream(s) checked (${checked}).`;
+    if (errored.length > 0) {
+      // Don't conflate "couldn't query" with "absent".
+      out += ` (Couldn't query ${errored
+        .map((s) => `${s.release}/${s.channel}`)
+        .join(", ")} — those may or may not carry it; retry to be sure.)`;
+    }
+    out += ` Either the name is wrong (try \`search-packages\` with a partial name) or the package is target-specific (BSP packages typically carry a target suffix).\n\n`;
     return out;
   }
 
