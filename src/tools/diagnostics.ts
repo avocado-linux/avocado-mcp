@@ -96,7 +96,7 @@ export function registerDiagnosticsTools(
     {
       title: "Diagnose an avocado build/install log",
       description:
-        "Analyze the output of `avocado build` or `avocado install` for known failure patterns AND actively probe the package feed. When you pass `targets`, the tool extracts any failing package names from the log and looks them up across both the `edge` and `apollo` channels — turning generic 'package not found' advice into a concrete answer (e.g. 'present on apollo only, switch distro.channel'). Always pass `targets` if you know them. **When no curated pattern matches**, the tool falls back to a generic log-shape extraction: error-line excerpts, exit code, suggested-file-paths, and explicit next-step routing (`search-docs`, `search-packages`, `Read` mentioned files). Never returns an empty response when the log has errors — if `diagnoses` is empty and `shape.hasErrors` is true, the prose response contains the fallback diagnosis.",
+        "Analyze the output of `avocado build` or `avocado install` for known failure patterns AND actively probe the package feed. When you pass `targets`, the tool extracts any failing package names from the log and looks them up on the `edge` channel of both releases (`2024` and `2026` — the streams ~all users are on), turning generic 'package not found' advice into a concrete answer (e.g. 'present on 2026/edge only, switch distro.release'). Always pass `targets` if you know them. **When no curated pattern matches**, the tool falls back to a generic log-shape extraction: error-line excerpts, exit code, suggested-file-paths, and explicit next-step routing (`search-docs`, `search-packages`, `Read` mentioned files). Never returns an empty response when the log has errors — if `diagnoses` is empty and `shape.hasErrors` is true, the prose response contains the fallback diagnosis.",
       inputSchema: {
         log: z
           .string()
@@ -117,19 +117,21 @@ export function registerDiagnosticsTools(
           .array(
             z.object({
               name: z.string(),
-              edge: z.array(
-                z.object({ repo: z.string(), version: z.string() }),
+              streams: z.array(
+                z.object({
+                  release: z.string(),
+                  channel: z.string(),
+                  hits: z.array(
+                    z.object({ repo: z.string(), version: z.string() }),
+                  ),
+                  error: z.string().optional(),
+                }),
               ),
-              apollo: z.array(
-                z.object({ repo: z.string(), version: z.string() }),
-              ),
-              edgeError: z.string().optional(),
-              apolloError: z.string().optional(),
             }),
           )
           .optional()
           .describe(
-            "Per-package cross-channel lookup. Only populated when `targets` was supplied.",
+            "Per-package cross-release lookup on the `edge` channel of releases 2024 and 2026 (the common-case streams). Only populated when `targets` was supplied.",
           ),
         shape: logShapeSchema,
       },

@@ -1,17 +1,34 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { RepoClient } from "../lib/repo-client.js";
+import {
+  RepoClient,
+  rankMatches,
+  scoreToConfidence,
+  DEFAULT_RELEASE,
+  DEFAULT_CHANNEL,
+  type SearchResult,
+} from "../lib/repo-client.js";
 import { resolveTarget } from "../lib/target-resolver.js";
 
+/**
+ * Validate target names against the manifest for a SPECIFIC release/channel.
+ * Targets differ per stream (e.g. NVIDIA Thor exists in 2026 but not 2024),
+ * so validation must use the same stream the caller will query — otherwise a
+ * legitimate 2026-only target gets rejected against the 2024 manifest.
+ */
 async function validateTargets(
   repoClient: RepoClient,
   targets: string[],
+  release?: string,
+  channel?: string,
 ): Promise<{ ok: true } | { ok: false; message: string }> {
-  const config = await repoClient.getTargetsConfig();
+  const rel = release ?? DEFAULT_RELEASE;
+  const chan = channel ?? DEFAULT_CHANNEL;
+  const config = await repoClient.getTargetsConfig(release, channel);
   if (!config) {
     return {
       ok: false,
-      message: `Could not fetch targets.json from repo.avocadolinux.org to validate target names. Check network and try again.`,
+      message: `Could not fetch targets.json for \`${rel}/${chan}\` from repo.avocadolinux.org to validate target names. Check the release/channel and network, then try again.`,
     };
   }
   const all = Object.keys(config);
@@ -22,25 +39,25 @@ async function validateTargets(
     const fuzzy = resolveTarget(u, all).slice(0, 3);
     if (fuzzy.length > 0) {
       lines.push(
-        `- \`${u}\` is not a supported target. Did you mean: ${fuzzy.map((t) => `\`${t}\``).join(", ")}?`,
+        `- \`${u}\` is not available in \`${rel}/${chan}\`. Did you mean: ${fuzzy.map((t) => `\`${t}\``).join(", ")}?`,
       );
     } else {
-      lines.push(`- \`${u}\` is not a supported target.`);
+      lines.push(`- \`${u}\` is not available in \`${rel}/${chan}\`.`);
     }
   }
   return {
     ok: false,
     message: [
-      `❌ Unsupported target(s):`,
+      `❌ Unsupported target(s) for stream \`${rel}/${chan}\`:`,
       ``,
       ...lines,
       ``,
-      `**Supported targets (${all.length}):** ${all
+      `**Targets in \`${rel}/${chan}\` (${all.length}):** ${all
         .sort()
         .map((t) => `\`${t}\``)
         .join(", ")}`,
       ``,
-      `Only these targets are valid. Use \`list-targets({ query: "..." })\` to search.`,
+      `Only these are valid for this stream. A target missing here may exist in another release — some hardware ships only on newer releases (e.g. NVIDIA Thor on 2026, not 2024). Use \`list-targets({ query: "...", release, channel })\` to check other streams, or the docs support matrix at https://docs.peridio.com/hardware/support-matrix#supported.`,
     ].join("\n"),
   };
 }
@@ -65,13 +82,13 @@ export function registerPackageTools(
           .string()
           .optional()
           .describe(
-            "Release year. Defaults to '2024'. Only override if you're targeting an older or experimental stream.",
+            "Release year. Defaults to '2024'. Valid: '2024', '2026'. Newer hardware may exist only on '2026'.",
           ),
         channel: z
           .string()
           .optional()
           .describe(
-            "Release channel. Defaults to 'edge'. Other valid values today: 'apollo'.",
+            "Release channel. Defaults to 'edge'. Valid: 'next' (nightly, may break), 'edge' (dev/RC), 'stable' (pre-prod/prod, behind edge).",
           ),
       },
       outputSchema: {
@@ -101,7 +118,12 @@ export function registerPackageTools(
       },
     },
     async ({ targets, name, release, channel }) => {
-      const targetCheck = await validateTargets(repoClient, targets);
+      const targetCheck = await validateTargets(
+        repoClient,
+        targets,
+        release,
+        channel,
+      );
       if (!targetCheck.ok) {
         return {
           content: [
@@ -223,13 +245,13 @@ export function registerPackageTools(
           .string()
           .optional()
           .describe(
-            "Release year. Defaults to '2024'. Only override if you're targeting an older or experimental stream.",
+            "Release year. Defaults to '2024'. Valid: '2024', '2026'. Newer hardware may exist only on '2026'.",
           ),
         channel: z
           .string()
           .optional()
           .describe(
-            "Release channel. Defaults to 'edge'. Other valid values today: 'apollo'.",
+            "Release channel. Defaults to 'edge'. Valid: 'next' (nightly, may break), 'edge' (dev/RC), 'stable' (pre-prod/prod, behind edge).",
           ),
       },
       outputSchema: {
@@ -256,7 +278,12 @@ export function registerPackageTools(
       },
     },
     async ({ targets, query, limit, release, channel }) => {
-      const targetCheck = await validateTargets(repoClient, targets);
+      const targetCheck = await validateTargets(
+        repoClient,
+        targets,
+        release,
+        channel,
+      );
       if (!targetCheck.ok) {
         return {
           content: [
@@ -348,6 +375,329 @@ export function registerPackageTools(
       }
     },
   );
+
+  const coverageMatchSchema = z.object({
+    name: z.string(),
+    version: z.string(),
+    release: z.string(),
+    arch: z.string(),
+    repo: z.string(),
+    summary: z.string(),
+  });
+
+  server.registerTool(
+    "check-package-coverage",
+    {
+      title: "Batch-check dependencies against the Avocado feed",
+      description:
+        'Check a WHOLE LIST of dependencies against one target\'s package feed in a SINGLE call — the batch engine behind the `/package-coverage` report. For each dependency you pass a display name plus one or more candidate feed search terms (`queries`); the tool warms the target\'s feed once and returns a present/missing verdict per dependency with a match-confidence tier (`exact`/`strong`/`fuzzy`), the best-matching feed package, and near-miss alternatives, plus an overall coverage summary. **Use this instead of calling `search-packages` once per dependency** — it collapses N round-trips into one and shares the exact `dnf search` scoring. YOU do the name normalization (Debian/Alpine/pip/npm → RPM/Yocto): put every plausible variant for a dependency in its `queries` array (e.g. for `libssl-dev`: `["openssl", "libssl", "ssl"]`). Matching is optimistic — any hit (including a summary-only hit) counts as present, flagged `fuzzy` so a maintainer can verify. See `avocado://skills/package-coverage`.',
+      inputSchema: {
+        target: z
+          .string()
+          .describe(
+            "Single Avocado target slug the coverage is evaluated against (e.g. 'jetson-orin-nano-devkit'). Must exist in the given release/channel — targets differ per stream.",
+          ),
+        dependencies: z
+          .array(
+            z.object({
+              name: z
+                .string()
+                .describe(
+                  "Display/source name of the dependency as it appears in the Dockerfile/SBOM (e.g. 'libssl-dev', 'paho-mqtt').",
+                ),
+              ecosystem: z
+                .string()
+                .optional()
+                .describe(
+                  "Where it came from: 'system-apt' | 'system-apk' | 'pip' | 'npm' | 'cargo' | 'rpm' | ... Carried through to the report unchanged.",
+                ),
+              queries: z
+                .array(z.string().min(1))
+                .min(1)
+                .describe(
+                  "Ordered candidate feed search terms to try for this dependency — YOUR normalized name variants. The best hit across all of them wins. Match summaries too, so a keyword like 'mqtt' can surface 'paho-mqtt'.",
+                ),
+            }),
+          )
+          .min(1)
+          .describe("The dependencies to check. One entry per library."),
+        release: z
+          .string()
+          .optional()
+          .describe(
+            "Release year. Defaults to '2024'. Newer hardware may only exist on '2026'.",
+          ),
+        channel: z
+          .string()
+          .optional()
+          .describe(
+            "Release channel. Defaults to 'edge'. Valid: 'next' (nightly, may break), 'edge' (dev/RC), 'stable' (pre-prod/prod, behind edge).",
+          ),
+        maxAlternatives: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe(
+            "How many near-miss alternative package names to surface per dependency (for maintainer review). Default 3.",
+          ),
+      },
+      outputSchema: {
+        target: z.string(),
+        release: z.string(),
+        channel: z.string(),
+        targetAvailable: z
+          .boolean()
+          .describe("False if the target does not exist in this stream."),
+        summary: z.object({
+          total: z.number().int(),
+          present: z.number().int(),
+          missing: z.number().int(),
+          coveragePercent: z.number().int(),
+          exact: z.number().int(),
+          strong: z.number().int(),
+          fuzzy: z.number().int(),
+        }),
+        results: z.array(
+          z.object({
+            name: z.string(),
+            ecosystem: z.string().optional(),
+            status: z.enum(["present", "missing"]),
+            confidence: z.enum(["exact", "strong", "fuzzy"]).nullable(),
+            match: coverageMatchSchema.nullable(),
+            matchedQuery: z.string().nullable(),
+            alternatives: z.array(z.string()),
+          }),
+        ),
+        feedErrors: z.array(z.string()),
+      },
+      annotations: {
+        title: "Batch-check dependencies against the Avocado feed",
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
+    },
+    async ({ target, dependencies, release, channel, maxAlternatives }) => {
+      const rel = release ?? DEFAULT_RELEASE;
+      const chan = channel ?? DEFAULT_CHANNEL;
+      const maxAlt = maxAlternatives ?? 3;
+
+      const emptySummary = {
+        total: dependencies.length,
+        present: 0,
+        missing: dependencies.length,
+        coveragePercent: 0,
+        exact: 0,
+        strong: 0,
+        fuzzy: 0,
+      };
+
+      // Validate the target against THIS stream — the Thor-on-2024 case.
+      const manifest = await repoClient.getTargetsConfig(release, channel);
+      if (!manifest) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `# check-package-coverage failed\n\nCould not fetch \`targets.json\` for \`${rel}/${chan}\` from repo.avocadolinux.org. Check the release/channel and network.`,
+            },
+          ],
+          structuredContent: {
+            target,
+            release: rel,
+            channel: chan,
+            targetAvailable: false,
+            summary: emptySummary,
+            results: [],
+            feedErrors: [],
+          },
+          isError: true,
+        };
+      }
+      if (!manifest[target]) {
+        const fuzzy = resolveTarget(target, Object.keys(manifest)).slice(0, 3);
+        return {
+          content: [
+            {
+              type: "text",
+              text: [
+                `# check-package-coverage — target not in \`${rel}/${chan}\``,
+                ``,
+                `\`${target}\` is not available in the \`${rel}/${chan}\` stream.${
+                  fuzzy.length
+                    ? ` Did you mean: ${fuzzy.map((t) => `\`${t}\``).join(", ")}?`
+                    : ""
+                }`,
+                ``,
+                `Some hardware ships only on newer releases (e.g. NVIDIA Thor on 2026, not 2024). Check the docs support matrix (https://docs.peridio.com/hardware/support-matrix#supported) or \`list-targets({ query: "${target}", release, channel })\` against another stream, then re-run with the release/channel that supports this target.`,
+              ].join("\n"),
+            },
+          ],
+          structuredContent: {
+            target,
+            release: rel,
+            channel: chan,
+            targetAvailable: false,
+            summary: emptySummary,
+            results: [],
+            feedErrors: [],
+          },
+          isError: true,
+        };
+      }
+
+      try {
+        // One feed warm-up for the whole batch; cached process-wide after this.
+        const { packages, errors } = await repoClient.fetchTargetPackages(
+          target,
+          release,
+          channel,
+        );
+
+        const results = dependencies.map((dep) => {
+          let best: SearchResult | null = null;
+          let matchedQuery: string | null = null;
+          const altNames = new Set<string>();
+          for (const q of dep.queries) {
+            const ranked = rankMatches(packages, q);
+            if (ranked.length > 0) {
+              if (!best || ranked[0].score > best.score) {
+                best = ranked[0];
+                matchedQuery = q;
+              }
+              for (const r of ranked.slice(0, maxAlt + 1)) altNames.add(r.name);
+            }
+          }
+          if (best) altNames.delete(best.name);
+          return {
+            name: dep.name,
+            ecosystem: dep.ecosystem,
+            status: (best ? "present" : "missing") as "present" | "missing",
+            confidence: best ? scoreToConfidence(best.score) : null,
+            match: best
+              ? {
+                  name: best.name,
+                  version: best.version,
+                  release: best.release,
+                  arch: best.arch,
+                  repo: best.repo,
+                  summary: best.summary,
+                }
+              : null,
+            matchedQuery,
+            alternatives: Array.from(altNames).slice(0, maxAlt),
+          };
+        });
+
+        const present = results.filter((r) => r.status === "present").length;
+        const summary = {
+          total: results.length,
+          present,
+          missing: results.length - present,
+          coveragePercent: results.length
+            ? Math.round((present / results.length) * 100)
+            : 0,
+          exact: results.filter((r) => r.confidence === "exact").length,
+          strong: results.filter((r) => r.confidence === "strong").length,
+          fuzzy: results.filter((r) => r.confidence === "fuzzy").length,
+        };
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: renderCoverage(target, rel, chan, summary, results, errors),
+            },
+          ],
+          structuredContent: {
+            target,
+            release: rel,
+            channel: chan,
+            targetAvailable: true,
+            summary,
+            results,
+            feedErrors: errors,
+          },
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `# check-package-coverage failed\n\n❌ ${error}`,
+            },
+          ],
+          structuredContent: {
+            target,
+            release: rel,
+            channel: chan,
+            targetAvailable: true,
+            summary: emptySummary,
+            results: [],
+            feedErrors: [],
+          },
+          isError: true,
+        };
+      }
+    },
+  );
+}
+
+interface CoverageRow {
+  name: string;
+  ecosystem?: string;
+  status: "present" | "missing";
+  confidence: "exact" | "strong" | "fuzzy" | null;
+  match: { name: string; version: string } | null;
+  matchedQuery: string | null;
+  alternatives: string[];
+}
+
+function renderCoverage(
+  target: string,
+  release: string,
+  channel: string,
+  summary: {
+    total: number;
+    present: number;
+    missing: number;
+    coveragePercent: number;
+    exact: number;
+    strong: number;
+    fuzzy: number;
+  },
+  results: CoverageRow[],
+  errors: string[],
+): string {
+  let out = `# check-package-coverage\n\n`;
+  out += `**Target:** \`${target}\`  •  **Stream:** \`${release}/${channel}\`\n`;
+  out += `**Coverage:** ${summary.coveragePercent}% (${summary.present}/${summary.total} present)`;
+  if (summary.fuzzy > 0) {
+    out += ` — of which ${summary.exact} exact, ${summary.strong} strong, **${summary.fuzzy} fuzzy** (verify before relying on the number)`;
+  }
+  out += `\n**Missing:** ${summary.missing}\n`;
+
+  if (errors.length > 0) {
+    out += `\n> ⚠️ Some repos failed to fetch (results may be incomplete): ${errors.join("; ")}\n`;
+  }
+
+  out += `\n| Dependency | Ecosystem | Status | Feed package | Version | Confidence | Alternatives |\n`;
+  out += `|---|---|---|---|---|---|---|\n`;
+  for (const r of results) {
+    const status = r.status === "present" ? "✅" : "❌";
+    const pkg = r.match ? `\`${r.match.name}\`` : "—";
+    const ver = r.match ? r.match.version : "—";
+    const conf = r.confidence ?? "—";
+    const alts =
+      r.alternatives.length > 0
+        ? r.alternatives.map((a) => `\`${a}\``).join(", ")
+        : "—";
+    out += `| ${r.name} | ${r.ecosystem ?? "—"} | ${status} | ${pkg} | ${ver} | ${conf} | ${alts} |\n`;
+  }
+  out += `\n_\`fuzzy\` = summary-only hit, optimistically counted as present — a maintainer should confirm. Missing rows need upstream research (see the \`/package-coverage\` flow)._`;
+  return out;
 }
 
 function renderHeader(

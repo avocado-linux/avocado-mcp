@@ -5,11 +5,11 @@ export const DESCRIPTION =
 
 export const CONTENT = `# Hardware catalog
 
-Avocado OS targets are organized as flat strings (e.g. \`raspberrypi5\`, \`imx8mp-evk\`, \`jetson-orin-nano-devkit\`). The canonical list lives in:
+Avocado OS targets are organized as flat strings (e.g. \`raspberrypi5\`, \`imx8mp-evk\`, \`jetson-orin-nano-devkit\`). The canonical list lives per feed stream at \`{host}/{release}/{channel}/targets.json\`, e.g.:
 
-> https://repo.avocadolinux.org/latest/apollo/edge/targets.json
+> https://repo.avocadolinux.org/2024/edge/targets.json
 
-This MCP exposes that list via the \`list-targets\` tool. Always consult it before assuming a target exists.
+**Targets differ per stream.** Feeds are published across releases (\`2024\`, \`2026\`) and channels (\`next\`, \`edge\`, \`stable\`), and the target set is not identical between them — newer hardware may exist only on a newer release (e.g. NVIDIA Thor on \`2026\`, not \`2024\`). This MCP exposes the list via the \`list-targets\` tool (pass \`release\`/\`channel\` to inspect a specific stream); the docs support matrix at https://docs.peridio.com/hardware/support-matrix#supported documents which release each board is supported on. Always consult one of these before assuming a target exists.
 
 ## Vendor families currently supported
 

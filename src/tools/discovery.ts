@@ -287,13 +287,25 @@ export function registerDiscoveryTools(
     {
       title: "List Avocado OS targets",
       description:
-        "List Avocado OS hardware targets from the live package feed. Pass `query` to narrow down — strongly recommended when the user has named hardware in their own words (e.g. 'rpi4', 'pi 5', 'jetson orin', 'intel x86'). The query does fuzzy-matching against the canonical slug; an exact match shortcuts to a single row. Without `query`, returns the full list.",
+        "List Avocado OS hardware targets from the live package feed. Pass `query` to narrow down — strongly recommended when the user has named hardware in their own words (e.g. 'rpi4', 'pi 5', 'jetson orin', 'intel x86'). The query does fuzzy-matching against the canonical slug; an exact match shortcuts to a single row. Without `query`, returns the full list. **Targets differ per release/channel** — newer hardware may exist only on a newer release (e.g. NVIDIA Thor on 2026, not 2024). Pass `release`/`channel` to list a specific stream; call it for each stream to discover which release supports a given board (or consult the docs support matrix at https://docs.peridio.com/hardware/support-matrix#supported).",
       inputSchema: {
         query: z
           .string()
           .optional()
           .describe(
             "Free-text hardware identifier in the user's words. Examples: 'raspberry pi 4', 'rpi4', 'jetson orin nano', 'imx8mp'. Token-based fuzzy match against the canonical slug. Returns top matches; exact match returns just that row.",
+          ),
+        release: z
+          .string()
+          .optional()
+          .describe(
+            "Release year to list targets for. Defaults to '2024'. Pass '2026' to see targets on the newer release.",
+          ),
+        channel: z
+          .string()
+          .optional()
+          .describe(
+            "Release channel. Defaults to 'edge'. Valid: 'next', 'edge', 'stable'.",
           ),
       },
       outputSchema: {
@@ -336,14 +348,16 @@ export function registerDiscoveryTools(
         openWorldHint: true,
       },
     },
-    async ({ query }) => {
-      const config = await repoClient.getTargetsConfig();
+    async ({ query, release, channel }) => {
+      const rel = release ?? "2024";
+      const chan = channel ?? "edge";
+      const config = await repoClient.getTargetsConfig(release, channel);
       if (!config) {
         return {
           content: [
             {
               type: "text",
-              text: `# list-targets failed\n\nCould not fetch \`targets.json\` from repo.avocadolinux.org. Check network and try again.`,
+              text: `# list-targets failed\n\nCould not fetch \`targets.json\` for \`${rel}/${chan}\` from repo.avocadolinux.org. Check the release/channel and network, then try again.`,
             },
           ],
           structuredContent: { total: 0, query, matched: 0, targets: [] },
@@ -367,7 +381,7 @@ export function registerDiscoveryTools(
         targets: entries.map(([slug, repos]) => ({ slug, repos })),
       };
 
-      let out = `# list-targets\n\n`;
+      let out = `# list-targets\n\n**Stream:** \`${rel}/${chan}\`\n\n`;
       if (query) {
         out += `**Query:** \`${query}\`  •  **Matches:** ${entries.length} of ${allTargets.length}\n\n`;
         if (entries.length === 0) {

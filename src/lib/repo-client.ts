@@ -377,31 +377,10 @@ export class RepoClient {
       if (tErrors.length > 0) errors.push({ target, messages: tErrors });
     }
 
-    const q = query.trim().toLowerCase();
-    if (!q) return { totalMatches: 0, results: [], errors };
-
-    const seen = new Set<string>();
-    const matches: SearchResult[] = [];
-    for (const p of all) {
-      const name = p.name.toLowerCase();
-      let score = 0;
-      if (name === q) score = 100;
-      else if (name.startsWith(q)) score = 80;
-      else if (name.includes(q)) score = 60;
-      else if (p.summary.toLowerCase().includes(q)) score = 30;
-      else continue;
-
-      const dedupKey = `${p.name}.${p.arch}-${p.version}-${p.release}`;
-      if (seen.has(dedupKey)) continue;
-      seen.add(dedupKey);
-
-      matches.push({ ...p, score });
-    }
-
-    matches.sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
+    const ranked = rankMatches(all, query);
     return {
-      totalMatches: matches.length,
-      results: matches.slice(0, limit),
+      totalMatches: ranked.length,
+      results: ranked.slice(0, limit),
       errors,
     };
   }
@@ -410,4 +389,48 @@ export class RepoClient {
 export interface SearchResult extends FeedPackage {
   /** higher = better match */
   score: number;
+}
+
+/**
+ * Rank a package set against a single free-text query, mirroring
+ * `dnf search`: exact name (100) > name prefix (80) > name substring (60) >
+ * summary substring (30). Dedups by (name, arch, version, release) so the
+ * same RPM listed under multiple repo paths appears once. Returns the full
+ * sorted list (no limit) — callers slice as needed. Shared by
+ * `searchPackages` and the batch coverage tool so scoring never diverges.
+ */
+export function rankMatches(
+  packages: FeedPackage[],
+  query: string,
+): SearchResult[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return [];
+
+  const seen = new Set<string>();
+  const matches: SearchResult[] = [];
+  for (const p of packages) {
+    const name = p.name.toLowerCase();
+    let score = 0;
+    if (name === q) score = 100;
+    else if (name.startsWith(q)) score = 80;
+    else if (name.includes(q)) score = 60;
+    else if (p.summary.toLowerCase().includes(q)) score = 30;
+    else continue;
+
+    const dedupKey = `${p.name}.${p.arch}-${p.version}-${p.release}`;
+    if (seen.has(dedupKey)) continue;
+    seen.add(dedupKey);
+
+    matches.push({ ...p, score });
+  }
+
+  matches.sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
+  return matches;
+}
+
+/** Map a `rankMatches` score to a coverage confidence tier. */
+export function scoreToConfidence(score: number): "exact" | "strong" | "fuzzy" {
+  if (score >= 100) return "exact";
+  if (score >= 60) return "strong";
+  return "fuzzy";
 }

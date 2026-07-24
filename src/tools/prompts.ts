@@ -100,10 +100,10 @@ export function registerPrompts(server: McpServer): void {
               "Please walk me through recovery:",
               "",
               "1. If I haven't pasted the log yet, ask for it now. **If I have output from a recent failed run, use what already exists** — don't re-run `avocado install` / `avocado build` just to capture output; they're slow and noisy. Where to look depends on the execution channel (see `avocado://skills/avocado-cli-execution`): on the `bash` channel, read `/tmp/avocado-install.log` / `/tmp/avocado-build.log` with `Read` or `tail -200`; on the `host-tool` channel, call `avocado_cli_status` with the most-recent `run_id` (bump `tailLines` if needed). If neither is available, ask me to paste the log.",
-              "2. Call `explain-build-error` with the log AND `targets` set to mine. The tool will: (a) match against pattern fingerprints, (b) extract failing package names and look them up across both `edge` and `apollo` channels.",
+              "2. Call `explain-build-error` with the log AND `targets` set to mine. The tool will: (a) match against pattern fingerprints, (b) extract failing package names and look them up on the `edge` channel of both releases (`2024` and `2026`) — the streams almost everyone is on.",
               "3. **If the result includes any `Hook script:` pattern, branch HERE — this is a user-code failure, not an Avocado bug.** Read `avocado://skills/extension-build-debugging`. Then: (a) Read the failing hook file (path is in the error) at the indicated line. (b) Call `get-reference-file` on a closely related reference's same hook (e.g. `python-flask/app-install.sh`) to compare patterns. (c) Apply the fix from the skill's failure-mode table. Do NOT continue with SDK / cross-channel investigation — those don't apply to hook failures.",
-              "4. If the package investigation says 'present on both channels' or 'only on edge' AND the log mentions `libc` / `GLIBC` / SONAMEs, this points at host-arch / arch-metadata. Run `uname -m` and `sw_vers` (or `lsb_release -a`) via Bash to capture my host details, then advise on host swap (e.g. x86_64 Linux for aarch64-broken paths).",
-              "5. If the investigation says 'only on apollo', tell me to set `distro.channel: apollo` in `avocado.yaml` and re-run `avocado install`.",
+              "4. If the package investigation shows the package present on one-or-more streams AND the log mentions `libc` / `GLIBC` / SONAMEs, this points at host-arch / arch-metadata. Run `uname -m` and `sw_vers` (or `lsb_release -a`) via Bash to capture my host details, then advise on host swap (e.g. x86_64 Linux for aarch64-broken paths).",
+              "5. If the investigation shows the package is present on the other release's `edge` (e.g. on `2026/edge` but not `2024/edge`), tell me to set `distro.release` in `avocado.yaml` to match that release and re-run `avocado install` — newer hardware/packages often live only on `2026`.",
               "6. If everything is inconclusive, summarise what you ruled out, what you'd need next (e.g. the full log, the failing extension's source), and suggest filing a bug.",
               "",
               log ? `\nHere is the log:\n\n\`\`\`\n${log}\n\`\`\`` : "",
@@ -433,5 +433,95 @@ export function registerPrompts(server: McpServer): void {
         },
       ],
     }),
+  );
+
+  server.prompt(
+    "package-coverage",
+    "Analyze a containerized app for migration off Docker onto Avocado OS. Ingests a Dockerfile OR an SBOM (CycloneDX / SPDX), resolves the feed stream (target + release + channel — from avocado.yaml, or interactively when there's no project), extracts runtime dependencies, batch-checks them all against the live feed with `check-package-coverage`, researches gaps on the open web, and writes a shareable `package-coverage.md` — a per-dependency present/missing table with upstream links and a headline coverage %. The report is written for an Avocado OS feed maintainer.",
+    {
+      input: z
+        .string()
+        .optional()
+        .describe(
+          "Path to the user's Dockerfile or SBOM file (CycloneDX/SPDX JSON), or the pasted contents. If omitted, ask the user for it.",
+        ),
+      inputType: z
+        .string()
+        .optional()
+        .describe(
+          "One of 'dockerfile', 'cyclonedx', 'spdx'. If omitted, infer from the file name/contents and confirm with the user.",
+        ),
+      target: z
+        .string()
+        .optional()
+        .describe(
+          "Avocado target slug (e.g. 'jetson-orin-nano-devkit'). If omitted or given as prose hardware, resolve it in Step 0 (from avocado.yaml if present, else interactively via `list-targets` + the docs support matrix).",
+        ),
+      release: z
+        .string()
+        .optional()
+        .describe(
+          "Feed release (e.g. '2024' or '2026'). If omitted, resolve in Step 0 — read it from avocado.yaml's `distro.release`, or pick per the support matrix (default to the newest release the target supports).",
+        ),
+      channel: z
+        .string()
+        .optional()
+        .describe(
+          "Feed channel: 'next' | 'edge' | 'stable'. If omitted, resolve in Step 0 — read from avocado.yaml's `distro.channel`, or recommend 'edge' and ask.",
+        ),
+      includeBuildTime: z
+        .string()
+        .optional()
+        .describe(
+          "Pass 'true' to also analyze build-time-only dependencies (compilers, -dev headers, build tools) in a separate table. Default: runtime dependencies only — the meaningful coverage number for what ships on-device.",
+        ),
+    },
+    ({ input, inputType, target, release, channel, includeBuildTime }) => {
+      const buildTime = includeBuildTime === "true";
+      const streamGiven = Boolean(release || channel);
+      return {
+        messages: [
+          {
+            role: "user",
+            content: {
+              type: "text",
+              text: [
+                `I want to move a Docker-based application onto Avocado OS. Produce a **package coverage report** for it.${
+                  target ? ` Target: \`${target}\`.` : ""
+                }${release ? ` Release: \`${release}\`.` : ""}${channel ? ` Channel: \`${channel}\`.` : ""}${inputType ? ` Input type: ${inputType}.` : ""}`,
+                "",
+                "**Read `avocado://skills/package-coverage` first** — it is the authoritative method (stream resolution, input parsing, the runtime-only scope rule, feed name-normalization, the batch `check-package-coverage` tool, web research for gaps, and the exact `package-coverage.md` format). Follow it precisely.",
+                "",
+                "**Step 0 — resolve the target + feed stream.** The feed is per-(target, release, channel), and targets differ per stream (some hardware ships only on a newer release, e.g. NVIDIA Thor on 2026 not 2024). So pin down all three first:",
+                "- **If I have an `avocado.yaml`,** read it — take the target from `default_target`/`supported_targets` and the stream from `distro.release`/`distro.channel`. Confirm the resolved `(target, release, channel)` back to me in one line.",
+                streamGiven
+                  ? "- I've given you stream values above — confirm they're consistent with my project (if any) and use them."
+                  : "- **If I have NO project,** resolve interactively: (a) resolve my hardware to a canonical slug with `list-targets` and confirm; (b) check which release supports it via the docs support matrix (https://docs.peridio.com/hardware/support-matrix#supported — use `search-docs`/`get-doc` or `WebFetch`), corroborating with `list-targets({ query, release })` per stream — if supported on both 2024 and 2026, ask me but **default to / recommend the newest (2026)**; (c) **recommend the `edge` channel** but ask if I'd prefer `next`, `edge`, or `stable` (next = nightly, may break / packages go missing; edge = RC, good for dev; stable = pre-prod/prod, normally behind edge). Confirm the final `(target, release, channel)` before running lookups.",
+                "",
+                "Then execute the method from the skill:",
+                "",
+                input
+                  ? `1. **Ingest the dependency source** — provided: \`${input}\`. Determine whether it's a Dockerfile, CycloneDX, or SPDX (read the file if it's a path). If it's a Dockerfile referencing a manifest (\`requirements.txt\`, \`package.json\`, \`Cargo.toml\`), read that too.`
+                  : "1. **Ingest the dependency source** — ask me for my Dockerfile or SBOM (CycloneDX / SPDX). Accept a file path or pasted contents.",
+                "2. **Extract** the de-duplicated dependency set. Scope is **runtime dependencies only** — drop build-time-only tooling (compilers, `make`/`cmake`/`meson`, `-dev`/`-devel` headers, `build-essential`, `pkg-config`, test/lint frameworks)." +
+                  (buildTime
+                    ? " I also want build-time deps — capture them too, but in a SEPARATE 'Build-time (SDK) dependencies' table so the runtime coverage number stays honest."
+                    : "") +
+                  " For a Dockerfile, use explicitly-declared installs only — do NOT expand the base image's full transitive OS closure. Tell me the extracted count.",
+                "3. **Batch-check the feed** with a single `check-package-coverage({ target, release, channel, dependencies: [...] })` call (NOT one `search-packages` per dependency). For each dependency, YOU supply the `queries` array — the normalized name variants (strip `lib`/`-dev`/ABI suffixes; try `python3-`/`nodejs-` prefixes AND bare names; add a keyword form). The tool returns per-dependency status + confidence (`exact`/`strong`/`fuzzy`) + best match + alternatives, and an overall coverage summary. If it returns `targetAvailable: false`, the target isn't in that stream — go back to Step 0 and pick the release that supports it. Re-run just the `missing` ones with better `queries` if you suspect a different feed name.",
+                "4. **Research every MISSING package** on the open web (`WebSearch` / `WebFetch`; `gh`/`curl` per `avocado://skills/upstream-sources` if it's an avocado-linux thing). Capture what it is, canonical upstream repo URL (+ 1–2 secondary links: homepage / PyPI / npm / crates.io / distro package page), license (SPDX id), latest version, and whether an existing OE/Yocto/Fedora recipe exists. **Never invent a link** — if you can't find a canonical source, say so. **If web-research tools aren't available this session, don't stall or guess** — still produce the report, but note per missing package that upstream research wasn't performed (no web access) so the maintainer knows to follow up.",
+                "5. **Write the report** to the current working directory (unless I name another path) as `package-coverage-<target>.md` when the target is known — so running this for a second board doesn't overwrite the first — in the exact format from the skill: header block (app, input type, target, **feed stream `<release>/<channel>`**, base image, date), a Summary with the **headline coverage %** (present/total, shown as a fraction, e.g. `18/22 = 82%`, and if any 'present' rows are fuzzy, say how many so the number stays honest), the per-dependency Coverage detail table (with the Match confidence column), a 'Missing packages — maintainer detail' section with one subsection per gap, and (optionally) an 'Excluded (build-time only)' list. The report must stand alone for an Avocado OS feed maintainer.",
+                "",
+                "**This is analysis only** — produce the report artifact. Do NOT edit my `avocado.yaml` or install anything as part of this; that's a separate follow-up once the gaps are understood.",
+                "",
+                "When done, give me a short summary in chat: the resolved stream, the coverage %, the count of missing packages, and the path to the report file.",
+              ]
+                .filter((s) => s !== "")
+                .join("\n"),
+            },
+          },
+        ],
+      };
+    },
   );
 }

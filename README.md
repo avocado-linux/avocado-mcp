@@ -49,6 +49,7 @@ Requires Node ≥18. `npx` will clone the repo on first run, install dependencie
 | `list-targets`               | Every Avocado target currently supported by the package feed                         |
 | `search-packages`            | Substring search across the live RPM feed (optionally scoped to release/channel)     |
 | `describe-package`           | Detail view for one package: version, arch, summary, description                     |
+| `check-package-coverage`     | Batch-check a whole dependency list against one target/stream in a single call; per-dep present/missing verdict + confidence + coverage % (engine behind `/package-coverage`) |
 | `search-references`          | Browse or search the reference catalog (omit `query` to browse, pass `query` to rank)|
 | `get-reference`              | Full project bundle: file tree, `avocado.yaml`, README, overlay layout, build hooks  |
 | `get-reference-file`         | Read a single file from a reference (app source, overlay configs, build scripts)     |
@@ -85,6 +86,7 @@ Background knowledge the LLM reads to ground itself before invoking tools:
 - `avocado://skills/iterative-deployment`
 - `avocado://skills/app-development`
 - `avocado://skills/upstream-sources`
+- `avocado://skills/package-coverage`
 
 ### Prompts
 
@@ -96,10 +98,11 @@ Pre-built workflows the user can invoke by name:
 - `debug-build-failure` — recovery walkthrough for failed `avocado install` / `avocado build`: known-issues triage, cross-channel package lookup, host/arch checks.
 - `provision-device` — fully automated first-time flash: env check → target validation → per-target caveats → build → provision → physical handoff → first-boot UART verification.
 - `build-and-deploy` — fully automated `avocado build && avocado deploy` (with conditional `install` on missing-package errors) to a running device, with verification. The canonical iteration loop after first provision.
+- `package-coverage` — for users moving off Docker: ingests a Dockerfile or SBOM (CycloneDX / SPDX) plus a target, extracts runtime dependencies, checks each against the live package feed, researches gaps on the web, and writes a shareable `package-coverage.md` (present/missing table + upstream links + headline coverage %) for an Avocado OS feed maintainer.
 
 ## Recommended flow
 
-For most user requests, the canonical entry point is one of the six prompts — they orchestrate the right tool sequence and surface the relevant skills along the way.
+For most user requests, the canonical entry point is one of the prompts — they orchestrate the right tool sequence and surface the relevant skills along the way.
 
 - **New to Avocado / fresh project** → `/start-avocado-project`
 - **First-time flash of a physical device or QEMU VM** → `/provision-device`
@@ -182,7 +185,7 @@ When you change source files, run `npm run build` again and restart the client (
 
 The server reads from public HTTPS endpoints only:
 
-- **`repo.avocadolinux.org`** — RPM repodata (targets manifest, `repomd.xml`, `primary.xml.gz`). Used by `list-targets`, `search-packages`, `describe-package`, `add-package-to-extension`. Defaults to release `2024`, channel `edge`; both are overridable per-call.
+- **`repo.avocadolinux.org`** — RPM repodata (targets manifest, `repomd.xml`, `primary.xml.gz`). Used by `list-targets`, `search-packages`, `describe-package`, `check-package-coverage`, `add-package-to-extension`. Defaults to release `2024`, channel `edge`; both are overridable per-call. Multiple releases (`2024`, `2026`, …) and channels are published, and the target set differs per stream (newer boards may exist only on a newer release), so target validation is done against the specific stream being queried.
 - **`github.com/avocado-linux/references`** — full source of every reference project. Used by `get-reference` and `get-reference-file` (fetched via `raw.githubusercontent.com` + GitHub trees API).
 - **`github.com/peridio/docs`** — the Docusaurus source for `docs.peridio.com`. Used by `search-docs` and `get-doc`. Trees API for the manifest (cached 1 h), `raw.githubusercontent.com` for content (cached on disk by blob SHA, no TTL — content-addressable).
 

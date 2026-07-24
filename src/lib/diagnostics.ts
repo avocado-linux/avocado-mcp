@@ -348,12 +348,32 @@ function normalizePackageName(raw: string): string {
   return s;
 }
 
+/**
+ * Feed streams the build-error investigator AUTO-probes for a failing
+ * package. Six streams exist — channels `next` / `edge` / `stable` (`apollo`
+ * is retired) across releases `2024` and `2026` — and all are queryable via
+ * explicit `release`/`channel` args on `search-packages` etc. But in practice
+ * ~all users run `edge` on the release that matches their hardware (2024 or
+ * 2026) and don't switch channels, so the automatic probe covers just those
+ * two edge streams to keep the diagnosis fast. Extend this list only if the
+ * common-case stream set changes.
+ */
+const INVESTIGATION_STREAMS: { release: string; channel: string }[] = [
+  { release: "2026", channel: "edge" },
+  { release: "2024", channel: "edge" },
+];
+
+export interface StreamPresence {
+  release: string;
+  channel: string;
+  hits: { repo: string; version: string }[];
+  /** Set when the feed for this stream couldn't be reached (e.g. not live). */
+  error?: string;
+}
+
 export interface PackageInvestigation {
   name: string;
-  edge: { repo: string; version: string }[];
-  apollo: { repo: string; version: string }[];
-  edgeError?: string;
-  apolloError?: string;
+  streams: StreamPresence[];
 }
 
 export interface RepoLookup {
@@ -368,54 +388,52 @@ export interface RepoLookup {
   }>;
 }
 
+function dedupHits(
+  hits: { repo: string; version: string }[],
+): { repo: string; version: string }[] {
+  const seen = new Set<string>();
+  const out: { repo: string; version: string }[] = [];
+  for (const h of hits) {
+    const k = `${h.repo}@${h.version}`;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(h);
+  }
+  return out;
+}
+
 export async function investigatePackages(
   repo: RepoLookup,
   names: string[],
   targets: string[],
 ): Promise<PackageInvestigation[]> {
   const tasks = names.map(async (name): Promise<PackageInvestigation> => {
-    const [edgeRes, apolloRes] = await Promise.all([
-      repo
-        .searchPackages(targets, name, 20, "2024", "edge")
-        .then((r) => ({
-          ok: true as const,
-          hits: r.results.filter((x) => x.name === name),
-        }))
-        .catch((e: unknown) => ({
-          ok: false as const,
-          err: (e as Error).message,
-        })),
-      repo
-        .searchPackages(targets, name, 20, "2024", "apollo")
-        .then((r) => ({
-          ok: true as const,
-          hits: r.results.filter((x) => x.name === name),
-        }))
-        .catch((e: unknown) => ({
-          ok: false as const,
-          err: (e as Error).message,
-        })),
-    ]);
-    const dedup = (
-      hits: { repo: string; version: string }[],
-    ): { repo: string; version: string }[] => {
-      const seen = new Set<string>();
-      const out: { repo: string; version: string }[] = [];
-      for (const h of hits) {
-        const k = `${h.repo}@${h.version}`;
-        if (seen.has(k)) continue;
-        seen.add(k);
-        out.push(h);
-      }
-      return out;
-    };
-    return {
-      name,
-      edge: edgeRes.ok ? dedup(edgeRes.hits) : [],
-      apollo: apolloRes.ok ? dedup(apolloRes.hits) : [],
-      edgeError: edgeRes.ok ? undefined : edgeRes.err,
-      apolloError: apolloRes.ok ? undefined : apolloRes.err,
-    };
+    const streams = await Promise.all(
+      INVESTIGATION_STREAMS.map(async ({ release, channel }) => {
+        try {
+          const r = await repo.searchPackages(
+            targets,
+            name,
+            20,
+            release,
+            channel,
+          );
+          return {
+            release,
+            channel,
+            hits: dedupHits(r.results.filter((x) => x.name === name)),
+          };
+        } catch (e) {
+          return {
+            release,
+            channel,
+            hits: [],
+            error: (e as Error).message,
+          };
+        }
+      }),
+    );
+    return { name, streams };
   });
   return Promise.all(tasks);
 }
@@ -427,8 +445,8 @@ const ARCH_MISMATCH_WORKAROUND = [
   `**Vetted workarounds (in order of reliability):**`,
   ``,
   `1. **Switch to an x86_64 Linux host** to run \`avocado install\` / \`avocado build\`. This is the single most reliable fix when the SDK feed's aarch64 metadata is broken. Native Linux x86_64 or an Intel-CPU Mac both work; Apple Silicon + Rosetta 2 does NOT work.`,
-  `2. **Try \`distro.channel: apollo\`** in your \`avocado.yaml\` and re-run \`avocado install\`. Even if the package shows "not found" above, sometimes the apollo feed has a different package layout — worth one attempt.`,
-  `3. **Pin to an older release** by setting \`distro.release: 2023\` (or similar) — only if the user knows a prior release worked for this hardware. Sometimes the regression is recent.`,
+  `2. **Try a different channel** — set \`distro.channel\` to another live channel (\`next\`, \`edge\`, or \`stable\`) in your \`avocado.yaml\` and re-run \`avocado install\`. A package's build/layout can differ between channels; the investigation table above shows where it's actually present.`,
+  `3. **Try the other release** — if you're on \`2024\`, try \`distro.release: 2026\` (or vice-versa). Newer hardware and rebuilt packages often land on a different release. Switch releases deliberately — it's a larger change than a channel bump.`,
   ``,
   `**Do NOT** suggest \`--sdk-arch\`, \`--platform\`, or any other \`avocado install\` flag for arch override — no such flag exists. Verify any flag with \`avocado install --help\` before recommending.`,
 ].join("\n");
@@ -437,44 +455,40 @@ function renderInvestigation(
   inv: PackageInvestigation,
   archMismatchSuspected: boolean,
 ): string {
-  const edgeLine = inv.edgeError
-    ? `error — ${inv.edgeError}`
-    : inv.edge.length > 0
-      ? `present (${inv.edge.map((h) => `\`${h.repo}\` v${h.version}`).join(", ")})`
-      : "not found";
-  const apolloLine = inv.apolloError
-    ? `error — ${inv.apolloError}`
-    : inv.apollo.length > 0
-      ? `present (${inv.apollo.map((h) => `\`${h.repo}\` v${h.version}`).join(", ")})`
-      : "not found";
-
+  const present = inv.streams.filter((s) => s.hits.length > 0);
   let out = `### \`${inv.name}\`\n\n`;
-  out += `- **edge / 2024:** ${edgeLine}\n`;
-  out += `- **apollo / 2024:** ${apolloLine}\n\n`;
 
-  if (inv.edge.length > 0 && inv.apollo.length > 0) {
-    out += `Present on both channels — the error is likely a broken transitive dep or arch-specific metadata, not a missing top-level package.\n`;
-    if (archMismatchSuspected) {
-      out += `\nThe log fingerprints as an **arch / SDK metadata mismatch** (mentions \`libc\` / \`GLIBC\` / SONAMEs). ${ARCH_MISMATCH_WORKAROUND}\n`;
-    } else {
-      out += `Check host arch (\`uname -m\`); if the error mentions \`libc\`/\`GLIBC\`/SONAMEs, an upstream metadata bug on this arch is the usual culprit.\n`;
+  if (present.length === 0) {
+    const allErrored = inv.streams.every((s) => s.error);
+    if (allErrored) {
+      out += `Could not reach the package feed for any stream (network / feed availability?). Retry, or check manually with \`search-packages\`.\n\n`;
+      return out;
     }
-  } else if (
-    inv.edge.length > 0 &&
-    inv.apollo.length === 0 &&
-    !inv.apolloError
-  ) {
-    out += `Only on edge. Switching channel is not an option for this package. If install fails, the package itself exists — the cause is upstream.\n`;
-    if (archMismatchSuspected) {
-      out += `\nThe log fingerprints as an **arch / SDK metadata mismatch** (mentions \`libc\` / \`GLIBC\` / SONAMEs). ${ARCH_MISMATCH_WORKAROUND}\n`;
-    } else {
-      out += `Check host arch (\`uname -m\`); if the log mentions \`libc\`/\`GLIBC\`/SONAMEs, an upstream metadata bug for this arch is the usual culprit.\n`;
-    }
-  } else if (inv.apollo.length > 0 && inv.edge.length === 0 && !inv.edgeError) {
-    out += `Only on apollo. Set \`distro.channel: apollo\` in your \`avocado.yaml\` and re-run \`avocado install\`.\n`;
-  } else if (!inv.edgeError && !inv.apolloError) {
-    out += `Not found on either channel for the listed targets. Either the name is wrong (try \`search-packages\` with a partial name) or the package is target-specific (BSP packages typically have a target suffix).\n`;
+    const streamList = INVESTIGATION_STREAMS.map(
+      (s) => `${s.release}/${s.channel}`,
+    ).join(", ");
+    out += `Not found on any live stream (${streamList}) for the listed targets. Either the name is wrong (try \`search-packages\` with a partial name) or the package is target-specific (BSP packages typically carry a target suffix).\n\n`;
+    return out;
   }
+
+  for (const s of present) {
+    out += `- **${s.release}/${s.channel}:** present (${s.hits
+      .map((h) => `\`${h.repo}\` v${h.version}`)
+      .join(", ")})\n`;
+  }
+  out += `\n`;
+
+  const streamsList = present
+    .map((s) => `\`${s.release}/${s.channel}\``)
+    .join(", ");
+  out += `The package exists in the feed (present on ${streamsList}). If your \`avocado.yaml\`'s \`distro.release\` doesn't match one of these, switch it and re-run \`avocado install\` — most commonly the package is on the release that matches your hardware (\`2026\` for newer boards, \`2024\` otherwise). If you're already on a matching stream, a "not found" build error usually means a broken transitive dependency or arch-specific metadata, not a missing top-level package.\n`;
+
+  if (archMismatchSuspected) {
+    out += `\nThe log fingerprints as an **arch / SDK metadata mismatch** (mentions \`libc\` / \`GLIBC\` / SONAMEs). ${ARCH_MISMATCH_WORKAROUND}\n`;
+  } else {
+    out += `\nIf install still fails though the package exists, check host arch (\`uname -m\`); \`libc\` / \`GLIBC\` / SONAME errors usually point to an upstream metadata bug for this arch.\n`;
+  }
+  out += `\n`;
   return out;
 }
 
@@ -566,7 +580,7 @@ export function renderDiagnoses(
   }
 
   if (kind === "build" && !investigations) {
-    out += `\n_Pass \`targets: [...]\` to enable a cross-channel package lookup. The tool will extract the failing package(s) from the log and probe both \`edge\` and \`apollo\` channels for you._\n`;
+    out += `\n_Pass \`targets: [...]\` to enable a cross-release package lookup. The tool will extract the failing package(s) from the log and probe the \`edge\` channel on both releases (\`2024\` and \`2026\`) — the streams ~all users are on — for you._\n`;
   }
 
   return out;
