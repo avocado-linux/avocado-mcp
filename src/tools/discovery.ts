@@ -4,7 +4,7 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import { statfs } from "fs/promises";
 import { arch as osArch, platform as osPlatform, homedir } from "os";
-import { RepoClient } from "../lib/repo-client.js";
+import { RepoClient, normalizeStream } from "../lib/repo-client.js";
 import { resolveTarget } from "../lib/target-resolver.js";
 import { probeHostMcp, HOST_MCP_URL } from "../lib/cli-channel.js";
 
@@ -349,9 +349,8 @@ export function registerDiscoveryTools(
       },
     },
     async ({ query, release, channel }) => {
-      const rel = release ?? "2024";
-      const chan = channel ?? "edge";
-      const config = await repoClient.getTargetsConfig(release, channel);
+      const { rel, chan } = normalizeStream(release, channel);
+      const config = await repoClient.getTargetsConfig(rel, chan);
       if (!config) {
         return {
           content: [

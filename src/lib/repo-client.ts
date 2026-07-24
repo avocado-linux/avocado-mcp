@@ -432,6 +432,22 @@ export function rankMatches(
   return matches;
 }
 
+/**
+ * Trim + default a release/channel pair. `z.string().optional()` lets callers
+ * pass `undefined`, `""`, or whitespace; this collapses all of those to the
+ * canonical stream so a stray space (`"2024 "`) doesn't fail lookups and every
+ * caller has ONE authoritative value to use for both fetching and messaging.
+ */
+export function normalizeStream(
+  release?: string,
+  channel?: string,
+): { rel: string; chan: string } {
+  return {
+    rel: (release ?? "").trim() || DEFAULT_RELEASE,
+    chan: (channel ?? "").trim() || DEFAULT_CHANNEL,
+  };
+}
+
 /** Map a `rankMatches` score to a coverage confidence tier. */
 export function scoreToConfidence(score: number): "exact" | "strong" | "fuzzy" {
   if (score >= 100) return "exact";

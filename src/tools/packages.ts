@@ -4,8 +4,7 @@ import {
   RepoClient,
   rankMatches,
   scoreToConfidence,
-  DEFAULT_RELEASE,
-  DEFAULT_CHANNEL,
+  normalizeStream,
   type SearchResult,
 } from "../lib/repo-client.js";
 import { resolveTarget } from "../lib/target-resolver.js";
@@ -22,9 +21,8 @@ async function validateTargets(
   release?: string,
   channel?: string,
 ): Promise<{ ok: true } | { ok: false; message: string }> {
-  const rel = release ?? DEFAULT_RELEASE;
-  const chan = channel ?? DEFAULT_CHANNEL;
-  const config = await repoClient.getTargetsConfig(release, channel);
+  const { rel, chan } = normalizeStream(release, channel);
+  const config = await repoClient.getTargetsConfig(rel, chan);
   if (!config) {
     return {
       ok: false,
@@ -118,12 +116,8 @@ export function registerPackageTools(
       },
     },
     async ({ targets, name, release, channel }) => {
-      const targetCheck = await validateTargets(
-        repoClient,
-        targets,
-        release,
-        channel,
-      );
+      const { rel, chan } = normalizeStream(release, channel);
+      const targetCheck = await validateTargets(repoClient, targets, rel, chan);
       if (!targetCheck.ok) {
         return {
           content: [
@@ -141,8 +135,8 @@ export function registerPackageTools(
           targets,
           name,
           200,
-          release,
-          channel,
+          rel,
+          chan,
         );
         const exact = results.filter((r) => r.name === name);
         if (exact.length === 0) {
@@ -278,12 +272,8 @@ export function registerPackageTools(
       },
     },
     async ({ targets, query, limit, release, channel }) => {
-      const targetCheck = await validateTargets(
-        repoClient,
-        targets,
-        release,
-        channel,
-      );
+      const { rel, chan } = normalizeStream(release, channel);
+      const targetCheck = await validateTargets(repoClient, targets, rel, chan);
       if (!targetCheck.ok) {
         return {
           content: [
@@ -295,8 +285,8 @@ export function registerPackageTools(
           structuredContent: {
             query,
             targets,
-            release: release ?? "2024",
-            channel: channel ?? "edge",
+            release: rel,
+            channel: chan,
             totalMatches: 0,
             shown: 0,
             results: [],
@@ -311,8 +301,8 @@ export function registerPackageTools(
             targets,
             query,
             limit ?? 50,
-            release,
-            channel,
+            rel,
+            chan,
           );
         const trimmed = results.map((r) => ({
           name: r.name,
@@ -332,8 +322,8 @@ export function registerPackageTools(
                 totalMatches,
                 results.length,
                 errors,
-                release,
-                channel,
+                rel,
+                chan,
               ),
             },
             {
@@ -344,8 +334,8 @@ export function registerPackageTools(
           structuredContent: {
             query,
             targets,
-            release: release ?? "2024",
-            channel: channel ?? "edge",
+            release: rel,
+            channel: chan,
             totalMatches,
             shown: results.length,
             results: trimmed,
@@ -363,8 +353,8 @@ export function registerPackageTools(
           structuredContent: {
             query,
             targets,
-            release: release ?? "2024",
-            channel: channel ?? "edge",
+            release: rel,
+            channel: chan,
             totalMatches: 0,
             shown: 0,
             results: [],
@@ -483,8 +473,7 @@ export function registerPackageTools(
       },
     },
     async ({ target, dependencies, release, channel, maxAlternatives }) => {
-      const rel = release ?? DEFAULT_RELEASE;
-      const chan = channel ?? DEFAULT_CHANNEL;
+      const { rel, chan } = normalizeStream(release, channel);
       const maxAlt = maxAlternatives ?? 3;
 
       // All-zero: used only on early-return / error paths where nothing was
@@ -501,7 +490,7 @@ export function registerPackageTools(
       };
 
       // Validate the target against THIS stream — the Thor-on-2024 case.
-      const manifest = await repoClient.getTargetsConfig(release, channel);
+      const manifest = await repoClient.getTargetsConfig(rel, chan);
       if (!manifest) {
         return {
           content: [
@@ -558,8 +547,8 @@ export function registerPackageTools(
         // One feed warm-up for the whole batch; cached process-wide after this.
         const { packages, errors } = await repoClient.fetchTargetPackages(
           target,
-          release,
-          channel,
+          rel,
+          chan,
         );
 
         const results = dependencies.map((dep) => {
