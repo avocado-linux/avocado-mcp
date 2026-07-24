@@ -448,7 +448,10 @@ export function registerPackageTools(
         channel: z.string(),
         targetAvailable: z
           .boolean()
-          .describe("False if the target does not exist in this stream."),
+          .nullable()
+          .describe(
+            "true = target exists in this stream; false = target genuinely not in this stream (re-resolve to a release that supports it); null = the manifest couldn't be fetched (invalid stream / network) so availability is unknown. When false or null, `isError` is set.",
+          ),
         summary: z.object({
           total: z.number().int(),
           present: z.number().int(),
@@ -511,7 +514,7 @@ export function registerPackageTools(
             target,
             release: rel,
             channel: chan,
-            targetAvailable: false,
+            targetAvailable: null,
             summary: emptySummary,
             results: [],
             feedErrors: [],

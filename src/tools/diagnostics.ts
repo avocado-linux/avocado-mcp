@@ -108,7 +108,7 @@ export function registerDiagnosticsTools(
           .array(z.string())
           .optional()
           .describe(
-            "Target(s) the user was building for (e.g. ['jetson-orin-nano-devkit']). Strongly recommended — enables cross-channel package lookup that often surfaces the actual cause when patterns alone are inconclusive.",
+            "Target(s) the user was building for (e.g. ['jetson-orin-nano-devkit']). Strongly recommended — enables a cross-release package lookup (probes the `edge` channel on releases 2024 and 2026) that often surfaces the actual cause when patterns alone are inconclusive.",
           ),
       },
       outputSchema: {
