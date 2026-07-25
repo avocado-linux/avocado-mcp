@@ -79,3 +79,12 @@ test("a port path with a quote cannot break out of the generated shell command",
   const snip = buildTmuxSnippet("/dev/tty'; rm -rf ~; '", 115200);
   assert.doesNotMatch(snip, /rm -rf/);
 });
+
+test("a port path with no usable characters is rejected, not silently emptied", () => {
+  assert.throws(() => buildTmuxSnippet("';'", 115200), /no usable characters/);
+});
+
+test("a session name sanitized to empty falls back to the default", () => {
+  const snip = buildTmuxSnippet("/dev/ttyUSB0", 115200, "tio", "!!!");
+  assert.match(snip, /new-session -d -s avocado-uart\b/);
+});

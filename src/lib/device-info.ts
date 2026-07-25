@@ -242,9 +242,16 @@ export function buildTmuxSnippet(
   emulator: SerialEmulator = "tio",
   sessionName = "avocado-uart",
 ): string {
-  // Both flow into copy-paste shell commands — neutralize injection.
-  sessionName = sanitizeShellToken(sessionName);
+  // Both flow into copy-paste shell commands — neutralize injection. If
+  // sanitizing empties a value, the input was unusable: fall back to the
+  // default session name, but a portless snippet is meaningless, so reject it.
+  sessionName = sanitizeShellToken(sessionName) || "avocado-uart";
   portPath = sanitizeShellToken(portPath);
+  if (!portPath) {
+    throw new Error(
+      "Serial port path contains no usable characters after sanitization — pass a real device path like /dev/ttyUSB0.",
+    );
+  }
   return [
     `# 1. Start a detached tmux session with the serial console`,
     `tmux new-session -d -s ${sessionName} '${emulatorInvocation(emulator, portPath, baud)}'`,

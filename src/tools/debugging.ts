@@ -238,12 +238,20 @@ export function registerDebuggingTools(server: McpServer): void {
         };
       }
 
-      const snippet = buildTmuxSnippet(
-        portPath,
-        info.serial.baud,
-        chosen,
-        session,
-      );
+      let snippet: string;
+      try {
+        snippet = buildTmuxSnippet(portPath, info.serial.baud, chosen, session);
+      } catch (e) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `# get-tmux-uart-snippet failed\n\n❌ ${(e as Error).message}`,
+            },
+          ],
+          isError: true,
+        };
+      }
 
       let out = `# get-tmux-uart-snippet — \`${target}\` on \`${portPath}\` (via \`${chosen}\`)\n\n`;
       out += `## Prerequisites — BOTH required\n\n`;
