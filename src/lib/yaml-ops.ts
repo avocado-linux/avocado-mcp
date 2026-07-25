@@ -303,6 +303,11 @@ export function listExtensions(
   yamlText: string,
 ): { name: string; types: string[] }[] {
   const doc = parseDocument(yamlText);
+  // Surface malformed YAML rather than reporting zero extensions — a broken
+  // file must not look like an empty (extension-less) one.
+  if (doc.errors.length > 0) {
+    throw new Error(`Cannot read malformed YAML: ${doc.errors[0].message}`);
+  }
   const ext = doc.get("extensions");
   if (!isMap(ext)) return [];
   const out: { name: string; types: string[] }[] = [];

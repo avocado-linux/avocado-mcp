@@ -143,17 +143,9 @@ test("a package name with YAML metacharacters cannot inject structure", () => {
   );
 });
 
-test(
-  "listExtensions surfaces malformed YAML instead of reporting zero extensions",
-  {
-    todo: "returns [] on a parse error, so a broken file looks like an empty one",
-  },
-  () => {
-    assert.throws(() =>
-      listExtensions("extensions:\n  app:\n   - [unclosed\n"),
-    );
-  },
-);
+test("listExtensions surfaces malformed YAML instead of reporting zero extensions", () => {
+  assert.throws(() => listExtensions("extensions:\n  app:\n   - [unclosed\n"));
+});
 
 // ---------------------------------------------------------------------------
 // The generated starter must satisfy the schema we validate against. If these

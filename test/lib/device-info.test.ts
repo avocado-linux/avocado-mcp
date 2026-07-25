@@ -75,13 +75,7 @@ test("send-keys passes Enter as a separate argument", () => {
   assert.doesNotMatch(snip, /send-keys[^\n]*\\n/);
 });
 
-test(
-  "a port path with a quote cannot break out of the generated shell command",
-  {
-    todo: "portPath and sessionName are interpolated into a single-quoted string unescaped",
-  },
-  () => {
-    const snip = buildTmuxSnippet("/dev/tty'; rm -rf ~; '", 115200);
-    assert.doesNotMatch(snip, /rm -rf/);
-  },
-);
+test("a port path with a quote cannot break out of the generated shell command", () => {
+  const snip = buildTmuxSnippet("/dev/tty'; rm -rf ~; '", 115200);
+  assert.doesNotMatch(snip, /rm -rf/);
+});

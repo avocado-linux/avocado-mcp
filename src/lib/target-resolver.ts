@@ -75,8 +75,12 @@ export function resolveTarget(query: string, allTargets: string[]): string[] {
     const hay = haystackFor(t);
     let score = 0;
     for (const qt of qTokens) {
+      // Exact token match always counts. Substring credit is gated on a
+      // minimum length: a 1–2 char token like "a" is a substring of most
+      // haystacks and would otherwise match the whole catalog. Meaningful
+      // short tokens (digits, "pi") match exactly via the synonym table.
       if (hay.some((h) => h === qt)) score += 2;
-      else if (hay.some((h) => h.includes(qt))) score += 1;
+      else if (qt.length >= 3 && hay.some((h) => h.includes(qt))) score += 1;
     }
     if (t.toLowerCase() === qLower) score += 100;
     if (score > 0) scored.push({ target: t, score });

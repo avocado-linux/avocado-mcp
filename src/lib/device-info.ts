@@ -194,20 +194,34 @@ export const SUPPORTED_EMULATORS: SerialEmulator[] = [
   "minicom",
 ];
 
+/**
+ * Serial device paths and tmux session names come from device discovery, but
+ * they get pasted verbatim into shell commands. A crafted value containing a
+ * quote or `;` could otherwise break out of the surrounding quoting and inject
+ * a command. Restrict them to the charset real device paths / session names
+ * actually use (letters, digits, `._-/`); anything else is dropped. Real ports
+ * (`/dev/ttyUSB0`, `/dev/cu.usbserial-1420`, `COM3`) and session names pass
+ * through unchanged.
+ */
+function sanitizeShellToken(s: string): string {
+  return s.replace(/[^A-Za-z0-9._/-]/g, "");
+}
+
 export function emulatorInvocation(
   emulator: SerialEmulator,
   portPath: string,
   baud: number,
 ): string {
+  const port = sanitizeShellToken(portPath);
   switch (emulator) {
     case "tio":
-      return `tio -b ${baud} ${portPath}`;
+      return `tio -b ${baud} ${port}`;
     case "picocom":
-      return `picocom -b ${baud} ${portPath}`;
+      return `picocom -b ${baud} ${port}`;
     case "minicom":
       // -o skips the modem init string; without it minicom sends AT
       // commands to the target on startup and the session can fail.
-      return `minicom -b ${baud} -D ${portPath} -o`;
+      return `minicom -b ${baud} -D ${port} -o`;
   }
 }
 
@@ -228,6 +242,9 @@ export function buildTmuxSnippet(
   emulator: SerialEmulator = "tio",
   sessionName = "avocado-uart",
 ): string {
+  // Both flow into copy-paste shell commands — neutralize injection.
+  sessionName = sanitizeShellToken(sessionName);
+  portPath = sanitizeShellToken(portPath);
   return [
     `# 1. Start a detached tmux session with the serial console`,
     `tmux new-session -d -s ${sessionName} '${emulatorInvocation(emulator, portPath, baud)}'`,

@@ -60,30 +60,18 @@ test("a successful log produces no diagnoses", () => {
   assert.deepEqual(diagnoseBuildLog(clean), []);
 });
 
-test(
-  "'No such file or directory' does not become a storage diagnosis",
-  {
-    todo: "matches /no such (device|file)/ — the most common string in any log",
-  },
-  () => {
-    const log =
-      "warning: optional hook /etc/avocado/hook.sh: No such file or directory\nProvisioning complete.";
-    assert.deepEqual(labels(diagnoseProvisionLog(log)), []);
-  },
-);
+test("'No such file or directory' does not become a storage diagnosis", () => {
+  const log =
+    "warning: optional hook /etc/avocado/hook.sh: No such file or directory\nProvisioning complete.";
+  assert.deepEqual(labels(diagnoseProvisionLog(log)), []);
+});
 
-test(
-  "merely naming udisks does not become an automount diagnosis",
-  {
-    todo: "pattern is a bare /(automount|auto-mounted|gvfs|udisks)/i with no failure context",
-  },
-  () => {
-    assert.deepEqual(
-      labels(diagnoseProvisionLog("note: udisks2 is installed\nDone.")),
-      [],
-    );
-  },
-);
+test("merely naming udisks does not become an automount diagnosis", () => {
+  assert.deepEqual(
+    labels(diagnoseProvisionLog("note: udisks2 is installed\nDone.")),
+    [],
+  );
+});
 
 // ---------------------------------------------------------------------------
 // extractLogShape
@@ -124,16 +112,10 @@ test("host-only noise paths are filtered out of filePaths", () => {
   assert.ok(s.filePaths.includes("/home/dev/app/main.c"));
 });
 
-test(
-  "a nonzero exit code is not overwritten by a later unrelated number",
-  {
-    todo: "'last occurrence wins' lets 'returned 0 warnings' report exitCode 0 on a failed build",
-  },
-  () => {
-    const log = "avocado build exited with 1\nSummary: returned 0 warnings";
-    assert.equal(extractLogShape(log).exitCode, 1);
-  },
-);
+test("a nonzero exit code is not overwritten by a later unrelated number", () => {
+  const log = "avocado build exited with 1\nSummary: returned 0 warnings";
+  assert.equal(extractLogShape(log).exitCode, 1);
+});
 
 // ---------------------------------------------------------------------------
 // extractFailingPackages

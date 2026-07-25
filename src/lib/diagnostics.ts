@@ -42,7 +42,10 @@ const PROVISION_PATTERNS: Pattern[] = [
   },
   {
     label: "Device auto-mounted by host OS",
-    match: /(automount|auto-mounted|gvfs|udisks)/i,
+    // Require an actual mount action. Merely naming a tool ("udisks2 is
+    // installed") is not a failure; the signal is the storage being mounted.
+    match:
+      /auto-?mounted|(?:udisks|gvfs)[^\n]*\bmount|\bmount(?:ed)?\b[^\n]*(?:udisks|gvfs)/i,
     cause:
       "Your Linux host auto-mounted the target storage during provisioning. This can corrupt the image flash.",
     suggestion:
@@ -57,7 +60,11 @@ const PROVISION_PATTERNS: Pattern[] = [
   },
   {
     label: "Target storage not detected",
-    match: /no such (device|file)|device not found|cannot open .* No such/i,
+    // Require a device/storage context — a bare "No such file or directory"
+    // (e.g. an optional hook that isn't present) is the most common string in
+    // any log and must not be read as a missing storage device.
+    match:
+      /no such device\b|device not found|cannot open [^\n]*\/dev\/[^\n]*no such/i,
     cause:
       "The provisioner could not find the target storage device (SD card, USB drive, NVMe).",
     suggestion:
@@ -239,12 +246,17 @@ export function extractLogShape(log: string): LogShape {
     }
   }
 
-  // Exit code: last occurrence wins.
-  const exitMatches = Array.from(log.matchAll(new RegExp(EXIT_CODE_RE, "gi")));
-  if (exitMatches.length > 0) {
-    const last = exitMatches[exitMatches.length - 1]!;
-    const n = Number(last[1]);
-    if (Number.isFinite(n)) exitCode = n;
+  // Exit code: the first NON-ZERO wins, else the first seen. A failed build's
+  // real exit code must not be overwritten by a later benign number like
+  // "returned 0 warnings" (the old "last occurrence wins" reported 0).
+  for (const m of log.matchAll(new RegExp(EXIT_CODE_RE, "gi"))) {
+    const n = Number(m[1]);
+    if (!Number.isFinite(n)) continue;
+    if (exitCode === null) exitCode = n;
+    if (n !== 0) {
+      exitCode = n;
+      break;
+    }
   }
 
   // File paths: scan whole log, dedupe, filter.

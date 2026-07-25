@@ -55,26 +55,16 @@ test("empty query returns the full catalog", () => {
   assert.deepEqual(resolveTarget("   ", TARGETS), TARGETS);
 });
 
-test(
-  "nonsense query returns nothing rather than everything",
-  {
-    todo: "single-char tokens score via hay.includes(); 'a' in 'not-a-board' matches 8/10 targets",
-  },
-  () => {
-    assert.deepEqual(resolveTarget("zzzz-not-a-board", TARGETS), []);
-  },
-);
+test("nonsense query returns nothing rather than everything", () => {
+  assert.deepEqual(resolveTarget("zzzz-not-a-board", TARGETS), []);
+});
 
-test(
-  "a one-letter token does not match the whole catalog",
-  { todo: "same root cause: substring scoring has no minimum token length" },
-  () => {
-    assert.ok(resolveTarget("a", TARGETS).length < TARGETS.length);
-    assert.ok(
-      resolveTarget("my board is a potato", TARGETS).length < TARGETS.length,
-    );
-  },
-);
+test("a one-letter token does not match the whole catalog", () => {
+  assert.ok(resolveTarget("a", TARGETS).length < TARGETS.length);
+  assert.ok(
+    resolveTarget("my board is a potato", TARGETS).length < TARGETS.length,
+  );
+});
 
 test("punctuation-only query does not return the full catalog", () => {
   assert.deepEqual(resolveTarget("!!!", TARGETS), []);
