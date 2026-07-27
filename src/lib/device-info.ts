@@ -247,9 +247,11 @@ export function buildTmuxSnippet(
   // default session name, but a portless snippet is meaningless, so reject it.
   sessionName = sanitizeShellToken(sessionName) || "avocado-uart";
   portPath = sanitizeShellToken(portPath);
-  if (!portPath) {
+  // Reject empty (unusable) and leading-`-` (a terminal emulator would parse it
+  // as a flag, not a device path — option injection even with spaces stripped).
+  if (!portPath || portPath.startsWith("-")) {
     throw new Error(
-      "Serial port path contains no usable characters after sanitization — pass a real device path like /dev/ttyUSB0.",
+      "Serial port path is not a usable device path (empty, or starts with '-' which a terminal emulator would read as a flag) — pass a real device path like /dev/ttyUSB0.",
     );
   }
   return [

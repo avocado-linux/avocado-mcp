@@ -72,7 +72,9 @@ test("offline tool round-trips through the protocol", async () => {
     name: "validate-yaml",
     arguments: { yaml: "extensions:\n  app:\n    types: [sysext]\n" },
   });
-  assert.equal(res.isError, undefined);
+  // Success may omit isError OR set it false, per the MCP spec — assert it's
+  // simply not an error rather than coupling to one representation.
+  assert.notEqual(res.isError, true);
   console.log("  ->", JSON.stringify(res.content).slice(0, 200));
 });
 

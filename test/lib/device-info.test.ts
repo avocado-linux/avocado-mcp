@@ -81,7 +81,19 @@ test("a port path with a quote cannot break out of the generated shell command",
 });
 
 test("a port path with no usable characters is rejected, not silently emptied", () => {
-  assert.throws(() => buildTmuxSnippet("';'", 115200), /no usable characters/);
+  assert.throws(
+    () => buildTmuxSnippet("';'", 115200),
+    /not a usable device path/,
+  );
+});
+
+test("a port path that sanitizes to a flag-like token is rejected", () => {
+  // Spaces are stripped, but a leading '-' would still be read as an option by
+  // tio/picocom — reject rather than let it become `tio -b 115200 -oEvil`.
+  assert.throws(
+    () => buildTmuxSnippet("-oProxyCommand=evil", 115200),
+    /not a usable device path/,
+  );
 });
 
 test("a session name sanitized to empty falls back to the default", () => {
