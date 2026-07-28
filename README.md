@@ -24,7 +24,27 @@ Stdio-only over npm. No hosted endpoint, no API key. All data sources are public
 
 ## Installation
 
-Add to your MCP client config (Claude Desktop, Claude Code, Cursor, etc.):
+📖 **Full, always-current instructions for every client: [Avocado OS MCP installation docs](https://docs.peridio.com/developer-reference/mcp/installation).** The quick start below covers the common cases.
+
+Requires Node ≥20. Every client runs the same underlying command — `npx` clones the repo on first run, installs dependencies, and builds it (~30s); subsequent runs are instant from cache.
+
+### Claude Code
+
+Register with the CLI:
+
+```bash
+claude mcp add avocado-os -- npx -y github:avocado-linux/avocado-mcp
+```
+
+Add `-s user` to make it available in every project, not just the current one:
+
+```bash
+claude mcp add -s user avocado-os -- npx -y github:avocado-linux/avocado-mcp
+```
+
+### Claude Desktop, Cursor, and other JSON-config clients
+
+Add under `mcpServers` in the client's config (Claude Desktop's `claude_desktop_config.json`, Cursor's `~/.cursor/mcp.json`, etc.):
 
 ```json
 {
@@ -37,7 +57,11 @@ Add to your MCP client config (Claude Desktop, Claude Code, Cursor, etc.):
 }
 ```
 
-Requires Node ≥20. `npx` will clone the repo on first run, install dependencies, and build it (~30s); subsequent runs are instant from cache. To pin to a specific release, suffix with a tag: `github:avocado-linux/avocado-mcp#5.0.0` (see [GitHub Releases](https://github.com/avocado-linux/avocado-mcp/releases)).
+To pin a specific release, suffix the spec with a tag: `github:avocado-linux/avocado-mcp#5.0.0` (see [GitHub Releases](https://github.com/avocado-linux/avocado-mcp/releases)).
+
+For VS Code (Copilot), OpenAI Codex, and the exact per-client config-file locations, see the [installation docs](https://docs.peridio.com/developer-reference/mcp/installation).
+
+**Verify it works** by asking your client: _"Start a new Avocado OS project for a Raspberry Pi 5."_
 
 ## What it exposes
 
