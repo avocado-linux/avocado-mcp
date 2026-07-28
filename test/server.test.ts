@@ -43,11 +43,19 @@ test("every tool/resource/prompt registers without collision", async () => {
   const { tools } = await client.listTools();
   const names = tools.map((t) => t.name).sort();
   assert.equal(new Set(names).size, names.length, "duplicate tool names");
+  // Lower bound too: uniqueness alone (0 === 0) would still pass if a
+  // registration regression dropped every tool — the failure this test names.
+  assert.ok(names.length >= 24, `only ${names.length} tools registered`);
   console.log(`  ${names.length} tools:`, names.join(", "));
 
   const { resources } = await client.listResources();
+  assert.ok(
+    resources.length >= 14,
+    `only ${resources.length} resources registered`,
+  );
   console.log(`  ${resources.length} resources`);
   const { prompts } = await client.listPrompts();
+  assert.ok(prompts.length >= 7, `only ${prompts.length} prompts registered`);
   console.log(
     `  ${prompts.length} prompts:`,
     prompts.map((p) => p.name).join(", "),
@@ -68,13 +76,21 @@ test("tool contract: every tool has description + object schema", async () => {
 
 test("offline tool round-trips through the protocol", async () => {
   const { client } = await connect();
+  // A schema-VALID fixture, so this exercises the happy path it's named for.
+  // (A minimal extensions-only doc fails validation — the tool would report
+  // errors, which isn't an isError, so the round-trip would pass vacuously.)
   const res = await client.callTool({
     name: "validate-yaml",
-    arguments: { yaml: "extensions:\n  app:\n    types: [sysext]\n" },
+    arguments: {
+      yaml: "distro:\n  release: 2024\n  channel: edge\nruntimes:\n  dev:\n    extensions: [app]\nextensions:\n  app:\n    types: [sysext]\n",
+    },
   });
   // Success may omit isError OR set it false, per the MCP spec — assert it's
-  // simply not an error rather than coupling to one representation.
+  // simply not an error rather than coupling to one representation...
   assert.notEqual(res.isError, true);
+  // ...and assert it actually reports success, not just "didn't error".
+  const structured = res.structuredContent as { ok?: boolean } | undefined;
+  assert.equal(structured?.ok, true, JSON.stringify(res.content));
   console.log("  ->", JSON.stringify(res.content).slice(0, 200));
 });
 

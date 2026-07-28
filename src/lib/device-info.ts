@@ -242,16 +242,20 @@ export function buildTmuxSnippet(
   emulator: SerialEmulator = "tio",
   sessionName = "avocado-uart",
 ): string {
-  // Both flow into copy-paste shell commands — neutralize injection. If
-  // sanitizing empties a value, the input was unusable: fall back to the
-  // default session name, but a portless snippet is meaningless, so reject it.
+  // Both flow into copy-paste shell commands. A session name is cosmetic, so
+  // sanitizing it in place is fine. A port path is not: silently stripping
+  // characters would hand back a command targeting a *different* device than
+  // the caller named, so reject anything that isn't already safe rather than
+  // rewriting it. Also reject a leading `-`, which a terminal emulator reads
+  // as a flag rather than a device path (option injection with no metachars).
   sessionName = sanitizeShellToken(sessionName) || "avocado-uart";
-  portPath = sanitizeShellToken(portPath);
-  // Reject empty (unusable) and leading-`-` (a terminal emulator would parse it
-  // as a flag, not a device path — option injection even with spaces stripped).
-  if (!portPath || portPath.startsWith("-")) {
+  if (
+    !portPath ||
+    sanitizeShellToken(portPath) !== portPath ||
+    portPath.startsWith("-")
+  ) {
     throw new Error(
-      "Serial port path is not a usable device path (empty, or starts with '-' which a terminal emulator would read as a flag) — pass a real device path like /dev/ttyUSB0.",
+      `Serial port path ${JSON.stringify(portPath)} is not a usable device path — expected only letters, digits, '.', '_', '-' and '/', and not to start with '-' (a terminal emulator would read that as a flag). Pass a real device path like /dev/ttyUSB0.`,
     );
   }
   return [

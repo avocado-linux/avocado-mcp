@@ -42,10 +42,11 @@ const PROVISION_PATTERNS: Pattern[] = [
   },
   {
     label: "Device auto-mounted by host OS",
-    // Require an actual mount action. Merely naming a tool ("udisks2 is
-    // installed") is not a failure; the signal is the storage being mounted.
+    // "automount" in any tense is itself the signal. The tool *names*, however,
+    // are not: merely naming one ("udisks2 is installed") is not a failure, so
+    // those require an actual mount action alongside them.
     match:
-      /auto-?mounted|(?:udisks|gvfs)[^\n]*\bmount|\bmount(?:ed)?\b[^\n]*(?:udisks|gvfs)/i,
+      /auto-?mount(?:ed|ing|s)?\b|(?:udisks|gvfs)[^\n]*\bmount|\bmount(?:ed|ing)?\b[^\n]*(?:udisks|gvfs)/i,
     cause:
       "Your Linux host auto-mounted the target storage during provisioning. This can corrupt the image flash.",
     suggestion:
@@ -60,11 +61,13 @@ const PROVISION_PATTERNS: Pattern[] = [
   },
   {
     label: "Target storage not detected",
-    // Require a device/storage context — a bare "No such file or directory"
-    // (e.g. an optional hook that isn't present) is the most common string in
-    // any log and must not be read as a missing storage device.
+    // Require an open failure *and* a device path — a bare "No such file or
+    // directory" (e.g. an optional hook that isn't present) is the most common
+    // string in any log and must not be read as a missing storage device.
+    // Phrasing varies by tool: dd/bmaptool say "failed to open", others
+    // "cannot open" / "could not open".
     match:
-      /no such device\b|device not found|cannot open [^\n]*\/dev\/[^\n]*no such/i,
+      /no such device\b|device not found|(?:cannot|could not|couldn't|failed to|unable to) open [^\n]*\/dev\/[^\n]*no such/i,
     cause:
       "The provisioner could not find the target storage device (SD card, USB drive, NVMe).",
     suggestion:
@@ -204,7 +207,11 @@ export interface LogShape {
 
 const ERROR_LINE_RE =
   /^(?:.{0,200})(?:\bERROR\b|\berror:|\bFailed\b|\bfatal:|\bFatal:|\bpanic:?|\bTraceback\b|\bAssertion|\bsegfault\b|\bsegmentation fault\b)/i;
-const EXIT_CODE_RE = /\b(?:exit(?: code|ed with)?|returned)\s*[:=]?\s*(\d+)/i;
+// The trailing lookahead is what keeps this from matching counters like
+// "returned 0 warnings" / "exited with 2 errors" — those are tallies, not exit
+// codes, and treating them as one lets a benign number mask a real failure.
+const EXIT_CODE_RE =
+  /\b(?:exit(?: code|ed with)?|returned)\s*[:=]?\s*(\d+)\b(?!\s*(?:warning|error|result|package|match|file|byte|line|test|item|second)s?\b)/i;
 const FILE_PATH_RE =
   /(?:^|[\s'"`(])((?:\/[A-Za-z0-9._+\-/]+|[A-Za-z]:\\[A-Za-z0-9._+\-\\]+))(?=[\s'"`):,;]|$)/g;
 const COMMAND_RE = /^\s*\$\s+(.+?)$|^\+ (.+?)$|^Running:\s+(.+?)$/m;
@@ -246,17 +253,14 @@ export function extractLogShape(log: string): LogShape {
     }
   }
 
-  // Exit code: the first NON-ZERO wins, else the first seen. A failed build's
-  // real exit code must not be overwritten by a later benign number like
-  // "returned 0 warnings" (the old "last occurrence wins" reported 0).
-  for (const m of log.matchAll(new RegExp(EXIT_CODE_RE, "gi"))) {
-    const n = Number(m[1]);
-    if (!Number.isFinite(n)) continue;
-    if (exitCode === null) exitCode = n;
-    if (n !== 0) {
-      exitCode = n;
-      break;
-    }
+  // Exit code: last occurrence wins — a log's final exit report is the
+  // process's real one, and intermediate codes (a retried step, an earlier
+  // sub-command) are not. Tallies are excluded by EXIT_CODE_RE itself, so a
+  // trailing "returned 0 warnings" cannot mask a failure here.
+  const exitMatches = Array.from(log.matchAll(new RegExp(EXIT_CODE_RE, "gi")));
+  if (exitMatches.length > 0) {
+    const n = Number(exitMatches[exitMatches.length - 1]![1]);
+    if (Number.isFinite(n)) exitCode = n;
   }
 
   // File paths: scan whole log, dedupe, filter.

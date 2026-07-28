@@ -75,9 +75,13 @@ test("send-keys passes Enter as a separate argument", () => {
   assert.doesNotMatch(snip, /send-keys[^\n]*\\n/);
 });
 
-test("a port path with a quote cannot break out of the generated shell command", () => {
-  const snip = buildTmuxSnippet("/dev/tty'; rm -rf ~; '", 115200);
-  assert.doesNotMatch(snip, /rm -rf/);
+test("a port path with a quote is rejected, not sanitized into a phantom device", () => {
+  // Rejecting (rather than stripping to a different device) makes injection
+  // structurally impossible and keeps the tool's header + snippet consistent.
+  assert.throws(
+    () => buildTmuxSnippet("/dev/tty'; rm -rf ~; '", 115200),
+    /not a usable device path/,
+  );
 });
 
 test("a port path with no usable characters is rejected, not silently emptied", () => {
@@ -87,9 +91,20 @@ test("a port path with no usable characters is rejected, not silently emptied", 
   );
 });
 
+test("a real serial path passes through unchanged", () => {
+  for (const p of [
+    "/dev/ttyUSB0",
+    "/dev/cu.usbserial-1420",
+    "/dev/serial/by-id/usb-FTDI_FT232R-if00-port0",
+  ]) {
+    const snip = buildTmuxSnippet(p, 115200);
+    assert.ok(snip.includes(p), p);
+  }
+});
+
 test("a port path that sanitizes to a flag-like token is rejected", () => {
-  // Spaces are stripped, but a leading '-' would still be read as an option by
-  // tio/picocom — reject rather than let it become `tio -b 115200 -oEvil`.
+  // A leading '-' would be read as an option by tio/picocom — reject rather
+  // than let it become `tio -b 115200 -oEvil`.
   assert.throws(
     () => buildTmuxSnippet("-oProxyCommand=evil", 115200),
     /not a usable device path/,

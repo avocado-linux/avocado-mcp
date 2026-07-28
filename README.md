@@ -37,7 +37,7 @@ Add to your MCP client config (Claude Desktop, Claude Code, Cursor, etc.):
 }
 ```
 
-Requires Node ≥18. `npx` will clone the repo on first run, install dependencies, and build it (~30s); subsequent runs are instant from cache. To pin to a specific release, suffix with a tag: `github:avocado-linux/avocado-mcp#5.0.0` (see [GitHub Releases](https://github.com/avocado-linux/avocado-mcp/releases)).
+Requires Node ≥20. `npx` will clone the repo on first run, install dependencies, and build it (~30s); subsequent runs are instant from cache. To pin to a specific release, suffix with a tag: `github:avocado-linux/avocado-mcp#5.0.0` (see [GitHub Releases](https://github.com/avocado-linux/avocado-mcp/releases)).
 
 ## What it exposes
 
