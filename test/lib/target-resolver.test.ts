@@ -66,6 +66,20 @@ test("a one-letter token does not match the whole catalog", () => {
   );
 });
 
+test("vendor product names with short numeric tokens resolve", () => {
+  // NXP's own name for the board is "i.MX 8M Plus", so the 2-char "8m" token
+  // has to earn credit. This is the case a bare length gate on substring
+  // credit silently breaks — it regressed once already.
+  for (const [query, expected] of [
+    ["i.MX 8M Plus", "imx8mp-evk"],
+    ["imx 8m plus", "imx8mp-evk"],
+    ["8m", "imx8mp-evk"],
+    ["fr", "fr201"],
+  ] as const) {
+    assert.equal(resolveTarget(query, TARGETS)[0], expected, `query: ${query}`);
+  }
+});
+
 test("punctuation-only query does not return the full catalog", () => {
   assert.deepEqual(resolveTarget("!!!", TARGETS), []);
 });
