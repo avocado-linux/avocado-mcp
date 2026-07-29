@@ -44,9 +44,9 @@ test("every diagnosis carries all four fields populated", () => {
 test("excerpt is a real slice of the input, not a canned string", () => {
   const log = "prelude\nfatal: no space left on device while writing\npostlude";
   const [d] = diagnoseBuildLog(log);
-  assert.ok(
-    log.includes(d!.excerpt.trim()) || d!.excerpt.includes("no space left"),
-  );
+  // The excerpt must be an actual substring of the log. (The old `||` rescued
+  // any string containing "no space left", so a canned constant passed.)
+  assert.ok(log.includes(d!.excerpt.trim()), d!.excerpt);
 });
 
 // ---------------------------------------------------------------------------

@@ -96,6 +96,8 @@ test("a real serial path passes through unchanged", () => {
     "/dev/ttyUSB0",
     "/dev/cu.usbserial-1420",
     "/dev/serial/by-id/usb-FTDI_FT232R-if00-port0",
+    // by-path is the stable name users are pointed at, and it contains ':'.
+    "/dev/serial/by-path/pci-0000:00:14.0-usb-0:2:1.0-port0",
   ]) {
     const snip = buildTmuxSnippet(p, 115200);
     assert.ok(snip.includes(p), p);
@@ -109,6 +111,33 @@ test("a port path that sanitizes to a flag-like token is rejected", () => {
     () => buildTmuxSnippet("-oProxyCommand=evil", 115200),
     /not a usable device path/,
   );
+});
+
+test("emulatorInvocation rejects an unsafe port instead of silently rewriting it", () => {
+  // The exported function must not hand back a command aimed at a device that
+  // doesn't exist — it's the point where the port becomes a command argument.
+  for (const e of SUPPORTED_EMULATORS) {
+    assert.throws(
+      () => emulatorInvocation(e, "/dev/ttyUSB0; reboot", 115200),
+      /not a usable device path/,
+      e,
+    );
+  }
+  // ...and a valid by-path port (with ':') passes through verbatim.
+  const cmd = emulatorInvocation(
+    "minicom",
+    "/dev/serial/by-path/pci-0000:00:14.0-usb-0:2:1.0-port0",
+    115200,
+  );
+  assert.match(cmd, /pci-0000:00:14\.0-usb-0:2:1\.0-port0/);
+});
+
+test("a session name that is empty or flag-like after sanitizing falls back", () => {
+  for (const bad of ["!!!", "-X"]) {
+    const snip = buildTmuxSnippet("/dev/ttyUSB0", 115200, "tio", bad);
+    assert.match(snip, /new-session -d -s avocado-uart\b/, bad);
+    assert.doesNotMatch(snip, /-s -X\b/);
+  }
 });
 
 test("a session name sanitized to empty falls back to the default", () => {

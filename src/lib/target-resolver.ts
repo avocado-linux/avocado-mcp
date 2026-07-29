@@ -47,6 +47,16 @@ function tokenize(s: string): string[] {
     .filter((t) => t.length > 0);
 }
 
+/**
+ * Collapse a string to lowercase alphanumerics only: "i.MX 8M Plus" →
+ * "imx8mplus", "imx93-evk" → "imx93evk". This lets a spelled-out query match a
+ * matrix slug across the separators and spacing that differ between how people
+ * write a board name and how the feed slugs it — no per-board aliases required.
+ */
+function squash(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
 function haystackFor(slug: string): string[] {
   const tokens = tokenize(slug);
   const extras = SYNONYMS[slug] ?? [];
@@ -55,8 +65,12 @@ function haystackFor(slug: string): string[] {
 
 /**
  * Score and return canonical target slugs that match the query.
- * Returns matches sorted by score desc, then alphabetical. Exact slug match
- * gets a +100 bonus so it always tops the list.
+ *
+ * Matching is driven by the target slugs themselves (which the caller fetches
+ * from the live hardware matrix); the `SYNONYMS` table is a pure enhancement
+ * for colloquial names that can't be derived from a slug ("rpi", "nvidia"),
+ * never a correctness dependency — a board must be findable from its slug
+ * alone. Returns matches sorted by score desc, then alphabetical.
  */
 export function resolveTarget(query: string, allTargets: string[]): string[] {
   const q = query.trim();
@@ -67,28 +81,35 @@ export function resolveTarget(query: string, allTargets: string[]): string[] {
   const exact = allTargets.find((t) => t.toLowerCase() === qLower);
 
   const qTokens = tokenize(q);
+  const qSquash = squash(q);
   if (qTokens.length === 0) return exact ? [exact] : [];
 
   type Scored = { target: string; score: number };
   const scored: Scored[] = [];
   for (const t of allTargets) {
     const hay = haystackFor(t);
+    const tSquash = squash(t);
     let score = 0;
-    for (const qt of qTokens) {
-      // Exact token match always counts. Substring credit is gated on length:
-      // a 1-char token like "a" is a substring of most haystacks and would
-      // otherwise match the whole catalog. A 2-char token still earns credit
-      // when it *prefixes* a haystack token — that's specific enough to be a
-      // real abbreviation ("8m" → "8mp", "fr" → "fr201", so "i.MX 8M Plus"
-      // resolves) without the catalog-wide noise of a bare substring.
-      if (hay.some((h) => h === qt)) score += 2;
-      else if (
-        (qt.length >= 3 ||
-          (qt.length === 2 && hay.some((h) => h.startsWith(qt)))) &&
-        hay.some((h) => h.includes(qt))
-      )
-        score += 1;
+
+    // Separator-free whole-query containment — the strongest slug-derived
+    // signal. It ranks "i.MX 93" → imx93-evk / imx93-frdm above SoC-named
+    // entries that merely contain "93" mid-slug. Skip 1-char queries: they'd
+    // match most of the catalog.
+    if (qSquash.length >= 2) {
+      if (tSquash === qSquash) score += 50;
+      else if (tSquash.startsWith(qSquash)) score += 20;
+      else if (tSquash.includes(qSquash)) score += 10;
     }
+
+    // Per-token: exact > prefix > substring. Credit a substring only for
+    // tokens ≥ 2 chars — a 1-char token like "a" is a substring of most slugs
+    // and would otherwise pull the whole catalog into the results.
+    for (const qt of qTokens) {
+      if (hay.some((h) => h === qt)) score += 3;
+      else if (qt.length >= 2 && hay.some((h) => h.startsWith(qt))) score += 2;
+      else if (qt.length >= 2 && hay.some((h) => h.includes(qt))) score += 1;
+    }
+
     if (t.toLowerCase() === qLower) score += 100;
     if (score > 0) scored.push({ target: t, score });
   }

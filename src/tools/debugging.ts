@@ -192,6 +192,10 @@ export function registerDebuggingTools(server: McpServer): void {
       inputSchema: {
         portPath: z
           .string()
+          .regex(
+            /^[A-Za-z/][A-Za-z0-9._:/-]*$/,
+            "must be a device path (letters, digits, '.', '_', ':', '-', '/'), starting with a letter or '/'",
+          )
           .describe(
             "Full path to the serial port (from detect-serial-ports), e.g. '/dev/tty.usbserial-AB0123' or '/dev/ttyUSB0'.",
           ),
@@ -208,6 +212,10 @@ export function registerDebuggingTools(server: McpServer): void {
           ),
         sessionName: z
           .string()
+          .regex(
+            /^[A-Za-z0-9][A-Za-z0-9._-]*$/,
+            "must be letters, digits, '.', '_' or '-', not starting with '-'",
+          )
           .optional()
           .describe(
             "Optional tmux session name. Defaults to 'avocado-uart'. Use a different name only if you already have an avocado-uart session for another device.",

@@ -10,7 +10,7 @@ a real MCP client).
 
 Before opening a pull request:
 
-- Run `npm run checks` (Prettier + TypeScript) and make sure it passes.
+- Run `npm run checks` (Prettier + TypeScript, including the test sources) and `npm test`, and make sure both pass.
 - Keep changes focused and describe the behavior change in the PR.
 
 ## Licensing of contributions

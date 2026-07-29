@@ -195,16 +195,38 @@ export const SUPPORTED_EMULATORS: SerialEmulator[] = [
 ];
 
 /**
- * Serial device paths and tmux session names come from device discovery, but
- * they get pasted verbatim into shell commands. A crafted value containing a
- * quote or `;` could otherwise break out of the surrounding quoting and inject
- * a command. Restrict them to the charset real device paths / session names
- * actually use (letters, digits, `._-/`); anything else is dropped. Real ports
- * (`/dev/ttyUSB0`, `/dev/cu.usbserial-1420`, `COM3`) and session names pass
- * through unchanged.
+ * The charset a real serial device path uses: letters, digits, and `._:/-`.
+ * `:` is required — the canonical stable path is
+ * `/dev/serial/by-path/pci-0000:00:14.0-usb-0:2:1.0-port0`. The path must start
+ * with a letter or `/` (so `COM3` and `/dev/...` pass) and NOT with `-`, which a
+ * terminal emulator would read as an option rather than a device (arg injection
+ * with no shell metacharacters). None of these need shell escaping inside the
+ * single quotes they land in.
  */
-function sanitizeShellToken(s: string): string {
-  return s.replace(/[^A-Za-z0-9._/-]/g, "");
+const SAFE_PORT_RE = /^[A-Za-z/][A-Za-z0-9._:/-]*$/;
+
+/**
+ * Reject a serial port path that isn't already safe. These flow verbatim into
+ * copy-paste shell commands, so we reject rather than rewrite — a stripped path
+ * would silently target a *different* device than the caller named.
+ */
+function assertSafePortPath(portPath: string): void {
+  if (!SAFE_PORT_RE.test(portPath)) {
+    throw new Error(
+      `Serial port path ${JSON.stringify(portPath)} is not a usable device path — expected only letters, digits, '.', '_', ':', '-' and '/', starting with a letter or '/' (not '-', which a terminal emulator would read as a flag). Pass a real device path like /dev/ttyUSB0.`,
+    );
+  }
+}
+
+/**
+ * A tmux session name is cosmetic, so sanitizing it in place is fine (unlike a
+ * port path). Strip to a shell-safe token; fall back to the default if that
+ * leaves it empty or leading-`-` (which tmux/`-s` would misparse). `:` is
+ * excluded on purpose — it's tmux window/pane addressing syntax.
+ */
+function sanitizeSessionName(name: string): string {
+  const cleaned = name.replace(/[^A-Za-z0-9._-]/g, "");
+  return !cleaned || cleaned.startsWith("-") ? "avocado-uart" : cleaned;
 }
 
 export function emulatorInvocation(
@@ -212,16 +234,18 @@ export function emulatorInvocation(
   portPath: string,
   baud: number,
 ): string {
-  const port = sanitizeShellToken(portPath);
+  // Reject (don't rewrite) — this is the point where the port becomes a command
+  // argument, so a bad value must fail loudly rather than silently retarget.
+  assertSafePortPath(portPath);
   switch (emulator) {
     case "tio":
-      return `tio -b ${baud} ${port}`;
+      return `tio -b ${baud} ${portPath}`;
     case "picocom":
-      return `picocom -b ${baud} ${port}`;
+      return `picocom -b ${baud} ${portPath}`;
     case "minicom":
       // -o skips the modem init string; without it minicom sends AT
       // commands to the target on startup and the session can fail.
-      return `minicom -b ${baud} -D ${port} -o`;
+      return `minicom -b ${baud} -D ${portPath} -o`;
   }
 }
 
@@ -242,22 +266,9 @@ export function buildTmuxSnippet(
   emulator: SerialEmulator = "tio",
   sessionName = "avocado-uart",
 ): string {
-  // Both flow into copy-paste shell commands. A session name is cosmetic, so
-  // sanitizing it in place is fine. A port path is not: silently stripping
-  // characters would hand back a command targeting a *different* device than
-  // the caller named, so reject anything that isn't already safe rather than
-  // rewriting it. Also reject a leading `-`, which a terminal emulator reads
-  // as a flag rather than a device path (option injection with no metachars).
-  sessionName = sanitizeShellToken(sessionName) || "avocado-uart";
-  if (
-    !portPath ||
-    sanitizeShellToken(portPath) !== portPath ||
-    portPath.startsWith("-")
-  ) {
-    throw new Error(
-      `Serial port path ${JSON.stringify(portPath)} is not a usable device path — expected only letters, digits, '.', '_', '-' and '/', and not to start with '-' (a terminal emulator would read that as a flag). Pass a real device path like /dev/ttyUSB0.`,
-    );
-  }
+  // Reject an unsafe port (don't rewrite); sanitize the cosmetic session name.
+  assertSafePortPath(portPath);
+  sessionName = sanitizeSessionName(sessionName);
   return [
     `# 1. Start a detached tmux session with the serial console`,
     `tmux new-session -d -s ${sessionName} '${emulatorInvocation(emulator, portPath, baud)}'`,

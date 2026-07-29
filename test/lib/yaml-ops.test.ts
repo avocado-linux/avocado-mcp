@@ -144,7 +144,12 @@ test("a package name with YAML metacharacters cannot inject structure", () => {
 });
 
 test("listExtensions surfaces malformed YAML instead of reporting zero extensions", () => {
-  assert.throws(() => listExtensions("extensions:\n  app:\n   - [unclosed\n"));
+  // Pin the message: it must match the same prefix the mutation helpers throw,
+  // so a client can key on one string to choose a recovery path.
+  assert.throws(
+    () => listExtensions("extensions:\n  app:\n   - [unclosed\n"),
+    /Cannot edit malformed YAML/,
+  );
 });
 
 // ---------------------------------------------------------------------------

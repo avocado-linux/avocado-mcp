@@ -43,19 +43,17 @@ test("every tool/resource/prompt registers without collision", async () => {
   const { tools } = await client.listTools();
   const names = tools.map((t) => t.name).sort();
   assert.equal(new Set(names).size, names.length, "duplicate tool names");
-  // Lower bound too: uniqueness alone (0 === 0) would still pass if a
-  // registration regression dropped every tool — the failure this test names.
-  assert.ok(names.length >= 24, `only ${names.length} tools registered`);
+  // Exact counts, not floors: a `>=` below actual lets a small drop pass
+  // silently. Bump these deliberately when adding a tool/resource/prompt —
+  // the change is the point where you confirm the registration is intended.
+  assert.equal(names.length, 26, `tool count changed: ${names.join(", ")}`);
   console.log(`  ${names.length} tools:`, names.join(", "));
 
   const { resources } = await client.listResources();
-  assert.ok(
-    resources.length >= 14,
-    `only ${resources.length} resources registered`,
-  );
+  assert.equal(resources.length, 16, "resource count changed");
   console.log(`  ${resources.length} resources`);
   const { prompts } = await client.listPrompts();
-  assert.ok(prompts.length >= 7, `only ${prompts.length} prompts registered`);
+  assert.equal(prompts.length, 8, "prompt count changed");
   console.log(
     `  ${prompts.length} prompts:`,
     prompts.map((p) => p.name).join(", "),
@@ -107,4 +105,15 @@ test("unknown tool name is an error result, not a hang", async () => {
   const { client } = await connect();
   const res = await client.callTool({ name: "no-such-tool", arguments: {} });
   assert.equal(res.isError, true);
+});
+
+test("a flag-like serial port is rejected by the tool's input schema", async () => {
+  // The port pattern lives on the zod field, so the SDK rejects it before the
+  // handler — the LLM is told the constraint rather than getting a bare throw.
+  const { client } = await connect();
+  const res = await client.callTool({
+    name: "get-tmux-uart-snippet",
+    arguments: { portPath: "-oProxyCommand=evil", target: "raspberrypi5" },
+  });
+  assert.equal(res.isError, true, "schema-invalid portPath must be an error");
 });

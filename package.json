@@ -11,12 +11,13 @@
     "prepare": "npm run build",
     "prepublishOnly": "npm run build",
     "dev": "npm run build && node build/index.js",
+    "pretest": "node -e \"require('fs').rmSync('build-test',{recursive:true,force:true})\"",
     "test": "tsc --project tsconfig.test.json && cd build-test && node --test",
-    "test:watch": "tsc --project tsconfig.test.json --watch & (cd build-test && node --test --watch)",
+    "test:watch": "node -e \"require('fs').rmSync('build-test',{recursive:true,force:true})\" && tsc --project tsconfig.test.json && (tsc --project tsconfig.test.json --watch & TSC=$!; trap 'kill $TSC 2>/dev/null' EXIT INT TERM; cd build-test && node --test --watch)",
     "inspect": "npm run build && npx @modelcontextprotocol/inspector build/index.js",
     "format": "prettier --write '{src,test}/**/*.ts'",
     "format:check": "prettier --check '{src,test}/**/*.ts'",
-    "typecheck": "tsc --project tsconfig.build.json --noEmit",
+    "typecheck": "tsc --project tsconfig.build.json --noEmit && tsc --project tsconfig.test.json --noEmit",
     "checks": "npm run format:check && npm run typecheck"
   },
   "files": [
