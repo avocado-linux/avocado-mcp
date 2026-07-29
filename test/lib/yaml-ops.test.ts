@@ -79,7 +79,7 @@ test("malformed input YAML is refused rather than silently rewritten", () => {
     () =>
       addPackageToExtension(broken, { extension: "app", packageName: "curl" }),
   ]) {
-    assert.throws(fn, /Cannot edit malformed YAML/);
+    assert.throws(fn, /Cannot parse malformed YAML/);
   }
 });
 
@@ -148,7 +148,7 @@ test("listExtensions surfaces malformed YAML instead of reporting zero extension
   // so a client can key on one string to choose a recovery path.
   assert.throws(
     () => listExtensions("extensions:\n  app:\n   - [unclosed\n"),
-    /Cannot edit malformed YAML/,
+    /Cannot parse malformed YAML/,
   );
 });
 

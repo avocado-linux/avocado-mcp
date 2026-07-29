@@ -8,6 +8,7 @@ import {
   buildTmuxSnippet,
   emulatorInstallHint,
   SUPPORTED_EMULATORS,
+  SAFE_PORT_RE,
   type SerialEmulator,
 } from "../lib/device-info.js";
 
@@ -192,8 +193,10 @@ export function registerDebuggingTools(server: McpServer): void {
       inputSchema: {
         portPath: z
           .string()
+          // Shared with the runtime guard in device-info.ts so the schema and
+          // the lib can't drift into accepting/rejecting different values.
           .regex(
-            /^[A-Za-z/][A-Za-z0-9._:/-]*$/,
+            SAFE_PORT_RE,
             "must be a device path (letters, digits, '.', '_', ':', '-', '/'), starting with a letter or '/'",
           )
           .describe(

@@ -191,7 +191,9 @@ export function buildStarterYaml(opts: {
 function parseOrThrow(yamlText: string): ReturnType<typeof parseDocument> {
   const doc = parseDocument(yamlText);
   if (doc.errors.length > 0) {
-    throw new Error(`Cannot edit malformed YAML: ${doc.errors[0].message}`);
+    // "parse", not "edit": this backs read-only entry points (listExtensions)
+    // as well as the mutations, so a neutral verb is accurate for both.
+    throw new Error(`Cannot parse malformed YAML: ${doc.errors[0].message}`);
   }
   return doc;
 }

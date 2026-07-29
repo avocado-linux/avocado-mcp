@@ -203,7 +203,7 @@ export const SUPPORTED_EMULATORS: SerialEmulator[] = [
  * with no shell metacharacters). None of these need shell escaping inside the
  * single quotes they land in.
  */
-const SAFE_PORT_RE = /^[A-Za-z/][A-Za-z0-9._:/-]*$/;
+export const SAFE_PORT_RE = /^[A-Za-z/][A-Za-z0-9._:/-]*$/;
 
 /**
  * Reject a serial port path that isn't already safe. These flow verbatim into

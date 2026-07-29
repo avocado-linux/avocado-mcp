@@ -55,10 +55,12 @@ test("the generation digit is decisive — a sibling never appears", () => {
   }
 });
 
-// A slice of real slugs from the live matrix — NONE are in the SYNONYMS table,
-// so matching must come from the slug alone. This is the case the earlier
-// length-gate regression dropped: a supported board vanished from suggestions
-// and the user was told it wasn't supported.
+// A slice of real slugs from the live matrix. The imx93/imx91 boards here have
+// NO entry in the SYNONYMS table, so their matching must come from the slug
+// alone — exactly the case the earlier length-gate regression dropped (a
+// supported board vanished from suggestions and the user was told it wasn't
+// supported). imx8mp-evk does have synonyms; it's included only for the 8M-Plus
+// ranking check below.
 const MATRIX_SLICE = [
   "imx93-evk",
   "imx93-frdm",
