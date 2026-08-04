@@ -115,6 +115,17 @@ test("a one-letter token does not match the whole catalog", () => {
   );
 });
 
+test("a 2-char token does not pull an unrelated board in via mid-substring", () => {
+  // "64" is inside qemuarm64 but only mid-token; an x86_64 query must not
+  // surface an arm board. Substring credit at length 2 requires a *prefix*.
+  const hits = resolveTarget("x86_64", TARGETS);
+  assert.ok(hits.includes("qemux86-64"));
+  assert.ok(
+    !hits.includes("qemuarm64"),
+    `arm board leaked: ${hits.join(", ")}`,
+  );
+});
+
 test("vendor product names with short numeric tokens resolve", () => {
   // NXP's own name for the board is "i.MX 8M Plus", so the 2-char "8m" token
   // has to earn credit. This is the case a bare length gate on substring
