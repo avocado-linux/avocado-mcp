@@ -132,15 +132,17 @@ test("emulatorInvocation rejects an unsafe port instead of silently rewriting it
   assert.match(cmd, /pci-0000:00:14\.0-usb-0:2:1\.0-port0/);
 });
 
-test("a session name that is empty or flag-like after sanitizing falls back", () => {
+test("a session name that sanitizes to empty or a flag falls back to the default", () => {
   for (const bad of ["!!!", "-X"]) {
     const snip = buildTmuxSnippet("/dev/ttyUSB0", 115200, "tio", bad);
     assert.match(snip, /new-session -d -s avocado-uart\b/, bad);
-    assert.doesNotMatch(snip, /-s -X\b/);
   }
 });
 
-test("a session name sanitized to empty falls back to the default", () => {
-  const snip = buildTmuxSnippet("/dev/ttyUSB0", 115200, "tio", "!!!");
-  assert.match(snip, /new-session -d -s avocado-uart\b/);
+test("tmux addressing characters are stripped from a session name", () => {
+  // ':' and '.' are session:window.pane syntax — "uart.2" must not reach
+  // `-t uart.2`, which tmux reads as window+pane against the current session.
+  const snip = buildTmuxSnippet("/dev/ttyUSB0", 115200, "tio", "uart.2");
+  assert.match(snip, /-s uart2\b/);
+  assert.doesNotMatch(snip, /uart[.:]2/);
 });

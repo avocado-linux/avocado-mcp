@@ -48,13 +48,14 @@ function tokenize(s: string): string[] {
 }
 
 /**
- * Collapse a string to lowercase alphanumerics only: "i.MX 8M Plus" →
- * "imx8mplus", "imx93-evk" → "imx93evk". This lets a spelled-out query match a
- * matrix slug across the separators and spacing that differ between how people
- * write a board name and how the feed slugs it — no per-board aliases required.
+ * Collapse a string to its tokens joined: "i.MX 8M Plus" → "imx8mplus",
+ * "imx93-evk" → "imx93evk". This lets a spelled-out query match a matrix slug
+ * across the separators and spacing that differ between how people write a
+ * board name and how the feed slugs it — no per-board aliases required. Defined
+ * via `tokenize` so the separator class has a single definition.
  */
 function squash(s: string): string {
-  return s.toLowerCase().replace(/[^a-z0-9]+/g, "");
+  return tokenize(s).join("");
 }
 
 function haystackFor(slug: string): string[] {
@@ -101,13 +102,15 @@ export function resolveTarget(query: string, allTargets: string[]): string[] {
       else if (tSquash.includes(qSquash)) score += 10;
     }
 
-    // Per-token: exact > prefix > substring. Credit a substring only for
-    // tokens ≥ 2 chars — a 1-char token like "a" is a substring of most slugs
-    // and would otherwise pull the whole catalog into the results.
+    // Per-token: exact > prefix > substring. A 2-char token earns credit only
+    // when it *prefixes* a haystack token — a bare substring at that length is
+    // noise (e.g. "64" is inside "qemuarm64", pulling an arm board into an
+    // x86_64 query). Mid-slug numerics like "93" are handled by the squash
+    // bonus above, not here, so they don't need the substring path.
     for (const qt of qTokens) {
       if (hay.some((h) => h === qt)) score += 3;
       else if (qt.length >= 2 && hay.some((h) => h.startsWith(qt))) score += 2;
-      else if (qt.length >= 2 && hay.some((h) => h.includes(qt))) score += 1;
+      else if (qt.length >= 3 && hay.some((h) => h.includes(qt))) score += 1;
     }
 
     if (t.toLowerCase() === qLower) score += 100;

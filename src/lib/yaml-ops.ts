@@ -184,9 +184,11 @@ export function buildStarterYaml(opts: {
 
 /**
  * Parse avocado.yaml, throwing a single, consistent error on malformed input.
- * Every mutation/introspection entry point routes through this so a client can
- * key on one message prefix to pick a recovery path (previously the read path
- * diverged with "Cannot read…", which nothing pinned).
+ * The *throwing* helpers (addExtension/addRuntime/addPackageToExtension/
+ * listExtensions) all route through this, so they share one message prefix
+ * (previously the read path diverged with "Cannot read…"). `validateAvocadoYaml`
+ * is deliberately NOT one of them — it returns a structured `{ok:false, errors}`
+ * result rather than throwing, so a caller inspects `errors`, not a prefix.
  */
 function parseOrThrow(yamlText: string): ReturnType<typeof parseDocument> {
   const doc = parseDocument(yamlText);

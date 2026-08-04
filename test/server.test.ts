@@ -116,4 +116,12 @@ test("a flag-like serial port is rejected by the tool's input schema", async () 
     arguments: { portPath: "-oProxyCommand=evil", target: "raspberrypi5" },
   });
   assert.equal(res.isError, true, "schema-invalid portPath must be an error");
+  // Pin the SCHEMA constraint itself: the handler's own guard would also yield
+  // isError, so assert the message the zod regex emits — otherwise deleting
+  // `.regex(SAFE_PORT_RE)` (e.g. to accept a Windows `COM3:`) ships silently.
+  assert.match(
+    JSON.stringify(res.content),
+    /device path/,
+    JSON.stringify(res.content),
+  );
 });

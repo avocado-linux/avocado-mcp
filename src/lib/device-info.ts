@@ -221,11 +221,13 @@ function assertSafePortPath(portPath: string): void {
 /**
  * A tmux session name is cosmetic, so sanitizing it in place is fine (unlike a
  * port path). Strip to a shell-safe token; fall back to the default if that
- * leaves it empty or leading-`-` (which tmux/`-s` would misparse). `:` is
- * excluded on purpose — it's tmux window/pane addressing syntax.
+ * leaves it empty or leading-`-` (which tmux/`-s` would misparse). Both `:` and
+ * `.` are excluded — together they are tmux's `session:window.pane` addressing
+ * grammar, so a name like `uart.2` in `-t uart.2` would resolve as window+pane
+ * against the current session instead of the session we created.
  */
 function sanitizeSessionName(name: string): string {
-  const cleaned = name.replace(/[^A-Za-z0-9._-]/g, "");
+  const cleaned = name.replace(/[^A-Za-z0-9_-]/g, "");
   return !cleaned || cleaned.startsWith("-") ? "avocado-uart" : cleaned;
 }
 
@@ -266,7 +268,10 @@ export function buildTmuxSnippet(
   emulator: SerialEmulator = "tio",
   sessionName = "avocado-uart",
 ): string {
-  // Reject an unsafe port (don't rewrite); sanitize the cosmetic session name.
+  // Reject an unsafe port up front (don't rewrite), and sanitize the cosmetic
+  // session name. emulatorInvocation below asserts the port again, but keeping
+  // it here makes the rejection an explicit precondition of this public entry
+  // point rather than an accident of the array being evaluated eagerly.
   assertSafePortPath(portPath);
   sessionName = sanitizeSessionName(sessionName);
   return [

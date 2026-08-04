@@ -215,13 +215,9 @@ export function registerDebuggingTools(server: McpServer): void {
           ),
         sessionName: z
           .string()
-          .regex(
-            /^[A-Za-z0-9][A-Za-z0-9._-]*$/,
-            "must be letters, digits, '.', '_' or '-', not starting with '-'",
-          )
           .optional()
           .describe(
-            "Optional tmux session name. Defaults to 'avocado-uart'. Use a different name only if you already have an avocado-uart session for another device.",
+            "Optional tmux session name. Defaults to 'avocado-uart'. Use a different name only if you already have an avocado-uart session for another device. Non-`[A-Za-z0-9_-]` characters are stripped, and an empty/flag-like result falls back to the default — so this is repaired, not rejected (unlike portPath).",
           ),
       },
       annotations: {
