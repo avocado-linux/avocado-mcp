@@ -8,6 +8,10 @@ import {
   type SearchResult,
 } from "../lib/repo-client.js";
 import { resolveTarget } from "../lib/target-resolver.js";
+import {
+  getSelectableSlugs,
+  filterSelectable,
+} from "../lib/hardware-support.js";
 
 /**
  * Validate target names against the manifest for a SPECIFIC release/channel.
@@ -32,9 +36,15 @@ async function validateTargets(
   const all = Object.keys(config);
   const unknown = targets.filter((t) => !config[t]);
   if (unknown.length === 0) return { ok: true };
+  // Validation is against the full feed above (a real feed slug is never
+  // blocked), but suggestions come from the selectable set (the support matrix)
+  // so we never propose an arch/tune pseudo-target. Fall back to the full feed
+  // if the matrix can't be fetched.
+  const selectable = await getSelectableSlugs();
+  const suggestFrom = selectable ? filterSelectable(all, selectable) : all;
   const lines: string[] = [];
   for (const u of unknown) {
-    const fuzzy = resolveTarget(u, all).slice(0, 3);
+    const fuzzy = resolveTarget(u, suggestFrom).slice(0, 3);
     if (fuzzy.length > 0) {
       lines.push(
         `- \`${u}\` is not available in \`${rel}/${chan}\`. Did you mean: ${fuzzy.map((t) => `\`${t}\``).join(", ")}?`,
@@ -50,7 +60,7 @@ async function validateTargets(
       ``,
       ...lines,
       ``,
-      `**Targets in \`${rel}/${chan}\` (${all.length}):** ${all
+      `**Selectable targets in \`${rel}/${chan}\` (${suggestFrom.length}):** ${suggestFrom
         .sort()
         .map((t) => `\`${t}\``)
         .join(", ")}`,

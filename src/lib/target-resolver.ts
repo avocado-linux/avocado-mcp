@@ -54,7 +54,7 @@ function tokenize(s: string): string[] {
  * board name and how the feed slugs it — no per-board aliases required. Defined
  * via `tokenize` so the separator class has a single definition.
  */
-function squash(s: string): string {
+export function squash(s: string): string {
   return tokenize(s).join("");
 }
 

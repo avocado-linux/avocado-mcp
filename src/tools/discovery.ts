@@ -6,6 +6,10 @@ import { statfs } from "fs/promises";
 import { arch as osArch, platform as osPlatform, homedir } from "os";
 import { RepoClient, normalizeStream } from "../lib/repo-client.js";
 import { resolveTarget } from "../lib/target-resolver.js";
+import {
+  getSelectableSlugs,
+  filterSelectable,
+} from "../lib/hardware-support.js";
 import { probeHostMcp, HOST_MCP_URL } from "../lib/cli-channel.js";
 
 /**
@@ -364,13 +368,21 @@ export function registerDiscoveryTools(
         };
       }
 
-      const allTargets = Object.keys(config);
+      // The feed's targets.json carries arch/tune pseudo-targets alongside real
+      // boards; the support matrix is the authoritative selectable set. Narrow
+      // to it, but fall back to the full feed if the matrix can't be fetched so
+      // a docs outage never hides targets.
+      const feedTargets = Object.keys(config);
+      const selectable = await getSelectableSlugs();
+      const allTargets = selectable
+        ? filterSelectable(feedTargets, selectable)
+        : feedTargets;
       const entries = (
         query
           ? resolveTarget(query, allTargets).map(
               (t) => [t, config[t]] as [string, string[]],
             )
-          : Object.entries(config)
+          : allTargets.map((t) => [t, config[t]] as [string, string[]])
       ).sort(([a], [b]) => a.localeCompare(b));
 
       const structuredContent = {
@@ -398,7 +410,7 @@ export function registerDiscoveryTools(
       for (const [target, repos] of entries) {
         out += `| \`${target}\` | ${repos.map((r) => `\`${r}\``).join(", ")} |\n`;
       }
-      out += `\n_Use any of these target strings as the value of \`default_target\` or \`supported_targets\` in \`avocado.yaml\`._`;
+      out += `\n_These are the user-selectable targets from the [support matrix](https://docs.peridio.com/hardware/support-matrix); use any as \`default_target\` / \`supported_targets\` in \`avocado.yaml\`. (Arch/tune pseudo-targets in the raw feed are filtered out.)_`;
 
       return {
         content: [{ type: "text", text: out }],

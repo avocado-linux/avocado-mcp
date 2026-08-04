@@ -82,13 +82,14 @@ test("a spelled-out model name ranks its board above SoC-arch entries", () => {
   );
 });
 
-// Presence, not rank. A SPELLED-OUT query ranks its board first (test above);
-// a TERSE one ("93", "mx93") only guarantees the board is *present*. It may not
-// rank #1, because a SoC-arch target like `cortexa55_mx93` literally contains
-// `mx93` as a slug token, so by slug similarity alone it's the closer match.
-// Ranking real boards above arch/tune targets needs a board-vs-arch signal the
-// slug doesn't carry — a follow-up if the feed exposes one. The load-bearing
-// property (a supported board never *vanishes* from suggestions) holds here.
+// The raw resolver ranks by slug similarity ONLY, so for a terse query a
+// SoC-arch target like `cortexa55_mx93` (which contains `mx93` as a whole
+// token) can outrank the board — the resolver can't tell a board from an
+// arch/tune string. The tools don't rely on it to: `hardware-support`
+// filters the catalog to the support-matrix selectable set BEFORE the resolver
+// sees it, so `cortexa55_mx93` etc. are never candidates (see
+// hardware-support.test). This test pins the resolver's own guarantee — the
+// board is always *present* (never dropped) even in a raw, unfiltered set.
 test("terse model numbers still surface the board (present, not necessarily #1)", () => {
   assert.ok(resolveTarget("i.MX 91", MATRIX_SLICE).includes("imx91-evk"));
   assert.ok(
