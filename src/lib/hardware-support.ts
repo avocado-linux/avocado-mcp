@@ -21,6 +21,7 @@ const RAW_BASE =
   "https://raw.githubusercontent.com/peridio/docs/main/src/src/data/hardware";
 const DATA_FILES = ["supported.json", "virtual-environment.json"];
 const CACHE_TTL_MS = 30 * 60 * 1000;
+const FETCH_TIMEOUT_MS = 5000;
 const USER_AGENT = "avocado-mcp-server";
 
 interface HardwareDevice {
@@ -32,8 +33,11 @@ interface HardwareDevice {
 let cache: { data: Set<string>; expiresAt: number } | null = null;
 
 async function fetchDevices(file: string): Promise<HardwareDevice[]> {
+  // Bound the request — a stalled connection must degrade to null (→ caller
+  // falls back to the full feed) quickly, not hang a target-suggestion call.
   const res = await fetch(`${RAW_BASE}/${file}`, {
     headers: { "User-Agent": USER_AGENT },
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   });
   if (!res.ok) throw new Error(`${file} returned ${res.status}`);
   const json: unknown = await res.json();

@@ -410,7 +410,9 @@ export function registerDiscoveryTools(
       for (const [target, repos] of entries) {
         out += `| \`${target}\` | ${repos.map((r) => `\`${r}\``).join(", ")} |\n`;
       }
-      out += `\n_These are the user-selectable targets from the [support matrix](https://docs.peridio.com/hardware/support-matrix); use any as \`default_target\` / \`supported_targets\` in \`avocado.yaml\`. (Arch/tune pseudo-targets in the raw feed are filtered out.)_`;
+      out += selectable
+        ? `\n_These are the user-selectable targets from the [support matrix](https://docs.peridio.com/hardware/support-matrix); use any as \`default_target\` / \`supported_targets\` in \`avocado.yaml\`. (Arch/tune pseudo-targets in the raw feed are filtered out.)_`
+        : `\n_⚠️ Support matrix unavailable — showing the raw \`${rel}/${chan}\` feed, which may include arch/tune pseudo-targets that aren't user-selectable. Use any board string as \`default_target\` / \`supported_targets\` in \`avocado.yaml\`._`;
 
       return {
         content: [{ type: "text", text: out }],

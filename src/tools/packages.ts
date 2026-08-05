@@ -60,7 +60,7 @@ async function validateTargets(
       ``,
       ...lines,
       ``,
-      `**Selectable targets in \`${rel}/${chan}\` (${suggestFrom.length}):** ${suggestFrom
+      `**${selectable ? "Selectable targets" : "Targets"} in \`${rel}/${chan}\` (${suggestFrom.length}):** ${suggestFrom
         .sort()
         .map((t) => `\`${t}\``)
         .join(", ")}`,

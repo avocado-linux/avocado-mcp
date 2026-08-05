@@ -1,6 +1,6 @@
 {
   "name": "avocado-os-mcp-server",
-  "version": "5.2.0",
+  "version": "5.2.1",
   "main": "build/index.js",
   "type": "module",
   "bin": {
