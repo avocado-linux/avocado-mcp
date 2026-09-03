@@ -1,7 +1,7 @@
 export const URI = "avocado://skills/container-backend";
 export const NAME = "container-backend";
 export const DESCRIPTION =
-  "Where Avocado gets Docker on the development host, per platform. On macOS and Windows, the avocado-vm supplies dockerd and Docker Desktop is not necessary. On Linux, the CLI uses the native Docker Engine. Read this after a Docker or daemon error, when the user asks about Docker installation, or before you tell anyone to install Docker Desktop.";
+  "Where Avocado gets Docker on the development host, per platform. On macOS, the avocado-vm supplies dockerd and Docker Desktop is not necessary. On Linux, the CLI uses the native Docker Engine. Read this after a Docker or daemon error, when the user asks about Docker installation, or before you tell anyone to install Docker Desktop.";
 
 export const CONTENT = `# The container backend (where Docker comes from)
 
@@ -10,7 +10,7 @@ the SDK container. Thus the host needs a container engine. The source of that
 engine depends on the platform. Know the platform before you tell a user to
 install anything.
 
-## macOS and Windows — the avocado-vm supplies Docker
+## macOS — the avocado-vm supplies Docker
 
 Docker Desktop is not necessary. The \`avocado\` CLI includes a helper VM
 (\`avocado-vm\`). This is a QEMU virtual machine that runs \`dockerd\` inside it.
@@ -28,7 +28,7 @@ The CLI sets \`DOCKER_HOST\` only in its own process. A \`docker info\` command 
 you run does not see the daemon in the VM. Thus a Docker failure on the host is
 not proof of a broken environment on a Mac. Examine the VM, not bare Docker.
 
-### First-time setup (macOS and Windows)
+### First-time setup (macOS)
 
 \`\`\`bash
 avocado vm update      # download and install the prebuilt avocado-vm release
@@ -51,7 +51,7 @@ This is not a usual task.
 The VM keeps a persistent \`/data\` disk. SDK images and Docker volumes stay after
 a rootfs rebuild. Thus builds stay fast after a restart.
 
-### Opt out of the VM (macOS and Windows)
+### Opt out of the VM (macOS)
 
 The CLI uses the VM by default. To make the CLI use a local Docker daemon
 instead, use one of these options:
@@ -73,7 +73,7 @@ docker info        # must succeed
 
 ## Debug Docker and daemon errors — where to look
 
-| Symptom | macOS and Windows | Linux |
+| Symptom | macOS | Linux |
 |---|---|---|
 | "Cannot connect to the Docker daemon" | Run \`avocado vm status\`. If the VM is stopped or missing, run \`avocado vm start\` (or \`avocado vm update\` first). Do not run \`sudo systemctl start docker\`, because there is no host daemon. | Run \`sudo systemctl start docker\`. |
 | Build stopped for out of memory | The build runs in the avocado-vm. Give the VM more memory and CPUs (\`avocado vm start --memory-mib <MiB> --cpus <n>\`; both persist to \`~/.avocado/vm/config.yaml\`). Do not change Docker Desktop Resources. | Raise host limits or free RAM. |

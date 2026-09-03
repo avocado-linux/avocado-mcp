@@ -17,7 +17,7 @@ Avocado OS is a Yocto-based embedded Linux distribution. A working project consi
 **Always required:**
 
 - **A container engine** — the CLI runs all builds inside the SDK container. The source depends on the platform. Docker Desktop is not required:
-  - **macOS and Windows:** the \`avocado\` CLI includes the **avocado-vm**, a QEMU VM that runs \`dockerd\`. The CLI connects to it automatically. For first-time setup, run \`avocado vm update && avocado vm start\`. The VM also starts on your first build. Do not tell the user to install Docker Desktop.
+  - **macOS:** the \`avocado\` CLI includes the **avocado-vm**, a QEMU VM that runs \`dockerd\`. The CLI connects to it automatically. For first-time setup, run \`avocado vm update && avocado vm start\`. The VM also starts on your first build. Do not tell the user to install Docker Desktop.
   - **Linux:** the native Docker Engine on the host, not Docker Desktop. Make sure that the daemon runs with \`sudo systemctl start docker\`.
   - For the full model and debugging, see \`avocado://skills/container-backend\`.
 - **The avocado CLI** installed AND on PATH (\`curl -fsSL https://connect.peridio.com/install.sh | sh\` on macOS or Linux). If the user has a local build of the CLI but it isn't on PATH, symlink it: \`mkdir -p ~/.local/bin && ln -s /path/to/avocado ~/.local/bin/avocado\` (then verify \`~/.local/bin\` is on PATH).
@@ -36,7 +36,7 @@ Run \`environment-check\` to verify all of these at once before starting work.
 
 ## The happy path
 
-1. **Verify the host.** Run \`environment-check\` first. If the CLI, the container engine, or the disk space are not ready, correct that first. Every later step needs the CLI on PATH. On macOS and Windows, the container engine is the avocado-vm, not Docker Desktop. For more information, see \`avocado://skills/container-backend\`.
+1. **Verify the host.** Run \`environment-check\` first. If the CLI, the container engine, or the disk space are not ready, correct that first. Every later step needs the CLI on PATH. On macOS, the container engine is the avocado-vm, not Docker Desktop. For more information, see \`avocado://skills/container-backend\`.
 2. **Pick a target.** Use \`list-targets\` to see what's supported. Each entry has a \`target\` string the user puts in their \`avocado.yaml\`.
 3. **Scaffold the project.** Call \`init-project\` with the chosen \`target\` and \`task\` (the user's task in their own words — e.g. "python web app", "mqtt sensor", "qemu trial run"). The tool searches the reference catalog first and prefers a matching reference whenever one fits — references are pre-built, verified, working projects, and they save substantial time vs. building YAML from scratch. The tool returns either:
    - **A reference scaffold command** (\`avocado init --target <target> --reference <slug> <slug> && cd <slug>\`) when a reference matches. Read the reference with \`get-reference\` to understand what it sets up before suggesting edits.
