@@ -321,7 +321,7 @@ export function registerPrompts(server: McpServer): void {
                 "Please follow this flow:",
                 "",
                 "1. Read `avocado://skills/getting-started` if you haven't already, then `avocado://skills/device-debugging` (for the UART-USB requirement) and `avocado://skills/filesystem-model` (so I understand what gets flashed vs what's runtime-writable).",
-                "2. Call `environment-check` to confirm I have the `avocado` CLI, Docker, and ≥8 GB free disk. If anything is missing, surface the fix and STOP.",
+                "2. Call `environment-check` to make sure that I have the `avocado` CLI, a working container engine, and ≥8 GB free disk. On macOS and Windows, the container engine is the avocado-vm and Docker Desktop is not required. On Linux, it is the native Docker Engine. For more information, see `avocado://skills/container-backend`. If something is missing, show the fix and STOP.",
                 target
                   ? `3. Confirm \`${target}\` is a supported target via \`list-targets({ query: "${target}" })\`. If it doesn't appear, STOP — don't try to substitute.`
                   : `3. Ask me what target I'm provisioning. Use \`list-targets({ query: "..." })\` to confirm the slug is canonical. Only proceed once we agree on a supported target.`,

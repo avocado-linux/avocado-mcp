@@ -50,7 +50,7 @@ test("every tool/resource/prompt registers without collision", async () => {
   console.log(`  ${names.length} tools:`, names.join(", "));
 
   const { resources } = await client.listResources();
-  assert.equal(resources.length, 16, "resource count changed");
+  assert.equal(resources.length, 17, "resource count changed");
   console.log(`  ${resources.length} resources`);
   const { prompts } = await client.listPrompts();
   assert.equal(prompts.length, 8, "prompt count changed");

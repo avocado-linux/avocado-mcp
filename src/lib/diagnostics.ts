@@ -151,19 +151,28 @@ const BUILD_PATTERNS: Pattern[] = [
       "Run `validate-yaml` to get the exact error path. Then fix the YAML — usually a wrong type or a missing required field.",
   },
   {
+    label: "Docker daemon not reachable",
+    match:
+      /Cannot connect to the Docker daemon|Is the docker daemon running|error during connect|docker socket forward .* is missing/i,
+    cause:
+      "The CLI could not connect to a Docker daemon. On macOS and Windows, the daemon runs in the avocado-vm, not Docker Desktop. This usually means the VM is not running or not installed. On Linux, it means the Docker Engine on the host is stopped.",
+    suggestion:
+      "On macOS and Windows, run `avocado vm status`. If the VM is stopped or missing, run `avocado vm start`. For first-time setup, run `avocado vm update` to install it. Do not run `sudo systemctl start docker`, because there is no host daemon on a Mac. On Linux, run `sudo systemctl start docker`. For more information, see `avocado://skills/container-backend`.",
+  },
+  {
     label: "SDK image pull failed",
     match: /pull access denied|manifest unknown|image not found|TLS handshake/i,
     cause:
-      "Docker couldn't pull the SDK container image. Either you're offline, the image tag is wrong, or Docker Hub is unreachable.",
+      "Docker could not pull the SDK container image. You are offline, the image tag is wrong, or the engine cannot connect to the registry.",
     suggestion:
-      "Check your network. Verify the image tag in `sdk.image` matches a published tag (e.g. `docker.io/avocadolinux/sdk:2024-edge`). Try `docker pull` manually to isolate.",
+      "Examine the network. On macOS and Windows, the pull runs inside the avocado-vm. To isolate the problem, run `avocado vm shell`, then `docker pull <tag>`. The VM caches images on `/data`, so a retry is cheap. Make sure that the tag in `sdk.image` matches a published tag, for example `docker.io/avocadolinux/sdk:2024-edge`.",
   },
   {
     label: "Out of memory",
     match: /killed by signal|OOM|Cannot allocate memory/i,
-    cause: "The build was killed by the OS for using too much memory.",
+    cause: "The OS stopped the build because it used too much memory.",
     suggestion:
-      "Increase Docker's memory limit (Docker Desktop → Settings → Resources). 8 GB is the recommended minimum.",
+      "On macOS and Windows, the build runs inside the avocado-vm. Give the VM more memory with `avocado vm start --memory-mib <MiB>`. The value persists for later starts. Do not change Docker Desktop Resources. On Linux, free host RAM or lower the build parallelism. The minimum is 8 GB.",
   },
   {
     label: "Compile error in overlay",
