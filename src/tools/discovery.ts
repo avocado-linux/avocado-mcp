@@ -83,6 +83,75 @@ async function checkBinary(
   }
 }
 
+/**
+ * Probe the container engine the CLI will actually use, per platform.
+ *
+ * On macOS/Windows the avocado-vm supplies dockerd and the CLI routes to it
+ * transparently (it forwards the VM's socket and sets DOCKER_HOST *inside its
+ * own process only*). So a bare `docker info` from HERE is meaningless — it
+ * won't see the VM's daemon. We check the VM instead, and Docker Desktop is
+ * NOT required. On Linux the CLI uses the host's native Docker Engine directly,
+ * so a plain `docker info` is the right probe.
+ *
+ * See `avocado://skills/container-backend` for the full model.
+ */
+async function checkContainerEngine(
+  platform: string,
+): Promise<{ ok: boolean; detail: string }> {
+  const dockerInfo = () =>
+    checkBinary("docker", ["info", "--format", "{{.ServerVersion}}"]);
+
+  if (platform === "darwin" || platform === "win32") {
+    // `avocado vm status` exits 0 whether the VM is running or not, so parse
+    // stdout rather than the exit code.
+    try {
+      const { stdout } = await execFileP("avocado", ["vm", "status"], {
+        timeout: 5000,
+      });
+      if (/running \(pid/i.test(stdout)) {
+        return {
+          ok: true,
+          detail:
+            "avocado-vm running — it supplies Docker (Docker Desktop not necessary)",
+        };
+      }
+      // VM tooling present but not running. Not a blocker: the CLI starts it
+      // on the first build (or `avocado vm start`). If it was never installed,
+      // that first start prints an `avocado vm update` hint.
+      return {
+        ok: true,
+        detail:
+          "avocado-vm not running — it starts on the first build, or run `avocado vm start` (first time: `avocado vm update`)",
+      };
+    } catch (e) {
+      // `avocado vm status` failed (old CLI without the subcommand, or avocado
+      // not on PATH). Fall back to a locally-installed Docker daemon if any.
+      const d = await dockerInfo();
+      if (d.ok)
+        return {
+          ok: true,
+          detail: `local Docker daemon reachable (${d.detail})`,
+        };
+      const err = e as NodeJS.ErrnoException;
+      const why =
+        err.code === "ENOENT"
+          ? "avocado CLI not on PATH"
+          : "`avocado vm status` failed";
+      return {
+        ok: false,
+        detail: `no avocado-vm (${why}) and no local Docker daemon`,
+      };
+    }
+  }
+
+  // Linux (and anything else): native Docker Engine.
+  const d = await dockerInfo();
+  return {
+    ok: d.ok,
+    detail: d.ok ? `native Docker Engine (${d.detail})` : d.detail,
+  };
+}
+
 async function checkDiskGB(): Promise<{ ok: boolean; freeGB: number }> {
   try {
     const s = await statfs(homedir());
@@ -126,7 +195,7 @@ export function registerDiscoveryTools(
     {
       title: "Check host prerequisites",
       description:
-        "Verify the host has the prerequisites to build and provision an Avocado OS project: `avocado` CLI on PATH, Docker daemon reachable, and ≥8 GB free disk space in $HOME. Also (a) reports host CPU arch + OS so downstream tools (e.g. `init-project`) can warn about cross-arch QEMU performance gotchas, and (b) detects the avocado-cli execution channel for this session — when reachable, the Avocado desktop's host MCP runs CLI commands on the user's Mac (their CLI, their config, their keys) so the LLM doesn't have to invoke the CLI directly. Call this BEFORE init-project / list-targets / build-and-deploy so subsequent steps follow the right invocation pattern. **QEMU-target prerequisites** (qemu-system-*) are NOT checked here — `get-provisioning-steps` validates those when the resolved target is a QEMU one. Read-only.",
+        "Verify the host has the prerequisites to build and provision an Avocado OS project: `avocado` CLI on PATH, a working container engine, and ≥8 GB free disk space in $HOME. On macOS and Windows the container engine is the avocado-vm, which supplies Docker, so Docker Desktop is not required. On Linux it is the native Docker Engine. Also (a) reports host CPU arch + OS so downstream tools (e.g. `init-project`) can warn about cross-arch QEMU performance gotchas, and (b) detects the avocado-cli execution channel for this session — when reachable, the Avocado desktop's host MCP runs CLI commands on the user's Mac (their CLI, their config, their keys) so the LLM doesn't have to invoke the CLI directly. Call this BEFORE init-project / list-targets / build-and-deploy so subsequent steps follow the right invocation pattern. **QEMU-target prerequisites** (qemu-system-*) are NOT checked here — `get-provisioning-steps` validates those when the resolved target is a QEMU one. Read-only.",
       inputSchema: {},
       outputSchema: {
         ok: z
@@ -188,10 +257,11 @@ export function registerDiscoveryTools(
       const host = { arch: normalizedHostArch(), platform: osPlatform() };
       const [cli, docker, disk, delegation] = await Promise.all([
         checkBinary("avocado", ["--version"]),
-        checkBinary("docker", ["info", "--format", "{{.ServerVersion}}"]),
+        checkContainerEngine(host.platform),
         checkDiskGB(),
         probeHostMcp(),
       ]);
+      const isMacWin = host.platform === "darwin" || host.platform === "win32";
 
       // When the host MCP is delegating CLI calls, the LOCAL avocado /
       // Docker / disk checks describe an environment we don't actually
@@ -213,7 +283,7 @@ export function registerDiscoveryTools(
       out += `| Check | Status | Detail |\n`;
       out += `|-------|--------|--------|\n`;
       out += `| \`avocado\` CLI on PATH | ${cli.ok ? "✅" : "❌"} | ${cli.detail} |\n`;
-      out += `| Docker daemon | ${docker.ok ? "✅" : "❌"} | ${docker.detail} |\n`;
+      out += `| Container engine | ${docker.ok ? "✅" : "❌"} | ${docker.detail} |\n`;
       out += `| Free disk (\`$HOME\`) | ${disk.ok ? "✅" : "❌"} | ${disk.freeGB.toFixed(1)} GB free (need ≥${MIN_FREE_GB}) |\n`;
 
       out += `\n## Avocado-CLI execution channel\n\n`;
@@ -245,7 +315,9 @@ export function registerDiscoveryTools(
         }
         if (!docker.ok) {
           fixes.push(
-            `- **Start Docker:** install Docker Desktop (macOS) or the \`docker\` engine (Linux), then ensure the daemon is running (\`docker info\` should succeed).`,
+            isMacWin
+              ? `- **Set up the container engine (avocado-vm):** on macOS and Windows the avocado-vm supplies Docker. Docker Desktop is not necessary. Install or update it with \`avocado vm update\`. Then run \`avocado vm start\`. The VM also starts on your first \`avocado build\`. For more information, see \`avocado://skills/container-backend\`.`
+              : `- **Start Docker Engine:** install the native Docker Engine (Docker Desktop is not necessary). Start the daemon with \`sudo systemctl start docker\`. The command \`docker info\` must succeed. For more information, see \`avocado://skills/container-backend\`.`,
           );
         }
         if (!disk.ok) {
