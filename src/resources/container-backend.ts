@@ -15,9 +15,10 @@ experimental and not suggested.
 
 ## macOS — the avocado-vm supplies Docker
 
-Docker Desktop is not necessary. The \`avocado\` CLI includes a helper VM
-(\`avocado-vm\`). This is a QEMU virtual machine that runs \`dockerd\` inside it.
-The CLI connects to it automatically:
+On macOS, assume the avocado-vm is the container engine. A Mac user on plain
+Docker Desktop is rare. Docker Desktop is not necessary. The \`avocado\` CLI
+includes a helper VM (\`avocado-vm\`). This is a QEMU virtual machine that runs
+\`dockerd\` inside it. The CLI connects to it automatically:
 
 - The CLI forwards the socket \`/run/docker.sock\` from the VM to a local socket
   (\`~/.avocado/vm/docker.sock\`) with SSH. Then it sets \`DOCKER_HOST\` for its own
@@ -33,6 +34,10 @@ The CLI connects to it automatically:
 The CLI sets \`DOCKER_HOST\` only in its own process. A \`docker info\` command that
 you run does not see the daemon in the VM. Thus a Docker failure on the host is
 not proof of a broken environment on a Mac. Examine the VM, not bare Docker.
+
+The VM can hibernate. A hibernated VM is still available: \`avocado vm status\`
+shows it as running, and the CLI or the Avocado desktop wakes it on the next
+ssh or docker call. Do not treat a hibernated VM as stopped.
 
 ### First-time setup (macOS)
 
