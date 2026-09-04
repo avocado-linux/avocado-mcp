@@ -157,7 +157,7 @@ const BUILD_PATTERNS: Pattern[] = [
     cause:
       "The CLI could not connect to a Docker daemon. On macOS, the daemon runs in the avocado-vm, not Docker Desktop. This usually means the VM is not running or not installed. On Linux, it means the Docker Engine on the host is stopped.",
     suggestion:
-      "On macOS, run `avocado vm status`. If the VM is stopped, run `avocado vm start`. For first-time setup, run `avocado vm update -y` to install it, then `avocado vm start`. Do not run `sudo systemctl start docker`, because there is no host daemon on a Mac. On Linux, run `sudo systemctl start docker`. For more information, see `avocado://skills/container-backend`.",
+      "On macOS, run `avocado vm status`. If the VM is stopped, run `avocado vm start`. For first-time setup, run `avocado vm update -y` to install it, then `avocado vm start`. If the VM runs but the Docker socket forward is missing, run `avocado vm stop && avocado vm start`. Do not run `sudo systemctl start docker`, because there is no host daemon on a Mac. On Linux, run `sudo systemctl start docker`. For more information, see `avocado://skills/container-backend`.",
   },
   {
     label: "SDK image pull failed",

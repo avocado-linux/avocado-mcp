@@ -10,6 +10,9 @@ the SDK container. Thus the host needs a container engine. The source of that
 engine depends on the platform. Know the platform before you tell a user to
 install anything.
 
+The supported platforms are macOS and Linux. Windows support is highly
+experimental and not suggested.
+
 ## macOS — the avocado-vm supplies Docker
 
 Docker Desktop is not necessary. The \`avocado\` CLI includes a helper VM
@@ -20,10 +23,12 @@ The CLI connects to it automatically:
   (\`~/.avocado/vm/docker.sock\`) with SSH. Then it sets \`DOCKER_HOST\` for its own
   subprocesses. Each \`docker\` command from the CLI works. You do not need Docker
   Desktop or a manual \`docker context\`.
-- The CLI auto-starts a stopped VM only when it can find the install without
-  help: the VM is already running, or \`AVOCADO_VM_DIR\` points at the install.
-  After a plain \`avocado vm update\`, auto-start does not find the managed
-  install. Thus you must run \`avocado vm start\` yourself first.
+- If the VM is not running when a build starts, the CLI auto-starts it only
+  when \`AVOCADO_VM_DIR\` points at the install. A plain \`avocado vm update\` does
+  not set that variable. Thus the build does not auto-start the VM — run
+  \`avocado vm start\` first. But \`avocado vm update\` can restart a VM that is
+  already running. In that case, do not run \`avocado vm start\` again, because
+  it errors on a running VM.
 
 The CLI sets \`DOCKER_HOST\` only in its own process. A \`docker info\` command that
 you run does not see the daemon in the VM. Thus a Docker failure on the host is
