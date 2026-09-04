@@ -3,7 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { statfs } from "fs/promises";
-import { existsSync } from "fs";
+import { existsSync, statSync } from "fs";
 import { arch as osArch, platform as osPlatform, homedir } from "os";
 import { RepoClient, normalizeStream } from "../lib/repo-client.js";
 import { resolveTarget } from "../lib/target-resolver.js";
@@ -84,19 +84,36 @@ async function checkBinary(
   }
 }
 
+/** True only when `p` names an existing directory (matches route.rs `is_dir`). */
+function dirExists(p: string): boolean {
+  try {
+    return statSync(p).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Probe the container engine the CLI will actually use, per platform.
  *
- * On macOS the avocado-vm supplies dockerd and the CLI routes to it
+ * On macOS the avocado-vm is almost always the engine: the CLI routes to it
  * transparently (it forwards the VM's socket and sets DOCKER_HOST *inside its
- * own process only*). But the CLI ALSO uses a local Docker daemon in two
- * cases: the user opted out of the VM (`AVOCADO_VM_AUTO_START=0` / `--runs-on`),
- * or routing falls back to the local daemon when the VM is unavailable. So we
- * probe the VM AND a local `docker info`, and report ready when either can
- * serve the build. A green VM needs both the pid running AND the socket forward
- * (`~/.avocado/vm/docker.sock`) present — the forwarder can die while the pid
- * is alive. A stopped VM is ready only when `AVOCADO_VM_DIR` is set, because a
- * build auto-starts the VM only from that variable, not the managed install.
+ * own process only*). A Mac user on plain Docker Desktop is rare. We mirror the
+ * CLI's own routing decision (avocado-cli `route.rs`):
+ *
+ *   - Opt-out. `AVOCADO_VM_AUTO_START` in {0,false,no} means the CLI does NOT
+ *     route to the VM; it uses the local Docker daemon. Then readiness depends
+ *     only on `docker info`, and the VM state is irrelevant. (`--runs-on` is
+ *     also an opt-out, but it is a per-command flag we cannot see from here.)
+ *   - Routing active. A green VM needs the pid running AND the socket forward
+ *     (`~/.avocado/vm/docker.sock`) present — the forwarder can die while the
+ *     pid is alive. A HIBERNATED VM still prints "running (pid …)" and keeps its
+ *     socket, so it counts as available — it wakes on the next docker call. Do
+ *     not treat hibernation as stopped.
+ *   - A stopped VM auto-starts on a build only when `AVOCADO_VM_DIR` points at
+ *     an existing directory — the same `is_dir` test `route.rs` uses. A local
+ *     daemon otherwise covers the fallback path.
+ *
  * On Linux the CLI uses the host's native Docker Engine directly.
  *
  * Returns an optional `fix` string with the exact remediation for the detected
@@ -111,10 +128,36 @@ async function checkContainerEngine(
     checkBinary("docker", ["info", "--format", "{{.ServerVersion}}"]);
 
   if (platform === "darwin") {
-    // `avocado vm status` exits 0 whether the VM is running or not, so parse
-    // stdout rather than the exit code.
     const socket = `${homedir()}/.avocado/vm/docker.sock`;
-    const autoStartable = !!process.env.AVOCADO_VM_DIR;
+    // Opt-out: mirror route.rs `env_disabled` ({0,false,FALSE,no,NO}).
+    const optedOut = /^(0|false|no)$/i.test(
+      process.env.AVOCADO_VM_AUTO_START ?? "",
+    );
+    // Auto-start: mirror route.rs `vm_source_from_env`, which requires the dir
+    // to exist. A stale AVOCADO_VM_DIR (moved/deleted) does NOT enable it.
+    const vmDir = process.env.AVOCADO_VM_DIR;
+    const autoStartable = !!vmDir && dirExists(vmDir);
+
+    // When the user opted out of VM routing, the CLI uses the local Docker
+    // daemon directly — the VM state does not matter.
+    if (optedOut) {
+      const docker = await dockerInfo();
+      if (docker.ok) {
+        return {
+          ok: true,
+          detail: `VM routing off (AVOCADO_VM_AUTO_START) — local Docker daemon reachable (${docker.detail})`,
+        };
+      }
+      return {
+        ok: false,
+        detail:
+          "VM routing off (AVOCADO_VM_AUTO_START), and no local Docker daemon",
+        fix: "Start a local Docker daemon, or re-enable the avocado-vm: unset `AVOCADO_VM_AUTO_START`, then run `avocado vm start`.",
+      };
+    }
+
+    // Routing active. `avocado vm status` exits 0 whether the VM is running or
+    // not (and prints "running (pid …)" even when hibernated), so parse stdout.
     let vmRunning = false;
     let vmProbed = true;
     try {
@@ -127,36 +170,33 @@ async function checkContainerEngine(
       // the subcommand. Fall through to the local-daemon probe.
       vmProbed = false;
     }
-    const docker = await dockerInfo();
 
-    // Best case: the VM runs and its Docker socket forward is up.
+    // Best case: the VM runs (or is hibernated) and its socket forward is up.
     if (vmRunning && existsSync(socket)) {
       return {
         ok: true,
         detail:
-          "avocado-vm running — it supplies Docker (Docker Desktop not necessary)",
+          "avocado-vm available — it supplies Docker (Docker Desktop not necessary)",
       };
     }
-    // A reachable local daemon also makes the build work (opt-out, or the VM
-    // fallback path).
-    if (docker.ok) {
-      const note = vmRunning
-        ? " (avocado-vm socket forward is down; the local daemon covers it)"
-        : "";
-      return {
-        ok: true,
-        detail: `local Docker daemon reachable (${docker.detail})${note}`,
-      };
-    }
-    // The VM runs but its socket forward is dead, and no local daemon covers it.
+    // The VM runs but its socket forward is dead. A local daemon covers the
+    // fallback path; otherwise the forward must be rebuilt.
     if (vmRunning) {
+      const docker = await dockerInfo();
+      if (docker.ok) {
+        return {
+          ok: true,
+          detail: `avocado-vm socket forward is down — local Docker daemon covers it (${docker.detail})`,
+        };
+      }
       return {
         ok: false,
         detail: "avocado-vm running, but its Docker socket forward is missing",
         fix: "Run `avocado vm stop && avocado vm start` to rebuild the Docker socket forward.",
       };
     }
-    // The VM is stopped but AVOCADO_VM_DIR is set, so a build auto-starts it.
+    // The VM is stopped but AVOCADO_VM_DIR points at a real dir, so a build
+    // auto-starts it.
     if (autoStartable) {
       return {
         ok: true,
@@ -164,13 +204,21 @@ async function checkContainerEngine(
           "avocado-vm not running — a build auto-starts it (AVOCADO_VM_DIR is set)",
       };
     }
-    // Nothing is ready.
+    // VM stopped and not auto-startable. A local daemon still covers the
+    // fallback path; otherwise nothing is ready.
+    const docker = await dockerInfo();
+    if (docker.ok) {
+      return {
+        ok: true,
+        detail: `local Docker daemon reachable (${docker.detail})`,
+      };
+    }
     return {
       ok: false,
       detail: vmProbed
         ? "avocado-vm not running, and no local Docker daemon"
         : "no avocado-vm and no local Docker daemon",
-      fix: "Start the avocado-vm with `avocado vm start` (first time: `avocado vm update -y`, then `avocado vm start`). The avocado-vm supplies Docker, so Docker Desktop is not required. Or start a local Docker daemon.",
+      fix: "Start the avocado-vm with `avocado vm start` (first time: `avocado vm update -y`, then `avocado vm start`). The avocado-vm supplies Docker, so Docker Desktop is not required.",
     };
   }
 
@@ -267,6 +315,7 @@ export function registerDiscoveryTools(
         docker: z.object({
           ok: z.boolean(),
           detail: z.string(),
+          fix: z.string().optional(),
         }),
         disk: z.object({
           ok: z.boolean(),
