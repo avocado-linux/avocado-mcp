@@ -3,6 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { statfs } from "fs/promises";
+import { existsSync } from "fs";
 import { arch as osArch, platform as osPlatform, homedir } from "os";
 import { RepoClient, normalizeStream } from "../lib/repo-client.js";
 import { resolveTarget } from "../lib/target-resolver.js";
@@ -103,25 +104,37 @@ async function checkContainerEngine(
 
   if (platform === "darwin") {
     // `avocado vm status` exits 0 whether the VM is running or not, so parse
-    // stdout rather than the exit code.
+    // stdout rather than the exit code. A green engine needs BOTH the VM
+    // running AND the docker-socket forward present — routing points
+    // DOCKER_HOST at `~/.avocado/vm/docker.sock`, and that forward can be dead
+    // even while the QEMU pid is alive (the forwarder failing is non-fatal in
+    // avocado-cli). A stopped VM is NOT ready: the build does not reliably
+    // auto-start it (routing only auto-starts from AVOCADO_VM_DIR, not the
+    // managed install), so the user must run `avocado vm start` first.
+    const socket = `${homedir()}/.avocado/vm/docker.sock`;
     try {
       const { stdout } = await execFileP("avocado", ["vm", "status"], {
         timeout: 5000,
       });
-      if (/running \(pid/i.test(stdout)) {
+      const running = /running \(pid/i.test(stdout);
+      if (running && existsSync(socket)) {
         return {
           ok: true,
           detail:
             "avocado-vm running — it supplies Docker (Docker Desktop not necessary)",
         };
       }
-      // VM tooling present but not running. Not a blocker: the CLI starts it
-      // on the first build (or `avocado vm start`). If it was never installed,
-      // that first start prints an `avocado vm update` hint.
+      if (running) {
+        return {
+          ok: false,
+          detail:
+            "avocado-vm running but its Docker socket forward is missing — run `avocado vm stop && avocado vm start`",
+        };
+      }
       return {
-        ok: true,
+        ok: false,
         detail:
-          "avocado-vm not running — it starts on the first build, or run `avocado vm start` (first time: `avocado vm update`)",
+          "avocado-vm not running — run `avocado vm start` (first time: `avocado vm update -y` first)",
       };
     } catch (e) {
       // `avocado vm status` failed (old CLI without the subcommand, or avocado
@@ -316,7 +329,7 @@ export function registerDiscoveryTools(
         if (!docker.ok) {
           fixes.push(
             isMac
-              ? `- **Set up the container engine (avocado-vm):** on macOS the avocado-vm supplies Docker. Docker Desktop is not necessary. Install or update it with \`avocado vm update\`. Then run \`avocado vm start\`. The VM also starts on your first \`avocado build\`. For more information, see \`avocado://skills/container-backend\`.`
+              ? `- **Set up the container engine (avocado-vm):** on macOS the avocado-vm supplies Docker. Docker Desktop is not necessary. First time, install it with \`avocado vm update -y\`. Then start it with \`avocado vm start\` (a build does not reliably auto-start a stopped VM). For more information, see \`avocado://skills/container-backend\`.`
               : `- **Start Docker Engine:** install the native Docker Engine (Docker Desktop is not necessary). Start the daemon with \`sudo systemctl start docker\`. The command \`docker info\` must succeed. For more information, see \`avocado://skills/container-backend\`.`,
           );
         }

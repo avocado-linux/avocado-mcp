@@ -20,9 +20,10 @@ The CLI connects to it automatically:
   (\`~/.avocado/vm/docker.sock\`) with SSH. Then it sets \`DOCKER_HOST\` for its own
   subprocesses. Each \`docker\` command from the CLI works. You do not need Docker
   Desktop or a manual \`docker context\`.
-- If the VM is not running, the CLI starts it automatically. The CLI finds the
-  VM from a running instance, the \`AVOCADO_VM_DIR\` variable, or an install from
-  \`avocado vm update\`.
+- The CLI auto-starts a stopped VM only when it can find the install without
+  help: the VM is already running, or \`AVOCADO_VM_DIR\` points at the install.
+  After a plain \`avocado vm update\`, auto-start does not find the managed
+  install. Thus you must run \`avocado vm start\` yourself first.
 
 The CLI sets \`DOCKER_HOST\` only in its own process. A \`docker info\` command that
 you run does not see the daemon in the VM. Thus a Docker failure on the host is
@@ -31,9 +32,13 @@ not proof of a broken environment on a Mac. Examine the VM, not bare Docker.
 ### First-time setup (macOS)
 
 \`\`\`bash
-avocado vm update      # download and install the prebuilt avocado-vm release
-avocado vm start       # boot it (also starts automatically on your first build)
+avocado vm update -y   # download and install the prebuilt avocado-vm release
+avocado vm start       # boot it — start it before you build
 \`\`\`
+
+Run \`avocado vm update\` with \`-y\`. Without \`-y\` the command asks for
+confirmation and stops when there is no terminal (for example, an agent runs
+it off a pipe).
 
 You do not build the VM from source. The command \`avocado vm update\` gets a
 prebuilt image. Docker Desktop is necessary only to build the VM from source.
@@ -48,8 +53,8 @@ This is not a usual task.
 - \`avocado vm logs\` — show the VM serial log after a boot failure.
 - \`avocado vm shell\` — open an SSH shell in the VM to debug the engine.
 
-The VM keeps a persistent \`/data\` disk. SDK images and Docker volumes stay after
-a rootfs rebuild. Thus builds stay fast after a restart.
+The VM keeps SDK images and Docker volumes in its persistent storage. They stay
+after a restart. Thus builds stay fast.
 
 ### Opt out of the VM (macOS)
 
@@ -75,9 +80,9 @@ docker info        # must succeed
 
 | Symptom | macOS | Linux |
 |---|---|---|
-| "Cannot connect to the Docker daemon" | Run \`avocado vm status\`. If the VM is stopped or missing, run \`avocado vm start\` (or \`avocado vm update\` first). Do not run \`sudo systemctl start docker\`, because there is no host daemon. | Run \`sudo systemctl start docker\`. |
-| Build stopped for out of memory | The build runs in the avocado-vm. Give the VM more memory and CPUs (\`avocado vm start --memory-mib <MiB> --cpus <n>\`; both persist to \`~/.avocado/vm/config.yaml\`). Do not change Docker Desktop Resources. | Raise host limits or free RAM. |
-| SDK image pull fails | Make sure that the VM has network (\`avocado vm shell\`, then \`docker pull <tag>\`). The VM caches images on \`/data\`, so a retry is cheap. | Examine host network, or run \`docker pull\` directly. |
+| "Cannot connect to the Docker daemon" | Run \`avocado vm status\`. If the VM is stopped, run \`avocado vm start\` (first time: \`avocado vm update -y\` first). If the VM runs but the socket forward is missing, run \`avocado vm stop && avocado vm start\`. Do not run \`sudo systemctl start docker\`, because there is no host daemon. | Run \`sudo systemctl start docker\`. |
+| Build stopped for out of memory | The build runs in the avocado-vm. Give the VM more memory: run \`avocado vm stop\`, then \`avocado vm start --memory-mib <MiB> --cpus <n>\` (a running VM rejects the flags, so stop it first). The values persist to \`~/.avocado/vm/config.yaml\`. Do not change Docker Desktop Resources. | Raise host limits or free RAM. |
+| SDK image pull fails | Make sure that the VM has network (\`avocado vm shell\`, then \`docker pull <tag>\`). The VM caches images across restarts, so a retry is cheap. | Examine host network, or run \`docker pull\` directly. |
 
 ## Do not look inside the SDK container — on any platform
 

@@ -17,7 +17,7 @@ Avocado OS is a Yocto-based embedded Linux distribution. A working project consi
 **Always required:**
 
 - **A container engine** — the CLI runs all builds inside the SDK container. The source depends on the platform. Docker Desktop is not required:
-  - **macOS:** the \`avocado\` CLI includes the **avocado-vm**, a QEMU VM that runs \`dockerd\`. The CLI connects to it automatically. For first-time setup, run \`avocado vm update && avocado vm start\`. The VM also starts on your first build. Do not tell the user to install Docker Desktop.
+  - **macOS:** the \`avocado\` CLI includes the **avocado-vm**, a QEMU VM that runs \`dockerd\`. The CLI routes to it while it runs. For first-time setup, run \`avocado vm update -y && avocado vm start\`. Start the VM before you build, because a build does not reliably auto-start a stopped VM. Do not tell the user to install Docker Desktop.
   - **Linux:** the native Docker Engine on the host, not Docker Desktop. Make sure that the daemon runs with \`sudo systemctl start docker\`.
   - For the full model and debugging, see \`avocado://skills/container-backend\`.
 - **The avocado CLI** installed AND on PATH (\`curl -fsSL https://connect.peridio.com/install.sh | sh\` on macOS or Linux). If the user has a local build of the CLI but it isn't on PATH, symlink it: \`mkdir -p ~/.local/bin && ln -s /path/to/avocado ~/.local/bin/avocado\` (then verify \`~/.local/bin\` is on PATH).
