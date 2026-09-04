@@ -3,6 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { statfs } from "fs/promises";
+import { existsSync, statSync } from "fs";
 import { arch as osArch, platform as osPlatform, homedir } from "os";
 import { RepoClient, normalizeStream } from "../lib/repo-client.js";
 import { resolveTarget } from "../lib/target-resolver.js";
@@ -83,6 +84,154 @@ async function checkBinary(
   }
 }
 
+/** True only when `p` names an existing directory (matches route.rs `is_dir`). */
+function dirExists(p: string): boolean {
+  try {
+    return statSync(p).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Probe the container engine the CLI will actually use, per platform.
+ *
+ * On macOS the avocado-vm is almost always the engine: the CLI routes to it
+ * transparently (it forwards the VM's socket and sets DOCKER_HOST *inside its
+ * own process only*). A Mac user on plain Docker Desktop is rare. We mirror the
+ * CLI's own routing decision (avocado-cli `route.rs`):
+ *
+ *   - Opt-out. `AVOCADO_VM_AUTO_START` in {0,false,no} means the CLI does NOT
+ *     route to the VM; it uses the local Docker daemon. Then readiness depends
+ *     only on `docker info`, and the VM state is irrelevant. (`--runs-on` is
+ *     also an opt-out, but it is a per-command flag we cannot see from here.)
+ *   - Routing active. A green VM needs the pid running AND the socket forward
+ *     (`~/.avocado/vm/docker.sock`) present — the forwarder can die while the
+ *     pid is alive. A HIBERNATED VM still prints "running (pid …)" and keeps its
+ *     socket, so it counts as available — it wakes on the next docker call. Do
+ *     not treat hibernation as stopped.
+ *   - A stopped VM auto-starts on a build only when `AVOCADO_VM_DIR` points at
+ *     an existing directory — the same `is_dir` test `route.rs` uses. A local
+ *     daemon otherwise covers the fallback path.
+ *
+ * On Linux the CLI uses the host's native Docker Engine directly.
+ *
+ * Returns an optional `fix` string with the exact remediation for the detected
+ * not-ok state, so the caller does not prescribe one command for every state.
+ *
+ * See `avocado://skills/container-backend` for the full model.
+ */
+async function checkContainerEngine(
+  platform: string,
+): Promise<{ ok: boolean; detail: string; fix?: string }> {
+  const dockerInfo = () =>
+    checkBinary("docker", ["info", "--format", "{{.ServerVersion}}"]);
+
+  if (platform === "darwin") {
+    const socket = `${homedir()}/.avocado/vm/docker.sock`;
+    // Opt-out: mirror route.rs `env_disabled` ({0,false,FALSE,no,NO}).
+    const optedOut = /^(0|false|no)$/i.test(
+      process.env.AVOCADO_VM_AUTO_START ?? "",
+    );
+    // Auto-start: mirror route.rs `vm_source_from_env`, which requires the dir
+    // to exist. A stale AVOCADO_VM_DIR (moved/deleted) does NOT enable it.
+    const vmDir = process.env.AVOCADO_VM_DIR;
+    const autoStartable = !!vmDir && dirExists(vmDir);
+
+    // When the user opted out of VM routing, the CLI uses the local Docker
+    // daemon directly — the VM state does not matter.
+    if (optedOut) {
+      const docker = await dockerInfo();
+      if (docker.ok) {
+        return {
+          ok: true,
+          detail: `VM routing off (AVOCADO_VM_AUTO_START) — local Docker daemon reachable (${docker.detail})`,
+        };
+      }
+      return {
+        ok: false,
+        detail:
+          "VM routing off (AVOCADO_VM_AUTO_START), and no local Docker daemon",
+        fix: "Start a local Docker daemon, or re-enable the avocado-vm: unset `AVOCADO_VM_AUTO_START`, then run `avocado vm start`.",
+      };
+    }
+
+    // Routing active. `avocado vm status` exits 0 whether the VM is running or
+    // not (and prints "running (pid …)" even when hibernated), so parse stdout.
+    let vmRunning = false;
+    let vmProbed = true;
+    try {
+      const { stdout } = await execFileP("avocado", ["vm", "status"], {
+        timeout: 5000,
+      });
+      vmRunning = /running \(pid/i.test(stdout);
+    } catch {
+      // `avocado vm status` failed: avocado not on PATH, or an old CLI without
+      // the subcommand. Fall through to the local-daemon probe.
+      vmProbed = false;
+    }
+
+    // Best case: the VM runs (or is hibernated) and its socket forward is up.
+    if (vmRunning && existsSync(socket)) {
+      return {
+        ok: true,
+        detail:
+          "avocado-vm available — it supplies Docker (Docker Desktop not necessary)",
+      };
+    }
+    // The VM runs but its socket forward is dead. A local daemon covers the
+    // fallback path; otherwise the forward must be rebuilt.
+    if (vmRunning) {
+      const docker = await dockerInfo();
+      if (docker.ok) {
+        return {
+          ok: true,
+          detail: `avocado-vm socket forward is down — local Docker daemon covers it (${docker.detail})`,
+        };
+      }
+      return {
+        ok: false,
+        detail: "avocado-vm running, but its Docker socket forward is missing",
+        fix: "Run `avocado vm stop && avocado vm start` to rebuild the Docker socket forward.",
+      };
+    }
+    // The VM is stopped but AVOCADO_VM_DIR points at a real dir, so a build
+    // auto-starts it.
+    if (autoStartable) {
+      return {
+        ok: true,
+        detail:
+          "avocado-vm not running — a build auto-starts it (AVOCADO_VM_DIR is set)",
+      };
+    }
+    // VM stopped and not auto-startable. A local daemon still covers the
+    // fallback path; otherwise nothing is ready.
+    const docker = await dockerInfo();
+    if (docker.ok) {
+      return {
+        ok: true,
+        detail: `local Docker daemon reachable (${docker.detail})`,
+      };
+    }
+    return {
+      ok: false,
+      detail: vmProbed
+        ? "avocado-vm not running, and no local Docker daemon"
+        : "no avocado-vm and no local Docker daemon",
+      fix: "Start the avocado-vm with `avocado vm start` (first time: `avocado vm update -y`, then `avocado vm start`). The avocado-vm supplies Docker, so Docker Desktop is not required.",
+    };
+  }
+
+  // Linux (and anything else): native Docker Engine.
+  const d = await dockerInfo();
+  if (d.ok) return { ok: true, detail: `native Docker Engine (${d.detail})` };
+  return {
+    ok: false,
+    detail: d.detail,
+    fix: "Install the native Docker Engine (Docker Desktop is not necessary). Start the daemon with `sudo systemctl start docker`. `docker info` must succeed.",
+  };
+}
+
 async function checkDiskGB(): Promise<{ ok: boolean; freeGB: number }> {
   try {
     const s = await statfs(homedir());
@@ -126,7 +275,7 @@ export function registerDiscoveryTools(
     {
       title: "Check host prerequisites",
       description:
-        "Verify the host has the prerequisites to build and provision an Avocado OS project: `avocado` CLI on PATH, Docker daemon reachable, and ≥8 GB free disk space in $HOME. Also (a) reports host CPU arch + OS so downstream tools (e.g. `init-project`) can warn about cross-arch QEMU performance gotchas, and (b) detects the avocado-cli execution channel for this session — when reachable, the Avocado desktop's host MCP runs CLI commands on the user's Mac (their CLI, their config, their keys) so the LLM doesn't have to invoke the CLI directly. Call this BEFORE init-project / list-targets / build-and-deploy so subsequent steps follow the right invocation pattern. **QEMU-target prerequisites** (qemu-system-*) are NOT checked here — `get-provisioning-steps` validates those when the resolved target is a QEMU one. Read-only.",
+        "Verify the host has the prerequisites to build and provision an Avocado OS project: `avocado` CLI on PATH, a working container engine, and ≥8 GB free disk space in $HOME. On macOS the container engine is the avocado-vm, which supplies Docker, so Docker Desktop is not required. On Linux it is the native Docker Engine. Also (a) reports host CPU arch + OS so downstream tools (e.g. `init-project`) can warn about cross-arch QEMU performance gotchas, and (b) detects the avocado-cli execution channel for this session — when reachable, the Avocado desktop's host MCP runs CLI commands on the user's Mac (their CLI, their config, their keys) so the LLM doesn't have to invoke the CLI directly. Call this BEFORE init-project / list-targets / build-and-deploy so subsequent steps follow the right invocation pattern. **QEMU-target prerequisites** (qemu-system-*) are NOT checked here — `get-provisioning-steps` validates those when the resolved target is a QEMU one. Read-only.",
       inputSchema: {},
       outputSchema: {
         ok: z
@@ -166,6 +315,7 @@ export function registerDiscoveryTools(
         docker: z.object({
           ok: z.boolean(),
           detail: z.string(),
+          fix: z.string().optional(),
         }),
         disk: z.object({
           ok: z.boolean(),
@@ -188,7 +338,7 @@ export function registerDiscoveryTools(
       const host = { arch: normalizedHostArch(), platform: osPlatform() };
       const [cli, docker, disk, delegation] = await Promise.all([
         checkBinary("avocado", ["--version"]),
-        checkBinary("docker", ["info", "--format", "{{.ServerVersion}}"]),
+        checkContainerEngine(host.platform),
         checkDiskGB(),
         probeHostMcp(),
       ]);
@@ -213,7 +363,7 @@ export function registerDiscoveryTools(
       out += `| Check | Status | Detail |\n`;
       out += `|-------|--------|--------|\n`;
       out += `| \`avocado\` CLI on PATH | ${cli.ok ? "✅" : "❌"} | ${cli.detail} |\n`;
-      out += `| Docker daemon | ${docker.ok ? "✅" : "❌"} | ${docker.detail} |\n`;
+      out += `| Container engine | ${docker.ok ? "✅" : "❌"} | ${docker.detail} |\n`;
       out += `| Free disk (\`$HOME\`) | ${disk.ok ? "✅" : "❌"} | ${disk.freeGB.toFixed(1)} GB free (need ≥${MIN_FREE_GB}) |\n`;
 
       out += `\n## Avocado-CLI execution channel\n\n`;
@@ -243,9 +393,9 @@ export function registerDiscoveryTools(
             `- **Install the avocado CLI and put it on PATH:** \`${INSTALL_HINT}\` (macOS / Linux). If you have a local build of the CLI but it's not on PATH, symlink it: \`mkdir -p ~/.local/bin && ln -s /path/to/avocado ~/.local/bin/avocado\` (then ensure \`~/.local/bin\` is on PATH).`,
           );
         }
-        if (!docker.ok) {
+        if (!docker.ok && docker.fix) {
           fixes.push(
-            `- **Start Docker:** install Docker Desktop (macOS) or the \`docker\` engine (Linux), then ensure the daemon is running (\`docker info\` should succeed).`,
+            `- **Container engine:** ${docker.fix} For more information, see \`avocado://skills/container-backend\`.`,
           );
         }
         if (!disk.ok) {
