@@ -16,7 +16,7 @@ Avocado OS is a Yocto-based embedded Linux distribution. A working project consi
 
 **Always required:**
 
-- **A container engine** — the CLI runs all builds inside the SDK container. The source depends on the platform. Docker Desktop is not required:
+- **A container engine** — the CLI runs all builds inside the SDK container. The source depends on the platform. Docker Desktop is not required. The supported platforms are macOS and Linux. Windows support is highly experimental and not suggested.
   - **macOS:** the \`avocado\` CLI includes the **avocado-vm**, a QEMU VM that runs \`dockerd\`. The CLI routes to it while it runs. For first-time setup, run \`avocado vm update -y && avocado vm start\`. Start the VM before you build, because a build does not reliably auto-start a stopped VM. Do not tell the user to install Docker Desktop.
   - **Linux:** the native Docker Engine on the host, not Docker Desktop. Make sure that the daemon runs with \`sudo systemctl start docker\`.
   - For the full model and debugging, see \`avocado://skills/container-backend\`.
