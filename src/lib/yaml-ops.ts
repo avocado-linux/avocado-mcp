@@ -93,6 +93,10 @@ export function buildStarterYaml(opts: {
   target: string;
   runtimeName?: string;
   extraExtensions?: string[];
+  /** Feed to pin the starter to. Defaults to 2024/edge. */
+  release?: string;
+  channel?: string;
+  repoUrl?: string;
 }): string {
   const target = opts.target;
   const runtime = opts.runtimeName ?? "dev";
@@ -107,8 +111,12 @@ export function buildStarterYaml(opts: {
   lines.push(`  - ${target}`);
   lines.push(``);
   lines.push(`distro:`);
-  lines.push(`  release: 2024`);
-  lines.push(`  channel: edge`);
+  lines.push(`  release: ${opts.release ?? "2024"}`);
+  lines.push(`  channel: ${opts.channel ?? "edge"}`);
+  if (opts.repoUrl) {
+    lines.push(`  repo:`);
+    lines.push(`    url: ${opts.repoUrl}`);
+  }
   lines.push(``);
   lines.push(`runtimes:`);
   lines.push(`  ${runtime}:`);

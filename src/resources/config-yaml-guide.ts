@@ -14,8 +14,13 @@ default_target: <target-string>     # which target the CLI builds for by default
 supported_targets: ["*"] | [<target>, ...]   # optional whitelist
 
 distro:
-  release: 2024
-  channel: edge                     # also: stable
+  release: 2024                     # feed year
+  channel: edge                     # also: next, stable
+  # repo:                           # optional — only for non-default feeds
+  #   url: https://repo.example.com # default https://repo.avocadolinux.org
+  #   releasever: 2024/edge         # overrides {release}/{channel} entirely
+  #   ca: certs/repo-ca.pem         # private CA for the feed
+  #   tls_verify: false             # testing only
 
 sdk:
   image: docker.io/avocadolinux/sdk:{{ config.distro.release }}-{{ config.distro.channel }}
@@ -54,7 +59,7 @@ extensions:                         # extension definitions referenced by runtim
 
 1. **Schema-first.** Call \`get-config-schema\` before generating or modifying any YAML. Don't guess key names, value types, or enum values.
 2. **Target must be in the enum.** The \`target\` field has a fixed enum in the schema. Use \`list-targets\` to find valid options.
-3. **Every package must be verified.** Before adding a package to an extension or runtime, call \`search-packages\` (or \`describe-package\`) for the user's target and confirm the package exists. Never invent a package name.
+3. **Every package must be verified — against the project's feed.** Before adding a package to an extension or runtime, call \`search-packages\` (or \`describe-package\`) for the user's target **with \`projectDir\`** and confirm the package exists. Package sets differ between releases/channels, so a hit on the default 2024/edge feed doesn't prove the package exists on the project's feed. Never invent a package name.
 4. **Extension types are constrained.** Only \`sysext\` and \`confext\` are valid. \`sysext\` extends \`/usr\`. \`confext\` extends \`/etc\`. Most apps want both.
 5. **Don't break the \`dev\` runtime.** If the user is just getting started, keep \`avocado-ext-dev\` and \`avocado-ext-sshd-dev\` in their dev runtime — without these, they can't SSH or debug.
 6. **Prefer the helper tools** over hand-edited YAML. \`add-extension\`, \`add-runtime\`, \`add-package-to-extension\` all validate the result against the schema before returning.

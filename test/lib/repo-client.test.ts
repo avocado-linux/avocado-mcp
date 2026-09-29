@@ -1,7 +1,7 @@
 import { test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { gzipSync } from "node:zlib";
-import { RepoClient } from "../../src/lib/repo-client.js";
+import { DEFAULT_FEED, RepoClient } from "../../src/lib/repo-client.js";
 
 const realFetch = globalThis.fetch;
 afterEach(() => {
@@ -76,32 +76,39 @@ test("a malicious primary href in repomd.xml is refused", async () => {
     repomd: `<repomd><data type="primary"><location href="../../../etc/shadow"/></data></repomd>`,
   });
   await assert.rejects(
-    () => new RepoClient().fetchRepoPackages("2024", "edge", "repo/aarch64"),
+    () => new RepoClient().fetchRepoPackages(DEFAULT_FEED, "repo/aarch64"),
     /Untrusted primary href/,
   );
 });
 
-test("an invalid release/channel never becomes a URL segment — it degrades to null", async () => {
+test("an invalid feed never becomes a URL — it degrades to null", async () => {
   // The safety property: an unsafe segment must never reach a fetched URL.
   // getTargetManifest enforces this by bailing to null (a structured "couldn't
-  // fetch" for callers) rather than throwing — see normalizeStream + the
-  // isSafeSegment guard.
-  stubFeed({ targets: {} });
+  // fetch" for callers) rather than throwing — see validateFeed.
+  const calls = stubFeed({ targets: {} });
   const rc = new RepoClient();
   for (const bad of ["../..", "edge/../../x", "a b", ""]) {
+    const feed = { ...DEFAULT_FEED, releasever: bad, manifestPath: bad };
     assert.equal(
-      await rc.getTargetManifest(bad),
+      await rc.getTargetManifest(feed),
       null,
-      `unsafe segment must degrade to null: ${JSON.stringify(bad)}`,
+      `unsafe releasever must degrade to null: ${JSON.stringify(bad)}`,
     );
   }
+  for (const baseUrl of ["file:///etc", "https://x.test/?q=1", "not a url"]) {
+    assert.equal(
+      await rc.getTargetManifest({ ...DEFAULT_FEED, baseUrl }),
+      null,
+      `unsafe repo URL must degrade to null: ${baseUrl}`,
+    );
+  }
+  assert.equal(calls.length, 0, "no request may be made for an unsafe feed");
 });
 
 test("primary.xml parses into FeedPackages and skips non-rpm entries", async () => {
   stubFeed({ targets: { t: ["repo/aarch64"] }, primaryXml: PRIMARY });
   const pkgs = await new RepoClient().fetchRepoPackages(
-    "2024",
-    "edge",
+    DEFAULT_FEED,
     "repo/aarch64",
   );
   assert.deepEqual(
@@ -125,9 +132,9 @@ test("in-memory cache means a second call makes no network requests", async () =
     primaryXml: PRIMARY,
   });
   const rc = new RepoClient();
-  await rc.fetchRepoPackages("2024", "edge", "repo/aarch64");
+  await rc.fetchRepoPackages(DEFAULT_FEED, "repo/aarch64");
   const after = calls.length;
-  await rc.fetchRepoPackages("2024", "edge", "repo/aarch64");
+  await rc.fetchRepoPackages(DEFAULT_FEED, "repo/aarch64");
   assert.equal(calls.length, after, "second call should be served from cache");
 });
 

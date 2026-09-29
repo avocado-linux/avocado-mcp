@@ -47,7 +47,7 @@ Requires Node ≥20. `npx` will clone the repo on first run, install dependencie
 | ---------------------------- | ------------------------------------------------------------------------------------ |
 | `environment-check`          | Verify host has `avocado` CLI on PATH, Docker daemon, ≥8 GB free disk; reports host arch + OS |
 | `list-targets`               | Every Avocado target currently supported by the package feed                         |
-| `search-packages`            | Substring search across the live RPM feed (optionally scoped to release/channel)     |
+| `search-packages`            | Substring search across the project's configured RPM feed (`projectDir`), or the default feed |
 | `describe-package`           | Detail view for one package: version, arch, summary, description                     |
 | `check-package-coverage`     | Batch-check a whole dependency list against one target/stream in a single call; per-dep present/missing verdict + confidence + coverage % (engine behind `/package-coverage`) |
 | `search-references`          | Browse or search the reference catalog (omit `query` to browse, pass `query` to rank)|
@@ -140,7 +140,13 @@ Run against the MCP Inspector (browser UI for poking individual tools):
 npm run test
 ```
 
-Type-check, format-check, build:
+Unit tests (`test/**/*.test.ts`, run with `node --test`):
+
+```bash
+npm run test:unit
+```
+
+Format-check, type-check, unit tests:
 
 ```bash
 npm run checks
@@ -185,7 +191,12 @@ When you change source files, run `npm run build` again and restart the client (
 
 The server reads from public HTTPS endpoints only:
 
-- **`repo.avocadolinux.org`** — RPM repodata (targets manifest, `repomd.xml`, `primary.xml.gz`). Used by `list-targets`, `search-packages`, `describe-package`, `check-package-coverage`, `add-package-to-extension`. Defaults to release `2024`, channel `edge`; both are overridable per-call. Multiple releases (`2024`, `2026`, …) and channels are published, and the target set differs per stream (newer boards may exist only on a newer release), so target validation is done against the specific stream being queried.
+- **The package feed** — RPM repodata (targets manifest, `repomd.xml`, `primary.xml.gz`). Used by `list-targets`, `search-packages`, `describe-package`, `check-package-coverage`, `add-package-to-extension`, `explain-build-error`, `init-project`, `get-provisioning-steps`, and reported by `environment-check`. Pass `projectDir` and the feed is resolved the same way avocado-cli resolves it (`src/lib/feed-config.ts`):
+  - repo URL: `AVOCADO_REPO_URL` > `AVOCADO_SDK_REPO_URL` > `distro.repo.url` > `sdk.repo_url` > `https://repo.avocadolinux.org`
+  - releasever: `AVOCADO_RELEASEVER` > `AVOCADO_SDK_REPO_RELEASE` > `distro.repo.releasever` > `sdk.repo_release` > `{release}/{channel}` from `AVOCADO_DISTRO_RELEASE`/`distro.release` and `AVOCADO_DISTRO_CHANNEL`/`distro.channel`, rewritten to `{release}/{channel}/snapshots/<id>` when `.avocado/lock.json` pins a matching `repo-snapshot` for the target
+  - TLS: `AVOCADO_REPO_CA` > `distro.repo.ca`; `AVOCADO_REPO_INSECURE` > `distro.repo.tls_verify: false`
+
+  Explicit `release` / `channel` / `repoUrl` tool arguments override all of the above. Without a project the default is `https://repo.avocadolinux.org` `2024/edge`. Multiple releases (`2024`, `2026`) and channels (`next`, `edge`, `stable`) are published and the target set differs per stream, so target validation is done against the feed being queried. Every result states the effective feed, whether the repo URL is overridden, and where each value came from. Env vars are read from the MCP server's own process environment.
 - **`github.com/avocado-linux/references`** — full source of every reference project. Used by `get-reference` and `get-reference-file` (fetched via `raw.githubusercontent.com` + GitHub trees API).
 - **`github.com/peridio/docs`** — the Docusaurus source for `docs.peridio.com`. Used by `search-docs` and `get-doc`. Trees API for the manifest (cached 1 h), `raw.githubusercontent.com` for content (cached on disk by blob SHA, no TTL — content-addressable).
 

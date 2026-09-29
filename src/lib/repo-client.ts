@@ -3,7 +3,9 @@
  *
  * Mirrors `avocado sdk dnf search <query>`: the SDK container's DNF config
  * combines a per-target set of repos. The authoritative list lives at
- * `{HOST}/{release}/{channel}/targets.json`. For each target the manifest
+ * `{baseUrl}/{release}/{channel}/targets.json`. The feed (base URL +
+ * releasever, optionally snapshot-pinned) comes from the project's config —
+ * see `feed-config.ts`. For each target the manifest
  * provides every repo path the SDK has enabled (e.g. `target/armv8a`,
  * `target/armv8a_tegra`, `sdk/all`, `target/<machine>-ext`, …).
  *
@@ -14,8 +16,10 @@
  *   5. Merge across repos, dedup, filter by query string in memory
  *
  * Security: this code runs as a child process of an MCP client. To stay safe:
- *  - Host is hardcoded to https://repo.avocadolinux.org.
- *  - Release and channel are validated against a strict regex.
+ *  - The base URL must be http(s) with no query / fragment. It comes from
+ *    the user's own avocado.yaml / env (the same URL their CLI fetches from),
+ *    defaulting to https://repo.avocadolinux.org.
+ *  - releasever segments are validated against a strict regex.
  *  - Manifest repo paths are validated against a strict regex.
  *  - primary.xml.gz hrefs from repomd.xml are validated against a strict regex.
  *  - Gunzip output is read with a size cap.
@@ -32,20 +36,36 @@ export interface FeedPackage {
   version: string;
   release: string;
   arch: string;
-  /** Full repo sub-path under {host}/{release}/{channel}/, e.g. "target/armv8a_tegra" */
+  /** Full repo sub-path under {baseUrl}/{releasever}/, e.g. "target/armv8a_tegra" */
   repo: string;
   href: string;
 }
 
 export type TargetManifest = Record<string, string[]>;
 
-const HOST = "https://repo.avocadolinux.org";
-export const DEFAULT_RELEASE = "2024";
-export const DEFAULT_CHANNEL = "edge";
+/**
+ * Where to fetch from. `releasever` is the dnf `$releasever` path
+ * (`2024/edge`, or `2026/edge/snapshots/<id>` when snapshot-pinned);
+ * `manifestPath` is where targets.json lives (the live channel head).
+ */
+export interface FeedSpec {
+  baseUrl: string;
+  releasever: string;
+  manifestPath: string;
+  tls?: { ca?: string; insecure?: boolean };
+}
+
+export const DEFAULT_FEED: FeedSpec = {
+  baseUrl: "https://repo.avocadolinux.org",
+  releasever: "2024/edge",
+  manifestPath: "2024/edge",
+};
 
 const SAFE_SEGMENT_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const SAFE_PATH_RE =
   /^[A-Za-z0-9][A-Za-z0-9._-]*(\/[A-Za-z0-9][A-Za-z0-9._-]*){0,2}$/;
+const SAFE_RELEASEVER_RE =
+  /^[A-Za-z0-9][A-Za-z0-9._-]*(\/[A-Za-z0-9][A-Za-z0-9._-]*){0,3}$/;
 const SAFE_HREF_RE = /^repodata\/[A-Za-z0-9][A-Za-z0-9._-]*\.xml\.gz$/;
 
 const MAX_MANIFEST_BYTES = 1 * 1024 * 1024; // 1 MB
@@ -73,11 +93,104 @@ function isSafePath(p: unknown): p is string {
   return SAFE_PATH_RE.test(p);
 }
 
-function repoUrl(release: string, channel: string, path: string): string {
-  if (!isSafeSegment(release)) throw new Error(`Invalid release: ${release}`);
-  if (!isSafeSegment(channel)) throw new Error(`Invalid channel: ${channel}`);
+function isSafeReleasever(p: unknown): p is string {
+  return (
+    typeof p === "string" &&
+    p.length > 0 &&
+    p.length <= MAX_PATH_LEN &&
+    !p.includes("..") &&
+    SAFE_RELEASEVER_RE.test(p)
+  );
+}
+
+/** Validate a feed and return its normalised base URL. Throws on anything unsafe. */
+export function validateFeed(feed: FeedSpec): string {
+  let u: URL;
+  try {
+    u = new URL(feed.baseUrl);
+  } catch {
+    throw new Error(`Invalid repo URL: ${JSON.stringify(feed.baseUrl)}`);
+  }
+  if (u.protocol !== "https:" && u.protocol !== "http:") {
+    throw new Error(`Repo URL must be http(s): ${feed.baseUrl}`);
+  }
+  if (u.search || u.hash) {
+    throw new Error(
+      `Repo URL must not carry a query or fragment: ${feed.baseUrl}`,
+    );
+  }
+  if (!isSafeReleasever(feed.releasever)) {
+    throw new Error(`Invalid releasever: ${feed.releasever}`);
+  }
+  if (!isSafeReleasever(feed.manifestPath)) {
+    throw new Error(`Invalid manifest path: ${feed.manifestPath}`);
+  }
+  return u.href.replace(/\/+$/, "");
+}
+
+function feedKey(feed: FeedSpec): string {
+  return `${feed.baseUrl}::${feed.releasever}::${feed.manifestPath}::${feed.tls?.ca ?? ""}::${feed.tls?.insecure ? 1 : 0}`;
+}
+
+function repoUrl(feed: FeedSpec, path: string): string {
+  const base = validateFeed(feed);
   if (!isSafePath(path)) throw new Error(`Invalid repo path: ${path}`);
-  return `${HOST}/${release}/${channel}/${path}`;
+  return `${base}/${feed.releasever}/${path}`;
+}
+
+/**
+ * GET with the feed's TLS posture. Plain `fetch` unless a custom CA or
+ * insecure mode is configured, in which case we fall back to node:https
+ * (Node's global fetch can't take per-request CAs without undici).
+ */
+async function feedFetch(url: string, feed: FeedSpec): Promise<Response> {
+  const tls = feed.tls;
+  if (!tls || (!tls.ca && !tls.insecure) || !url.startsWith("https:")) {
+    return fetch(url, { headers: { "User-Agent": USER_AGENT } });
+  }
+  const { request } = await import("https");
+  const { readFileSync } = await import("fs");
+  const { Readable } = await import("stream");
+  let ca: Buffer | undefined;
+  if (tls.ca) {
+    try {
+      ca = readFileSync(tls.ca);
+    } catch (e) {
+      throw new Error(
+        `Failed to read repo CA bundle ${tls.ca}: ${(e as Error).message}`,
+      );
+    }
+  }
+  let current = url;
+  for (let hop = 0; hop < 5; hop++) {
+    const res = await new Promise<import("http").IncomingMessage>(
+      (resolvePromise, reject) => {
+        const req = request(
+          current,
+          {
+            headers: { "User-Agent": USER_AGENT },
+            ca,
+            rejectUnauthorized: !tls.insecure,
+          },
+          resolvePromise,
+        );
+        req.on("error", reject);
+        req.end();
+      },
+    );
+    const status = res.statusCode ?? 0;
+    if (status >= 300 && status < 400 && res.headers.location) {
+      res.resume();
+      current = new URL(res.headers.location, current).href;
+      if (!current.startsWith("https:")) {
+        throw new Error(`Refusing non-https redirect to ${current}`);
+      }
+      continue;
+    }
+    const body = Readable.toWeb(res) as unknown as ReadableStream<Uint8Array>;
+    return new Response(body, { status });
+  }
+  throw new Error(`Too many redirects fetching ${url}`);
 }
 
 async function readBounded(
@@ -113,10 +226,11 @@ async function readBounded(
 
 async function fetchBoundedText(
   url: string,
+  feed: FeedSpec,
   maxBytes: number,
   label: string,
 ): Promise<string> {
-  const res = await fetch(url, { headers: { "User-Agent": USER_AGENT } });
+  const res = await feedFetch(url, feed);
   if (!res.ok) throw new Error(`${url} returned ${res.status}`);
   if (!res.body) throw new Error(`${url} returned no body`);
   const bytes = await readBounded(res.body, maxBytes, label);
@@ -180,12 +294,20 @@ function parsePrimaryXml(xml: string, repo: string): FeedPackage[] {
   return out;
 }
 
+/** A feed for every target, or a per-target resolver (snapshot pins are per target). */
+export type FeedSelector = FeedSpec | ((target: string) => FeedSpec);
+
+function feedFor(sel: FeedSelector | undefined, target: string): FeedSpec {
+  if (!sel) return DEFAULT_FEED;
+  return typeof sel === "function" ? sel(target) : sel;
+}
+
 export class RepoClient {
   private targetsCache = new Map<
     string,
     { data: TargetManifest; expiresAt: number }
   >();
-  /** key: `${release}::${channel}::${repo}` */
+  /** key: `${feedKey}::${repo}` */
   private packagesCache = new Map<string, FeedPackage[]>();
 
   /**
@@ -194,25 +316,31 @@ export class RepoClient {
    * malformed entry can never get used as a URL fragment).
    */
   async getTargetManifest(
-    release: string = DEFAULT_RELEASE,
-    channel: string = DEFAULT_CHANNEL,
+    feed: FeedSpec = DEFAULT_FEED,
   ): Promise<TargetManifest | null> {
-    // Invalid stream segments fail soft (null), not throw: release/channel are
-    // user-supplied tool args, and every caller maps null to a structured
-    // "couldn't fetch targets.json — check release/channel" error. Returning
-    // early here also preserves the anti-path-injection guarantee (we never
-    // build a URL from an unsafe segment).
-    if (!isSafeSegment(release) || !isSafeSegment(channel)) return null;
+    // An unsafe feed fails soft (null), not throw: release/channel/repo URL
+    // come from tool args and the user's config, and every caller maps null
+    // to a structured "couldn't fetch targets.json — check the feed" error.
+    // Returning early also keeps the anti-path-injection guarantee: no URL
+    // is ever built from an unsafe segment.
+    let base: string;
+    try {
+      base = validateFeed(feed);
+    } catch (error) {
+      console.error(`[ERROR] Refusing to fetch targets.json:`, error);
+      return null;
+    }
 
-    const cacheKey = `${release}::${channel}`;
+    const cacheKey = `${base}::${feed.manifestPath}`;
     const now = Date.now();
     const cached = this.targetsCache.get(cacheKey);
     if (cached && now < cached.expiresAt) return cached.data;
 
     try {
-      const url = `${HOST}/${release}/${channel}/targets.json`;
+      const url = `${base}/${feed.manifestPath}/targets.json`;
       const text = await fetchBoundedText(
         url,
+        feed,
         MAX_MANIFEST_BYTES,
         "targets.json",
       );
@@ -249,40 +377,36 @@ export class RepoClient {
   }
 
   /** Backwards-compatible name used elsewhere in the codebase. */
-  async getTargetsConfig(
-    release?: string,
-    channel?: string,
-  ): Promise<TargetManifest | null> {
-    return this.getTargetManifest(release, channel);
+  async getTargetsConfig(feed?: FeedSpec): Promise<TargetManifest | null> {
+    return this.getTargetManifest(feed);
   }
 
   async getRepositoryPathsForTarget(
     target: string,
-    release?: string,
-    channel?: string,
+    feed?: FeedSpec,
   ): Promise<string[]> {
-    const manifest = await this.getTargetManifest(release, channel);
+    const manifest = await this.getTargetManifest(feed);
     if (!manifest || !manifest[target]) return [];
     return manifest[target];
   }
 
   /**
-   * Fetch + parse the package list for one (release, channel, repo).
+   * Fetch + parse the package list for one (feed, repo).
    * Cached in memory for the lifetime of the server process.
    */
   async fetchRepoPackages(
-    release: string,
-    channel: string,
+    feed: FeedSpec,
     repo: string,
   ): Promise<FeedPackage[]> {
-    const cacheKey = `${release}::${channel}::${repo}`;
+    const cacheKey = `${feedKey(feed)}::${repo}`;
     const cached = this.packagesCache.get(cacheKey);
     if (cached) return cached;
 
-    const base = repoUrl(release, channel, repo);
+    const base = repoUrl(feed, repo);
 
     const repomdText = await fetchBoundedText(
       `${base}/repodata/repomd.xml`,
+      feed,
       MAX_REPOMD_BYTES,
       `repomd.xml (${repo})`,
     );
@@ -298,7 +422,7 @@ export class RepoClient {
     }
 
     const url = `${base}/${href}`;
-    const res = await fetch(url, { headers: { "User-Agent": USER_AGENT } });
+    const res = await feedFetch(url, feed);
     if (!res.ok) throw new Error(`primary.xml.gz ${res.status} for ${repo}`);
     if (!res.body)
       throw new Error(`primary.xml.gz returned no body for ${repo}`);
@@ -319,25 +443,20 @@ export class RepoClient {
    */
   async fetchTargetPackages(
     target: string,
-    release: string = DEFAULT_RELEASE,
-    channel: string = DEFAULT_CHANNEL,
+    feed: FeedSpec = DEFAULT_FEED,
   ): Promise<{ packages: FeedPackage[]; errors: string[] }> {
-    const repos = await this.getRepositoryPathsForTarget(
-      target,
-      release,
-      channel,
-    );
+    const repos = await this.getRepositoryPathsForTarget(target, feed);
     if (repos.length === 0) {
       return {
         packages: [],
         errors: [
-          `No repositories configured for target "${target}" in ${release}/${channel}. Verify the target name and release/channel — list-targets shows the canonical list.`,
+          `No repositories configured for target "${target}" in ${feed.baseUrl}/${feed.manifestPath}. Verify the target name and the configured feed — list-targets shows the canonical list.`,
         ],
       };
     }
 
     const settled = await Promise.allSettled(
-      repos.map((r) => this.fetchRepoPackages(release, channel, r)),
+      repos.map((r) => this.fetchRepoPackages(feed, r)),
     );
     const packages: FeedPackage[] = [];
     const errors: string[] = [];
@@ -361,8 +480,7 @@ export class RepoClient {
     targets: string[],
     query: string,
     limit = 50,
-    release: string = DEFAULT_RELEASE,
-    channel: string = DEFAULT_CHANNEL,
+    feed?: FeedSelector,
   ): Promise<{
     totalMatches: number;
     results: SearchResult[];
@@ -374,8 +492,7 @@ export class RepoClient {
     for (const target of targets) {
       const { packages, errors: tErrors } = await this.fetchTargetPackages(
         target,
-        release,
-        channel,
+        feedFor(feed, target),
       );
       all.push(...packages);
       if (tErrors.length > 0) errors.push({ target, messages: tErrors });
@@ -430,22 +547,6 @@ export function rankMatches(
 
   matches.sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
   return matches;
-}
-
-/**
- * Trim + default a release/channel pair. `z.string().optional()` lets callers
- * pass `undefined`, `""`, or whitespace; this collapses all of those to the
- * canonical stream so a stray space (`"2024 "`) doesn't fail lookups and every
- * caller has ONE authoritative value to use for both fetching and messaging.
- */
-export function normalizeStream(
-  release?: string,
-  channel?: string,
-): { rel: string; chan: string } {
-  return {
-    rel: (release ?? "").trim() || DEFAULT_RELEASE,
-    chan: (channel ?? "").trim() || DEFAULT_CHANNEL,
-  };
 }
 
 /** Map a `rankMatches` score to a coverage confidence tier. */

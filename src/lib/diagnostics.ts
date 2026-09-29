@@ -7,6 +7,8 @@
  * positives, and the LLM can extrapolate further from the raw log.
  */
 
+import type { FeedSelector } from "./repo-client.js";
+
 export interface Diagnosis {
   label: string;
   excerpt: string;
@@ -375,15 +377,16 @@ function normalizePackageName(raw: string): string {
 
 /**
  * Feed streams the build-error investigator AUTO-probes for a failing
- * package. Six streams exist — channels `next` / `edge` / `stable` (`apollo`
- * is retired) across releases `2024` and `2026` — and all are queryable via
- * explicit `release`/`channel` args on `search-packages` etc. But in practice
- * ~all users run `edge` on the release that matches their hardware (2024 or
- * 2026) and don't switch channels, so the automatic probe covers just those
- * two edge streams to keep the diagnosis fast. Extend this list only if the
- * common-case stream set changes.
+ * package, in addition to the project's own configured feed (which is always
+ * probed first). Six streams exist — channels `next` / `edge` / `stable`
+ * (`apollo` is retired) across releases `2024` and `2026` — and all are
+ * queryable via explicit `release`/`channel` args on `search-packages` etc.
+ * But in practice ~all users run `edge` on the release that matches their
+ * hardware (2024 or 2026) and don't switch channels, so the automatic probe
+ * covers just those two edge streams to keep the diagnosis fast. Extend this
+ * list only if the common-case stream set changes.
  */
-const INVESTIGATION_STREAMS: { release: string; channel: string }[] = [
+export const INVESTIGATION_STREAMS: { release: string; channel: string }[] = [
   { release: "2026", channel: "edge" },
   { release: "2024", channel: "edge" },
 ];
@@ -391,6 +394,8 @@ const INVESTIGATION_STREAMS: { release: string; channel: string }[] = [
 export interface StreamPresence {
   release: string;
   channel: string;
+  /** True for the feed the project is configured for. */
+  configured: boolean;
   hits: { repo: string; version: string }[];
   /** Set when the feed for this stream couldn't be reached (e.g. not live). */
   error?: string;
@@ -406,11 +411,22 @@ export interface RepoLookup {
     targets: string[],
     query: string,
     limit: number,
-    release?: string,
-    channel?: string,
+    feed?: FeedSelector,
   ): Promise<{
     results: { name: string; repo: string; version: string }[];
+    errors?: { target: string; messages: string[] }[];
   }>;
+}
+
+/**
+ * One stream to probe. The caller resolves `feed` from the project's config,
+ * so alternates keep the project's repo URL, TLS settings and snapshot pins.
+ */
+export interface StreamProbe {
+  release: string;
+  channel: string;
+  configured: boolean;
+  feed: FeedSelector;
 }
 
 function dedupHits(
@@ -431,27 +447,32 @@ export async function investigatePackages(
   repo: RepoLookup,
   names: string[],
   targets: string[],
+  probes: StreamProbe[],
 ): Promise<PackageInvestigation[]> {
   const tasks = names.map(async (name): Promise<PackageInvestigation> => {
     const streams = await Promise.all(
-      INVESTIGATION_STREAMS.map(async ({ release, channel }) => {
+      probes.map(async ({ release, channel, configured, feed }) => {
         try {
-          const r = await repo.searchPackages(
-            targets,
-            name,
-            20,
-            release,
-            channel,
-          );
+          const r = await repo.searchPackages(targets, name, 20, feed);
+          const hits = dedupHits(r.results.filter((x) => x.name === name));
+          // A stream that isn't reachable (e.g. no targets.json) comes back
+          // as per-target errors, not a throw — report it, not "not found".
+          const errs = (r.errors ?? []).flatMap((e) => e.messages);
           return {
             release,
             channel,
-            hits: dedupHits(r.results.filter((x) => x.name === name)),
+            configured,
+            hits,
+            error:
+              hits.length === 0 && errs.length > 0
+                ? errs.join("; ")
+                : undefined,
           };
         } catch (e) {
           return {
             release,
             channel,
+            configured,
             hits: [],
             error: (e as Error).message,
           };
@@ -505,7 +526,7 @@ function renderInvestigation(
   }
 
   for (const s of present) {
-    out += `- **${s.release}/${s.channel}:** present (${s.hits
+    out += `- **${s.release}/${s.channel}${s.configured ? " _(configured)_" : ""}:** present (${s.hits
       .map((h) => `\`${h.repo}\` v${h.version}`)
       .join(", ")})\n`;
   }
@@ -514,7 +535,14 @@ function renderInvestigation(
   const streamsList = present
     .map((s) => `\`${s.release}/${s.channel}\``)
     .join(", ");
-  out += `The package exists in the feed (present on ${streamsList}). If your \`avocado.yaml\`'s \`distro.release\` doesn't match one of these, switch it and re-run \`avocado install\` — most commonly the package is on the release that matches your hardware (\`2026\` for newer boards, \`2024\` otherwise). If you're already on a matching stream, a "not found" build error usually means a broken transitive dependency or arch-specific metadata, not a missing top-level package.\n`;
+  const configured = inv.streams.find((s) => s.configured);
+  if (configured && configured.hits.length > 0) {
+    out += `The package is on your configured stream \`${configured.release}/${configured.channel}\`, so it is not a missing top-level package — a "not found" build error here usually means a broken transitive dependency or arch-specific metadata.\n`;
+  } else if (configured && !configured.error) {
+    out += `Not on your configured stream \`${configured.release}/${configured.channel}\`, but present on ${streamsList}. Set \`distro.release\` / \`distro.channel\` in \`avocado.yaml\` to one of those and re-run \`avocado install\` — switch deliberately, since it changes every package, and prefer the release that matches your hardware (\`2026\` for newer boards, \`2024\` otherwise).\n`;
+  } else {
+    out += `The package exists in the feed (present on ${streamsList}). If your \`avocado.yaml\`'s \`distro.release\` doesn't match one of these, switch it and re-run \`avocado install\` — most commonly the package is on the release that matches your hardware (\`2026\` for newer boards, \`2024\` otherwise). If you're already on a matching stream, a "not found" build error usually means a broken transitive dependency or arch-specific metadata, not a missing top-level package.\n`;
+  }
 
   if (archMismatchSuspected) {
     out += `\nThe log fingerprints as an **arch / SDK metadata mismatch** (mentions \`libc\` / \`GLIBC\` / SONAMEs). ${ARCH_MISMATCH_WORKAROUND}\n`;
@@ -549,7 +577,11 @@ export function renderDiagnoses(
   kind: "build" | "provision",
   diagnoses: Diagnosis[],
   investigations?: PackageInvestigation[],
-  investigationContext?: { targets: string[]; rawLog?: string },
+  investigationContext?: {
+    targets: string[];
+    rawLog?: string;
+    feedDescription?: string;
+  },
 ): string {
   const headerName =
     kind === "build" ? "explain-build-error" : "diagnose-provision-log";
@@ -600,6 +632,9 @@ export function renderDiagnoses(
       ? ARCH_MISMATCH_FINGERPRINT.test(investigationContext.rawLog)
       : false;
     out += `## Package investigation (across channels)\n\n`;
+    if (investigationContext?.feedDescription) {
+      out += investigationContext.feedDescription + `\n`;
+    }
     out += `_Queried targets: ${investigationContext?.targets.map((t) => `\`${t}\``).join(", ") ?? "(none)"}._\n\n`;
     for (const inv of investigations) {
       out += renderInvestigation(inv, archMismatchSuspected);
@@ -613,7 +648,7 @@ export function renderDiagnoses(
   }
 
   if (kind === "build" && !investigations) {
-    out += `\n_Pass \`targets: [...]\` to enable a cross-release package lookup. The tool will extract the failing package(s) from the log and probe the \`edge\` channel on both releases (\`2024\` and \`2026\`) — the streams ~all users are on — for you._\n`;
+    out += `\n_Pass \`targets: [...]\` to enable a cross-release package lookup. The tool will extract the failing package(s) from the log and probe your configured feed (pass \`projectDir\`) plus the \`edge\` channel on both releases (\`2024\` and \`2026\`) — the streams ~all users are on — for you._\n`;
   }
 
   return out;

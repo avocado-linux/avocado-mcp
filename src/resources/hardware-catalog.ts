@@ -5,11 +5,13 @@ export const DESCRIPTION =
 
 export const CONTENT = `# Hardware catalog
 
-Avocado OS targets are organized as flat strings (e.g. \`raspberrypi5\`, \`imx8mp-evk\`, \`jetson-orin-nano-devkit\`). The canonical list lives per feed stream at \`{host}/{release}/{channel}/targets.json\`, e.g.:
+Avocado OS targets are organized as flat strings (e.g. \`raspberrypi5\`, \`imx8mp-evk\`, \`jetson-orin-nano-devkit\`). The canonical list lives per feed stream at \`{repo_url}/{release}/{channel}/targets.json\`, e.g.:
 
 > https://repo.avocadolinux.org/2024/edge/targets.json
 
-**Targets differ per stream.** Feeds are published across releases (\`2024\`, \`2026\`) and channels (\`next\`, \`edge\`, \`stable\`), and the target set is not identical between them — newer hardware may exist only on a newer release (e.g. NVIDIA Thor on \`2026\`, not \`2024\`). This MCP exposes the list via the \`list-targets\` tool (pass \`release\`/\`channel\` to inspect a specific stream); the docs support matrix at https://docs.peridio.com/hardware/support-matrix#supported documents which release each board is supported on. Always consult one of these before assuming a target exists.
+**Targets differ per stream.** Feeds are published across releases (\`2024\`, \`2026\`) and channels (\`next\`, \`edge\`, \`stable\`), and the target set is not identical between them — newer hardware may exist only on a newer release (e.g. NVIDIA Thor on \`2026\`, not \`2024\`). Which feed a project uses is set by its \`distro.release\` / \`distro.channel\` / \`distro.repo.url\` (or the \`AVOCADO_REPO_URL\` / \`AVOCADO_DISTRO_RELEASE\` / \`AVOCADO_DISTRO_CHANNEL\` / \`AVOCADO_RELEASEVER\` env overrides).
+
+This MCP exposes the list via the \`list-targets\` tool — **pass \`projectDir\` when working in a project** so it reads the project's configured feed, or \`release\`/\`channel\` to inspect a specific stream. The docs support matrix at https://docs.peridio.com/hardware/support-matrix#supported documents which release each board is supported on. Always consult one of these before assuming a target exists.
 
 ## Vendor families currently supported
 
@@ -44,5 +46,5 @@ The Avocado package feed has separate repodata directories per target *and* per 
 - \`target/<target>/\` — target-specific RPMs (BSP, HITL tooling, board firmware)
 - \`target/<cpu_arch>/\` — generic Linux packages for that CPU (e.g. \`cortexa76\` for rpi5)
 
-The CLI handles this transparently via DNF inside the SDK container. The MCP queries the same data over HTTP.
+The CLI handles this transparently via DNF inside the SDK container. The MCP queries the same data over HTTP — from the same feed, provided you pass \`projectDir\` (it mirrors the CLI's feed precedence, including the lock file's \`repo-snapshot\` pin at \`.avocado/lock.json\`, which rewrites the path to \`{release}/{channel}/snapshots/<id>\`). Every feed tool prints the effective feed and where each value came from; if it doesn't match what the user expects, fix the config rather than overriding per call.
 `;
