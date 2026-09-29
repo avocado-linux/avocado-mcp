@@ -7,8 +7,16 @@ import {
   extractLogShape,
   investigatePackages,
   renderDiagnoses,
+  INVESTIGATION_STREAMS,
+  type StreamProbe,
 } from "../lib/diagnostics.js";
 import { RepoClient } from "../lib/repo-client.js";
+import type { FeedContext } from "../lib/feed-config.js";
+import {
+  feedArgsShape,
+  feedContextFrom,
+  feedSummarySchema,
+} from "./feed-args.js";
 import { checkQemu, qemuArchAdvisory } from "./discovery.js";
 import { platform as osPlatform } from "os";
 
@@ -108,8 +116,9 @@ export function registerDiagnosticsTools(
           .array(z.string())
           .optional()
           .describe(
-            "Target(s) the user was building for (e.g. ['jetson-orin-nano-devkit']). Strongly recommended — enables a cross-release package lookup (probes the `edge` channel on releases 2024 and 2026) that often surfaces the actual cause when patterns alone are inconclusive.",
+            "Target(s) the user was building for (e.g. ['jetson-orin-nano-devkit']). Strongly recommended — enables a package lookup on the project's configured feed plus the `edge` channel of releases 2024 and 2026, which often surfaces the actual cause when patterns alone are inconclusive.",
           ),
+        ...feedArgsShape,
       },
       outputSchema: {
         diagnoses: z.array(diagnosisSchema),
@@ -121,6 +130,9 @@ export function registerDiagnosticsTools(
                 z.object({
                   release: z.string(),
                   channel: z.string(),
+                  configured: z
+                    .boolean()
+                    .describe("True for the project's configured feed."),
                   hits: z.array(
                     z.object({ repo: z.string(), version: z.string() }),
                   ),
@@ -131,9 +143,10 @@ export function registerDiagnosticsTools(
           )
           .optional()
           .describe(
-            "Per-package cross-release lookup on the `edge` channel of releases 2024 and 2026 (the common-case streams). Only populated when `targets` was supplied.",
+            "Per-package lookup on the project's configured feed plus the `edge` channel of releases 2024 and 2026 (the common-case streams). Only populated when `targets` was supplied.",
           ),
         shape: logShapeSchema,
+        feed: feedSummarySchema.optional(),
       },
       annotations: {
         title: "Diagnose an avocado build/install log",
@@ -143,7 +156,7 @@ export function registerDiagnosticsTools(
         openWorldHint: true,
       },
     },
-    async ({ log, targets }) => {
+    async ({ log, targets, ...feedArgs }) => {
       const diagnoses = diagnoseBuildLog(log);
       const shape = extractLogShape(log);
       if (!targets || targets.length === 0) {
@@ -161,10 +174,12 @@ export function registerDiagnosticsTools(
         };
       }
       const names = extractFailingPackages(log);
+      const feed = feedContextFrom(feedArgs);
       const investigations = await investigatePackages(
         repoClient,
         names,
         targets,
+        investigationProbes(feed),
       );
       return {
         content: [
@@ -173,10 +188,16 @@ export function registerDiagnosticsTools(
             text: renderDiagnoses("build", diagnoses, investigations, {
               targets,
               rawLog: log,
+              feedDescription: feed.describe(targets),
             }),
           },
         ],
-        structuredContent: { diagnoses, investigations, shape },
+        structuredContent: {
+          diagnoses,
+          investigations,
+          shape,
+          feed: feed.structured(targets),
+        },
       };
     },
   );
@@ -193,6 +214,7 @@ export function registerDiagnosticsTools(
           .describe(
             "Target name (must match an entry from list-targets, e.g. 'raspberrypi5').",
           ),
+        ...feedArgsShape,
       },
       annotations: {
         title: "Get per-target provisioning steps",
@@ -202,14 +224,15 @@ export function registerDiagnosticsTools(
         openWorldHint: true,
       },
     },
-    async ({ target }) => {
-      const validTargets = await repoClient.getTargetsConfig();
+    async ({ target, ...feedArgs }) => {
+      const feed = feedContextFrom(feedArgs);
+      const validTargets = await repoClient.getTargetsConfig(feed.base);
       if (!validTargets) {
         return {
           content: [
             {
               type: "text",
-              text: `# get-provisioning-steps failed\n\nCould not fetch targets.json. Check network.`,
+              text: `# get-provisioning-steps failed\n\nCould not fetch targets.json. Check network and the configured feed.\n\n${feed.describe()}`,
             },
           ],
         };
@@ -219,7 +242,7 @@ export function registerDiagnosticsTools(
           content: [
             {
               type: "text",
-              text: `# get-provisioning-steps failed\n\nUnknown target \`${target}\`. Use \`list-targets\` to see valid options.`,
+              text: `# get-provisioning-steps failed\n\nUnknown target \`${target}\` in this feed. Use \`list-targets\` (same \`projectDir\`) to see valid options.\n\n${feed.describe()}`,
             },
           ],
         };
@@ -379,4 +402,37 @@ function guessProfile(target: string): {
       "Insert the SD card after `avocado provision -r dev --profile sd` finishes, then apply power to the target.",
     ],
   };
+}
+
+/**
+ * Streams the build-error investigator probes: the project's configured feed
+ * first (with its per-target snapshot pins), then the common-case edge
+ * streams. Alternates are resolved from the same project config, so they
+ * keep its repo URL and TLS settings; one identical to the configured stream
+ * is skipped.
+ */
+function investigationProbes(feed: FeedContext): StreamProbe[] {
+  const base = feed.base;
+  const [rvRelease, rvChannel] = base.releasever.split("/");
+  const release = base.release ?? rvRelease ?? "";
+  const channel = base.channel ?? rvChannel ?? "";
+  const probes: StreamProbe[] = [
+    {
+      release,
+      channel,
+      configured: true,
+      feed: (t: string) => feed.forTarget(t),
+    },
+  ];
+  for (const s of INVESTIGATION_STREAMS) {
+    if (s.release === release && s.channel === channel) continue;
+    const alt = feed.withStream(s.release, s.channel);
+    probes.push({
+      release: s.release,
+      channel: s.channel,
+      configured: false,
+      feed: (t: string) => alt.forTarget(t),
+    });
+  }
+  return probes;
 }

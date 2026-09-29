@@ -4,9 +4,16 @@ import {
   RepoClient,
   rankMatches,
   scoreToConfidence,
-  normalizeStream,
   type SearchResult,
 } from "../lib/repo-client.js";
+import type { FeedContext } from "../lib/feed-config.js";
+import { feedFetchLabel } from "../lib/feed-config.js";
+import {
+  feedArgsShape,
+  feedContextFrom,
+  feedSummarySchema,
+  streamLabel,
+} from "./feed-args.js";
 import { resolveTarget } from "../lib/target-resolver.js";
 import {
   getSelectableSlugs,
@@ -14,23 +21,22 @@ import {
 } from "../lib/hardware-support.js";
 
 /**
- * Validate target names against the manifest for a SPECIFIC release/channel.
- * Targets differ per stream (e.g. NVIDIA Thor exists in 2026 but not 2024),
- * so validation must use the same stream the caller will query — otherwise a
- * legitimate 2026-only target gets rejected against the 2024 manifest.
+ * Validate target names against the manifest of the feed the caller will
+ * query. Targets differ per feed (e.g. NVIDIA Thor exists in 2026 but not
+ * 2024), so validation must use the same feed — otherwise a legitimate
+ * 2026-only target gets rejected against the 2024 manifest.
  */
 async function validateTargets(
   repoClient: RepoClient,
   targets: string[],
-  release?: string,
-  channel?: string,
+  feed: FeedContext,
 ): Promise<{ ok: true } | { ok: false; message: string }> {
-  const { rel, chan } = normalizeStream(release, channel);
-  const config = await repoClient.getTargetsConfig(rel, chan);
+  const stream = streamLabel(feed);
+  const config = await repoClient.getTargetsConfig(feed.base);
   if (!config) {
     return {
       ok: false,
-      message: `Could not fetch targets.json for \`${rel}/${chan}\` from repo.avocadolinux.org to validate target names. Check the release/channel and network, then try again.`,
+      message: `Could not fetch targets.json from ${feedFetchLabel(feed.base)} to validate target names. Check the configured feed (release/channel/repo URL) and network, then try again.\n\n${feed.describe()}`,
     };
   }
   const all = Object.keys(config);
@@ -47,25 +53,27 @@ async function validateTargets(
     const fuzzy = resolveTarget(u, suggestFrom).slice(0, 3);
     if (fuzzy.length > 0) {
       lines.push(
-        `- \`${u}\` is not available in \`${rel}/${chan}\`. Did you mean: ${fuzzy.map((t) => `\`${t}\``).join(", ")}?`,
+        `- \`${u}\` is not available in \`${stream}\`. Did you mean: ${fuzzy.map((t) => `\`${t}\``).join(", ")}?`,
       );
     } else {
-      lines.push(`- \`${u}\` is not available in \`${rel}/${chan}\`.`);
+      lines.push(`- \`${u}\` is not available in \`${stream}\`.`);
     }
   }
   return {
     ok: false,
     message: [
-      `❌ Unsupported target(s) for stream \`${rel}/${chan}\`:`,
+      `❌ Unsupported target(s) for feed \`${stream}\`:`,
       ``,
       ...lines,
       ``,
-      `**${selectable ? "Selectable targets" : "Targets"} in \`${rel}/${chan}\` (${suggestFrom.length}):** ${suggestFrom
+      `**${selectable ? "Selectable targets" : "Targets"} in \`${stream}\` (${suggestFrom.length}):** ${suggestFrom
         .sort()
         .map((t) => `\`${t}\``)
         .join(", ")}`,
       ``,
       `Only these are valid for this stream. A target missing here may exist in another release — some hardware ships only on newer releases (e.g. NVIDIA Thor on 2026, not 2024). Use \`list-targets({ query: "...", release, channel })\` to check other streams, or the docs support matrix at https://docs.peridio.com/hardware/support-matrix#supported.`,
+      ``,
+      feed.describe(),
     ].join("\n"),
   };
 }
@@ -79,25 +87,14 @@ export function registerPackageTools(
     {
       title: "Describe one Avocado package",
       description:
-        "Show detail for a single package by exact name across one or more targets: version, arch, summary, description, and which repo provides it. Use this to confirm a package exists before referencing it in avocado.yaml, OR to answer 'does package X exist for target Y?' as a standalone question — no project required.",
+        "Show detail for a single package by exact name across one or more targets: version, arch, summary, description, and which repo provides it. Use this to confirm a package exists before referencing it in avocado.yaml, OR to answer 'does package X exist for target Y?' as a standalone question. Pass `projectDir` when working in a project so the lookup uses the project's configured feed (release / channel / repo URL / snapshot pin); without it, the default repo.avocadolinux.org 2024/edge feed is used.",
       inputSchema: {
         targets: z
           .array(z.string())
           .min(1)
           .describe("Target names to look up the package in."),
         name: z.string().describe("Exact package name."),
-        release: z
-          .string()
-          .optional()
-          .describe(
-            "Release year. Defaults to '2024'. Valid: '2024', '2026'. Newer hardware may exist only on '2026'.",
-          ),
-        channel: z
-          .string()
-          .optional()
-          .describe(
-            "Release channel. Defaults to 'edge'. Valid: 'next' (nightly, may break), 'edge' (dev/RC), 'stable' (pre-prod/prod, behind edge).",
-          ),
+        ...feedArgsShape,
       },
       outputSchema: {
         name: z.string(),
@@ -116,6 +113,7 @@ export function registerPackageTools(
           .array(z.string())
           .optional()
           .describe("If no exact match, top-N near package names."),
+        feed: feedSummarySchema.optional(),
       },
       annotations: {
         title: "Describe one Avocado package",
@@ -125,9 +123,10 @@ export function registerPackageTools(
         openWorldHint: true,
       },
     },
-    async ({ targets, name, release, channel }) => {
-      const { rel, chan } = normalizeStream(release, channel);
-      const targetCheck = await validateTargets(repoClient, targets, rel, chan);
+    async ({ targets, name, ...feedArgs }) => {
+      const feed = feedContextFrom(feedArgs);
+      const feedInfo = feed.structured(targets);
+      const targetCheck = await validateTargets(repoClient, targets, feed);
       if (!targetCheck.ok) {
         return {
           content: [
@@ -136,7 +135,12 @@ export function registerPackageTools(
               text: `# describe-package failed\n\n${targetCheck.message}`,
             },
           ],
-          structuredContent: { name, found: false, results: [] },
+          structuredContent: {
+            name,
+            found: false,
+            results: [],
+            feed: feedInfo,
+          },
           isError: true,
         };
       }
@@ -145,8 +149,7 @@ export function registerPackageTools(
           targets,
           name,
           200,
-          rel,
-          chan,
+          (t) => feed.forTarget(t),
         );
         const exact = results.filter((r) => r.name === name);
         if (exact.length === 0) {
@@ -155,7 +158,7 @@ export function registerPackageTools(
             content: [
               {
                 type: "text",
-                text: `# describe-package\n\nNo exact match for \`${name}\` in ${targets.map((t) => `\`${t}\``).join(", ")}.${
+                text: `# describe-package\n\n${feed.describe(targets)}\nNo exact match for \`${name}\` in ${targets.map((t) => `\`${t}\``).join(", ")}.${
                   near.length
                     ? `\n\nNearest matches: ${near.map((r) => `\`${r.name}\``).join(", ")}.`
                     : ""
@@ -167,10 +170,11 @@ export function registerPackageTools(
               found: false,
               results: [],
               nearest: near.map((r) => r.name),
+              feed: feedInfo,
             },
           };
         }
-        let out = `# describe-package — \`${name}\`\n\n`;
+        let out = `# describe-package — \`${name}\`\n\n${feed.describe(targets)}\n`;
         for (const p of exact) {
           out += `## \`${p.repo}\`\n\n`;
           out += `- **Version:** ${p.version}${p.release ? `-${p.release}` : ""}\n`;
@@ -194,6 +198,7 @@ export function registerPackageTools(
               summary: p.summary,
               description: p.description,
             })),
+            feed: feedInfo,
           },
         };
       } catch (error) {
@@ -201,10 +206,15 @@ export function registerPackageTools(
           content: [
             {
               type: "text",
-              text: `# describe-package failed\n\n❌ ${error}`,
+              text: `# describe-package failed\n\n❌ ${error}\n\n${feed.describe(targets)}`,
             },
           ],
-          structuredContent: { name, found: false, results: [] },
+          structuredContent: {
+            name,
+            found: false,
+            results: [],
+            feed: feedInfo,
+          },
           isError: true,
         };
       }
@@ -225,7 +235,7 @@ export function registerPackageTools(
     {
       title: "Search Avocado package feed",
       description:
-        "Search the live Avocado OS package feed for one or more targets. **This is the first move when the user wants to add ANY library / dependency / system package.** Always check the feed before suggesting `pip install`, `npm install`, `cargo add`, `apt install`, or vendoring — feed packages are version-tracked, dependency-resolved, security-updatable via OTA, and don't bloat the extension image. Matches package name and summary (case-insensitive), ranked by where the hit lands — same default behaviour as `avocado sdk dnf search`. **No avocado.yaml or local project required**: pass a target name and a query and you get live results from repo.avocadolinux.org. Description matching is NOT included — use `describe-package` for full-text details on a specific name. See `avocado://skills/app-development` for the feed-first workflow.",
+        "Search the live Avocado OS package feed for one or more targets. **This is the first move when the user wants to add ANY library / dependency / system package.** Always check the feed before suggesting `pip install`, `npm install`, `cargo add`, `apt install`, or vendoring — feed packages are version-tracked, dependency-resolved, security-updatable via OTA, and don't bloat the extension image. Matches package name and summary (case-insensitive), ranked by where the hit lands — same default behaviour as `avocado sdk dnf search`. **Pass `projectDir` when working in a project** — the search then runs against the project's configured feed (distro.release / distro.channel / distro.repo.url, AVOCADO_* env overrides, and the lock file's snapshot pin), i.e. exactly what `avocado install` will resolve. No project required for standalone questions: without `projectDir` it searches the default repo.avocadolinux.org 2024/edge feed. Description matching is NOT included — use `describe-package` for full-text details on a specific name. See `avocado://skills/app-development` for the feed-first workflow.",
       inputSchema: {
         targets: z
           .array(z.string())
@@ -245,24 +255,14 @@ export function registerPackageTools(
           .positive()
           .optional()
           .describe("Maximum results to return. Default 50."),
-        release: z
-          .string()
-          .optional()
-          .describe(
-            "Release year. Defaults to '2024'. Valid: '2024', '2026'. Newer hardware may exist only on '2026'.",
-          ),
-        channel: z
-          .string()
-          .optional()
-          .describe(
-            "Release channel. Defaults to 'edge'. Valid: 'next' (nightly, may break), 'edge' (dev/RC), 'stable' (pre-prod/prod, behind edge).",
-          ),
+        ...feedArgsShape,
       },
       outputSchema: {
         query: z.string(),
         targets: z.array(z.string()),
         release: z.string(),
         channel: z.string(),
+        feed: feedSummarySchema,
         totalMatches: z.number().int(),
         shown: z.number().int(),
         results: z.array(packageResultSchema),
@@ -281,9 +281,12 @@ export function registerPackageTools(
         openWorldHint: true,
       },
     },
-    async ({ targets, query, limit, release, channel }) => {
-      const { rel, chan } = normalizeStream(release, channel);
-      const targetCheck = await validateTargets(repoClient, targets, rel, chan);
+    async ({ targets, query, limit, ...feedArgs }) => {
+      const feed = feedContextFrom(feedArgs);
+      const feedInfo = feed.structured(targets);
+      const rel = feed.base.release ?? "";
+      const chan = feed.base.channel ?? "";
+      const targetCheck = await validateTargets(repoClient, targets, feed);
       if (!targetCheck.ok) {
         return {
           content: [
@@ -297,6 +300,7 @@ export function registerPackageTools(
             targets,
             release: rel,
             channel: chan,
+            feed: feedInfo,
             totalMatches: 0,
             shown: 0,
             results: [],
@@ -307,12 +311,8 @@ export function registerPackageTools(
       }
       try {
         const { totalMatches, results, errors } =
-          await repoClient.searchPackages(
-            targets,
-            query,
-            limit ?? 50,
-            rel,
-            chan,
+          await repoClient.searchPackages(targets, query, limit ?? 50, (t) =>
+            feed.forTarget(t),
           );
         const trimmed = results.map((r) => ({
           name: r.name,
@@ -332,8 +332,7 @@ export function registerPackageTools(
                 totalMatches,
                 results.length,
                 errors,
-                rel,
-                chan,
+                feed.describe(targets),
               ),
             },
             {
@@ -346,6 +345,7 @@ export function registerPackageTools(
             targets,
             release: rel,
             channel: chan,
+            feed: feedInfo,
             totalMatches,
             shown: results.length,
             results: trimmed,
@@ -357,7 +357,7 @@ export function registerPackageTools(
           content: [
             {
               type: "text",
-              text: `# search-packages failed\n\n❌ ${error}\n\n## Troubleshooting\n\n1. **Check the target name.** It must match an entry in https://repo.avocadolinux.org/2024/edge/targets.json.\n2. **Check connectivity.** The server must reach repo.avocadolinux.org.\n3. **Try a simpler query.** The search is a plain substring match against name + summary.`,
+              text: `# search-packages failed\n\n❌ ${error}\n\n${feed.describe(targets)}\n## Troubleshooting\n\n1. **Check the target name.** It must match an entry in ${feedFetchLabel(feed.base)}/targets.json (\`list-targets\` with the same \`projectDir\`).\n2. **Check connectivity.** The server must reach the configured feed host.\n3. **Try a simpler query.** The search is a plain substring match against name + summary.`,
             },
           ],
           structuredContent: {
@@ -365,6 +365,7 @@ export function registerPackageTools(
             targets,
             release: rel,
             channel: chan,
+            feed: feedInfo,
             totalMatches: 0,
             shown: 0,
             results: [],
@@ -395,7 +396,7 @@ export function registerPackageTools(
         target: z
           .string()
           .describe(
-            "Single Avocado target slug the coverage is evaluated against (e.g. 'jetson-orin-nano-devkit'). Must exist in the given release/channel — targets differ per stream.",
+            "Single Avocado target slug the coverage is evaluated against (e.g. 'jetson-orin-nano-devkit'). Must exist in the project's feed (or the given release/channel) — targets differ per stream.",
           ),
         dependencies: z
           .array(
@@ -421,18 +422,7 @@ export function registerPackageTools(
           )
           .min(1)
           .describe("The dependencies to check. One entry per library."),
-        release: z
-          .string()
-          .optional()
-          .describe(
-            "Release year. Defaults to '2024'. Newer hardware may only exist on '2026'.",
-          ),
-        channel: z
-          .string()
-          .optional()
-          .describe(
-            "Release channel. Defaults to 'edge'. Valid: 'next' (nightly, may break), 'edge' (dev/RC), 'stable' (pre-prod/prod, behind edge).",
-          ),
+        ...feedArgsShape,
         maxAlternatives: z
           .number()
           .int()
@@ -446,6 +436,7 @@ export function registerPackageTools(
         target: z.string(),
         release: z.string(),
         channel: z.string(),
+        feed: feedSummarySchema,
         targetAvailable: z
           .boolean()
           .nullable()
@@ -482,8 +473,12 @@ export function registerPackageTools(
         openWorldHint: true,
       },
     },
-    async ({ target, dependencies, release, channel, maxAlternatives }) => {
-      const { rel, chan } = normalizeStream(release, channel);
+    async ({ target, dependencies, maxAlternatives, ...feedArgs }) => {
+      const feed = feedContextFrom(feedArgs);
+      const feedInfo = feed.structured([target]);
+      const rel = feed.base.release ?? "";
+      const chan = feed.base.channel ?? "";
+      const stream = streamLabel(feed);
       const maxAlt = maxAlternatives ?? 3;
 
       // All-zero: used only on early-return / error paths where nothing was
@@ -499,20 +494,21 @@ export function registerPackageTools(
         fuzzy: 0,
       };
 
-      // Validate the target against THIS stream — the Thor-on-2024 case.
-      const manifest = await repoClient.getTargetsConfig(rel, chan);
+      // Validate the target against THIS feed — the Thor-on-2024 case.
+      const manifest = await repoClient.getTargetsConfig(feed.base);
       if (!manifest) {
         return {
           content: [
             {
               type: "text",
-              text: `# check-package-coverage failed\n\nCould not fetch \`targets.json\` for \`${rel}/${chan}\` from repo.avocadolinux.org. Check the release/channel and network.`,
+              text: `# check-package-coverage failed\n\nCould not fetch \`targets.json\` from ${feedFetchLabel(feed.base)}. Check the configured feed (release/channel/repo URL) and network.\n\n${feed.describe([target])}`,
             },
           ],
           structuredContent: {
             target,
             release: rel,
             channel: chan,
+            feed: feedInfo,
             targetAvailable: null,
             summary: emptySummary,
             results: [],
@@ -528,15 +524,17 @@ export function registerPackageTools(
             {
               type: "text",
               text: [
-                `# check-package-coverage — target not in \`${rel}/${chan}\``,
+                `# check-package-coverage — target not in \`${stream}\``,
                 ``,
-                `\`${target}\` is not available in the \`${rel}/${chan}\` stream.${
+                `\`${target}\` is not available in the \`${stream}\` feed.${
                   fuzzy.length
                     ? ` Did you mean: ${fuzzy.map((t) => `\`${t}\``).join(", ")}?`
                     : ""
                 }`,
                 ``,
                 `Some hardware ships only on newer releases (e.g. NVIDIA Thor on 2026, not 2024). Check the docs support matrix (https://docs.peridio.com/hardware/support-matrix#supported) or \`list-targets({ query: "${target}", release, channel })\` against another stream, then re-run with the release/channel that supports this target.`,
+                ``,
+                feed.describe([target]),
               ].join("\n"),
             },
           ],
@@ -544,6 +542,7 @@ export function registerPackageTools(
             target,
             release: rel,
             channel: chan,
+            feed: feedInfo,
             targetAvailable: false,
             summary: emptySummary,
             results: [],
@@ -557,8 +556,7 @@ export function registerPackageTools(
         // One feed warm-up for the whole batch; cached process-wide after this.
         const { packages, errors } = await repoClient.fetchTargetPackages(
           target,
-          rel,
-          chan,
+          feed.forTarget(target),
         );
 
         // fetchTargetPackages does NOT throw when repos are unreachable — it
@@ -570,13 +568,14 @@ export function registerPackageTools(
             content: [
               {
                 type: "text",
-                text: `# check-package-coverage — feed unavailable\n\nCouldn't read the package feed for \`${target}\` on \`${rel}/${chan}\`, so coverage is unknown (not 0%). Retry shortly — this is often transient for a freshly-added target.\n\nErrors:\n${errors.map((e) => `- ${e}`).join("\n")}`,
+                text: `# check-package-coverage — feed unavailable\n\nCouldn't read the package feed for \`${target}\` on \`${stream}\`, so coverage is unknown (not 0%). Retry shortly — this is often transient for a freshly-added target.\n\nErrors:\n${errors.map((e) => `- ${e}`).join("\n")}`,
               },
             ],
             structuredContent: {
               target,
               release: rel,
               channel: chan,
+              feed: feedInfo,
               targetAvailable: null,
               summary: emptySummary,
               results: [],
@@ -645,13 +644,20 @@ export function registerPackageTools(
           content: [
             {
               type: "text",
-              text: renderCoverage(target, rel, chan, summary, results, errors),
+              text: renderCoverage(
+                target,
+                feed.describe([target]),
+                summary,
+                results,
+                errors,
+              ),
             },
           ],
           structuredContent: {
             target,
             release: rel,
             channel: chan,
+            feed: feedInfo,
             targetAvailable: true,
             summary,
             results,
@@ -670,6 +676,7 @@ export function registerPackageTools(
             target,
             release: rel,
             channel: chan,
+            feed: feedInfo,
             targetAvailable: true,
             summary: emptySummary,
             results: [],
@@ -693,8 +700,7 @@ interface CoverageRow {
 
 function renderCoverage(
   target: string,
-  release: string,
-  channel: string,
+  feedDescription: string,
   summary: {
     total: number;
     present: number;
@@ -708,7 +714,8 @@ function renderCoverage(
   errors: string[],
 ): string {
   let out = `# check-package-coverage\n\n`;
-  out += `**Target:** \`${target}\`  •  **Stream:** \`${release}/${channel}\`\n`;
+  out += `**Target:** \`${target}\`\n`;
+  out += feedDescription;
   out += `**Coverage:** ${summary.coveragePercent}% (${summary.present}/${summary.total} present)`;
   if (summary.fuzzy > 0) {
     out += ` — of which ${summary.exact} exact, ${summary.strong} strong, **${summary.fuzzy} fuzzy** (verify before relying on the number)`;
@@ -746,13 +753,12 @@ function renderHeader(
   totalMatches: number,
   shown: number,
   errors: { target: string; messages: string[] }[],
-  release?: string,
-  channel?: string,
+  feedDescription: string,
 ): string {
   let out = `# search-packages\n\n`;
   out += `**Query:** \`${query}\`\n`;
   out += `**Targets:** ${targets.map((t) => `\`${t}\``).join(", ")}\n`;
-  out += `**Stream:** \`${release ?? "2024"}/${channel ?? "edge"}\`\n`;
+  out += feedDescription;
   out += `**Total matches:** ${totalMatches}${shown < totalMatches ? ` (showing first ${shown})` : ""}\n`;
 
   if (errors.length > 0) {
@@ -763,7 +769,7 @@ function renderHeader(
   }
 
   if (shown === 0) {
-    out += `\nNo packages matched. Confirm the target name exists in targets.json and try a broader query.\n`;
+    out += `\nNo packages matched. Confirm the target name exists in this feed's targets.json and try a broader query. If the project is on a different release/channel than shown above, pass \`projectDir\`.\n`;
   }
   return out;
 }

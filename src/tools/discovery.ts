@@ -5,7 +5,14 @@ import { promisify } from "util";
 import { statfs } from "fs/promises";
 import { existsSync, statSync } from "fs";
 import { arch as osArch, platform as osPlatform, homedir } from "os";
-import { RepoClient, normalizeStream } from "../lib/repo-client.js";
+import { RepoClient } from "../lib/repo-client.js";
+import { feedFetchLabel } from "../lib/feed-config.js";
+import {
+  feedArgsShape,
+  feedContextFrom,
+  feedSummarySchema,
+  streamLabel,
+} from "./feed-args.js";
 import { resolveTarget } from "../lib/target-resolver.js";
 import {
   getSelectableSlugs,
@@ -275,8 +282,10 @@ export function registerDiscoveryTools(
     {
       title: "Check host prerequisites",
       description:
-        "Verify the host has the prerequisites to build and provision an Avocado OS project: `avocado` CLI on PATH, a working container engine, and ≥8 GB free disk space in $HOME. On macOS the container engine is the avocado-vm, which supplies Docker, so Docker Desktop is not required. On Linux it is the native Docker Engine. Also (a) reports host CPU arch + OS so downstream tools (e.g. `init-project`) can warn about cross-arch QEMU performance gotchas, and (b) detects the avocado-cli execution channel for this session — when reachable, the Avocado desktop's host MCP runs CLI commands on the user's Mac (their CLI, their config, their keys) so the LLM doesn't have to invoke the CLI directly. Call this BEFORE init-project / list-targets / build-and-deploy so subsequent steps follow the right invocation pattern. **QEMU-target prerequisites** (qemu-system-*) are NOT checked here — `get-provisioning-steps` validates those when the resolved target is a QEMU one. Read-only.",
-      inputSchema: {},
+        "Verify the host has the prerequisites to build and provision an Avocado OS project: `avocado` CLI on PATH, a working container engine, and ≥8 GB free disk space in $HOME. On macOS the container engine is the avocado-vm, which supplies Docker, so Docker Desktop is not required. On Linux it is the native Docker Engine. Also (a) reports host CPU arch + OS so downstream tools (e.g. `init-project`) can warn about cross-arch QEMU performance gotchas, and (b) detects the avocado-cli execution channel for this session — when reachable, the Avocado desktop's host MCP runs CLI commands on the user's Mac (their CLI, their config, their keys) so the LLM doesn't have to invoke the CLI directly. It also (c) reports the package feed this session resolves to — the effective repo URL and whether it is overridden (tool arg, AVOCADO_REPO_URL, or avocado.yaml) — for the project when `projectDir` is given. Call this BEFORE init-project / list-targets / build-and-deploy so subsequent steps follow the right invocation pattern. **QEMU-target prerequisites** (qemu-system-*) are NOT checked here — `get-provisioning-steps` validates those when the resolved target is a QEMU one. Read-only.",
+      inputSchema: {
+        projectDir: feedArgsShape.projectDir,
+      },
       outputSchema: {
         ok: z
           .boolean()
@@ -325,6 +334,7 @@ export function registerDiscoveryTools(
         fixes: z
           .array(z.string())
           .describe("Markdown-formatted remediation lines, empty when ok."),
+        feed: feedSummarySchema,
       },
       annotations: {
         title: "Check host prerequisites",
@@ -334,8 +344,9 @@ export function registerDiscoveryTools(
         openWorldHint: true,
       },
     },
-    async () => {
+    async ({ projectDir }) => {
       const host = { arch: normalizedHostArch(), platform: osPlatform() };
+      const feed = feedContextFrom({ projectDir });
       const [cli, docker, disk, delegation] = await Promise.all([
         checkBinary("avocado", ["--version"]),
         checkContainerEngine(host.platform),
@@ -382,6 +393,8 @@ export function registerDiscoveryTools(
         out += `- **Probe of \`${HOST_MCP_URL}\`:** ${delegation.detail}. This is the normal channel on a developer workstation.\n`;
         out += `- **Use the redirect-to-file + tail + grep pattern** in \`avocado://skills/avocado-cli-execution\` so long CLI output doesn't flood context.\n`;
       }
+
+      out += `\n## Package feed\n\n${feed.describe()}`;
 
       const fixes: string[] = [];
       // Local-CLI fixes only surface when we'll actually use the local
@@ -431,6 +444,7 @@ export function registerDiscoveryTools(
           docker,
           disk: { ok: disk.ok, freeGB: disk.freeGB, minGB: MIN_FREE_GB },
           fixes,
+          feed: feed.structured(),
         },
       };
     },
@@ -441,7 +455,7 @@ export function registerDiscoveryTools(
     {
       title: "List Avocado OS targets",
       description:
-        "List Avocado OS hardware targets from the live package feed. Pass `query` to narrow down — strongly recommended when the user has named hardware in their own words (e.g. 'rpi4', 'pi 5', 'jetson orin', 'intel x86'). The query does fuzzy-matching against the canonical slug; an exact match shortcuts to a single row. Without `query`, returns the full list. **Targets differ per release/channel** — newer hardware may exist only on a newer release (e.g. NVIDIA Thor on 2026, not 2024). Pass `release`/`channel` to list a specific stream; call it for each stream to discover which release supports a given board (or consult the docs support matrix at https://docs.peridio.com/hardware/support-matrix#supported).",
+        "List Avocado OS hardware targets from the package feed — the project's configured feed when `projectDir` is given (distro.release / distro.channel / distro.repo.url, AVOCADO_* env overrides), otherwise the default repo.avocadolinux.org 2024/edge. Pass `query` to narrow down — strongly recommended when the user has named hardware in their own words (e.g. 'rpi4', 'pi 5', 'jetson orin', 'intel x86'). The query does fuzzy-matching against the canonical slug; an exact match shortcuts to a single row. Without `query`, returns the full list. **Targets differ per release/channel** — newer hardware may exist only on a newer release (e.g. NVIDIA Thor on 2026, not 2024). Pass `projectDir` when validating a project's targets, or `release`/`channel` to list a specific stream; call it for each stream to discover which release supports a given board (or consult the docs support matrix at https://docs.peridio.com/hardware/support-matrix#supported).",
       inputSchema: {
         query: z
           .string()
@@ -449,18 +463,7 @@ export function registerDiscoveryTools(
           .describe(
             "Free-text hardware identifier in the user's words. Examples: 'raspberry pi 4', 'rpi4', 'jetson orin nano', 'imx8mp'. Token-based fuzzy match against the canonical slug. Returns top matches; exact match returns just that row.",
           ),
-        release: z
-          .string()
-          .optional()
-          .describe(
-            "Release year to list targets for. Defaults to '2024'. Pass '2026' to see targets on the newer release.",
-          ),
-        channel: z
-          .string()
-          .optional()
-          .describe(
-            "Release channel. Defaults to 'edge'. Valid: 'next', 'edge', 'stable'.",
-          ),
+        ...feedArgsShape,
       },
       outputSchema: {
         total: z
@@ -493,6 +496,7 @@ export function registerDiscoveryTools(
             }),
           )
           .describe("Matching targets, sorted by slug."),
+        feed: feedSummarySchema.optional(),
       },
       annotations: {
         title: "List Avocado OS targets",
@@ -502,18 +506,26 @@ export function registerDiscoveryTools(
         openWorldHint: true,
       },
     },
-    async ({ query, release, channel }) => {
-      const { rel, chan } = normalizeStream(release, channel);
-      const config = await repoClient.getTargetsConfig(rel, chan);
+    async ({ query, ...feedArgs }) => {
+      const feed = feedContextFrom(feedArgs);
+      const feedInfo = feed.structured();
+      const stream = streamLabel(feed);
+      const config = await repoClient.getTargetsConfig(feed.base);
       if (!config) {
         return {
           content: [
             {
               type: "text",
-              text: `# list-targets failed\n\nCould not fetch \`targets.json\` for \`${rel}/${chan}\` from repo.avocadolinux.org. Check the release/channel and network, then try again.`,
+              text: `# list-targets failed\n\nCould not fetch \`targets.json\` from ${feedFetchLabel(feed.base)}. Check the configured feed (release/channel/repo URL) and network, then try again.\n\n${feed.describe()}`,
             },
           ],
-          structuredContent: { total: 0, query, matched: 0, targets: [] },
+          structuredContent: {
+            total: 0,
+            query,
+            matched: 0,
+            targets: [],
+            feed: feedInfo,
+          },
           isError: true,
         };
       }
@@ -540,9 +552,10 @@ export function registerDiscoveryTools(
         query,
         matched: entries.length,
         targets: entries.map(([slug, repos]) => ({ slug, repos })),
+        feed: feedInfo,
       };
 
-      let out = `# list-targets\n\n**Stream:** \`${rel}/${chan}\`\n\n`;
+      let out = `# list-targets\n\n${feed.describe()}\n`;
       if (query) {
         out += `**Query:** \`${query}\`  •  **Matches:** ${entries.length} of ${allTargets.length}\n\n`;
         if (entries.length === 0) {
@@ -562,7 +575,7 @@ export function registerDiscoveryTools(
       }
       out += selectable
         ? `\n_These are the user-selectable targets from the [support matrix](https://docs.peridio.com/hardware/support-matrix); use any as \`default_target\` / \`supported_targets\` in \`avocado.yaml\`. (Arch/tune pseudo-targets in the raw feed are filtered out.)_`
-        : `\n_⚠️ Support matrix unavailable — showing the raw \`${rel}/${chan}\` feed, which may include arch/tune pseudo-targets that aren't user-selectable. Use any board string as \`default_target\` / \`supported_targets\` in \`avocado.yaml\`._`;
+        : `\n_⚠️ Support matrix unavailable — showing the raw \`${stream}\` feed, which may include arch/tune pseudo-targets that aren't user-selectable. Use any board string as \`default_target\` / \`supported_targets\` in \`avocado.yaml\`._`;
 
       return {
         content: [{ type: "text", text: out }],

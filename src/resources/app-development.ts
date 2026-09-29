@@ -11,7 +11,7 @@ This skill is the guide for the day-to-day work of building features inside an A
 
 > **Before suggesting any library / dependency / package to a user, call \`search-packages\` against their target. If it's in the feed, add it to \`extensions.<name>.packages\` (or use \`add-package-to-extension\`). Only vendor / bundle / language-package-manager-install when the feed genuinely lacks it.**
 
-Concrete: if the user says "I want to add MQTT to my Python app", do NOT immediately reach for \`pip install paho-mqtt\`. Call \`search-packages({ targets: [<target>], query: "mqtt" })\`, see what's in the feed (commonly \`paho-mqtt\` is available as a system package), and add it via \`add-package-to-extension\`.
+Concrete: if the user says "I want to add MQTT to my Python app", do NOT immediately reach for \`pip install paho-mqtt\`. Call \`search-packages({ targets: [<target>], query: "mqtt", projectDir: "<project path>" })\`, see what's in the feed (commonly \`paho-mqtt\` is available as a system package), and add it via \`add-package-to-extension\`.
 
 ### Why feed-first
 
@@ -91,7 +91,7 @@ The two most common mistakes:
 ## Adding a library — the canonical workflow
 
 1. **Identify what the user actually needs.** "MQTT support" → look for an MQTT client library. "Send email" → look for an SMTP library or \`msmtp\`.
-2. **Search the feed for the user's target.** \`search-packages({ targets: ["<target>"], query: "<name-or-keyword>" })\`. Try a few synonyms — package names vary (\`paho-mqtt\` vs \`python3-paho-mqtt\` vs \`mosquitto-clients\`).
+2. **Search the feed for the user's target.** \`search-packages({ targets: ["<target>"], query: "<name-or-keyword>", projectDir: "<project path>" })\` — \`projectDir\` makes the search use the project's configured release / channel / repo URL / snapshot pin, i.e. what \`avocado install\` will actually resolve. Try a few synonyms — package names vary (\`paho-mqtt\` vs \`python3-paho-mqtt\` vs \`mosquitto-clients\`).
 3. **If a feed match exists:** verify the exact name with \`describe-package\` and add it via \`add-package-to-extension\` (or hand-edit and re-run \`avocado install\`). Done.
 4. **If no feed match:** tell the user it isn't in the feed and propose the vendoring approach. Two flavours:
    - **Language package manager in build hook.** For Python: \`pip install --target="$AVOCADO_BUILD_EXT_SYSROOT/usr/lib/python3.<x>/site-packages" <pkg>\` in \`app-install.sh\`. For Node: \`npm ci --omit=dev\` then copy \`node_modules/\` into overlay. For Rust: \`cargo build --release\` then copy the binary.
