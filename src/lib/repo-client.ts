@@ -331,7 +331,7 @@ export class RepoClient {
       return null;
     }
 
-    const cacheKey = `${base}::${feed.manifestPath}`;
+    const cacheKey = feedKey(feed);
     const now = Date.now();
     const cached = this.targetsCache.get(cacheKey);
     if (cached && now < cached.expiresAt) return cached.data;

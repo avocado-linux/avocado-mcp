@@ -540,6 +540,8 @@ function renderInvestigation(
     out += `The package is on your configured stream \`${configured.release}/${configured.channel}\`, so it is not a missing top-level package — a "not found" build error here usually means a broken transitive dependency or arch-specific metadata.\n`;
   } else if (configured && !configured.error) {
     out += `Not on your configured stream \`${configured.release}/${configured.channel}\`, but present on ${streamsList}. Set \`distro.release\` / \`distro.channel\` in \`avocado.yaml\` to one of those and re-run \`avocado install\` — switch deliberately, since it changes every package, and prefer the release that matches your hardware (\`2026\` for newer boards, \`2024\` otherwise).\n`;
+  } else if (configured?.error) {
+    out += `Could not query your configured stream \`${configured.release}/${configured.channel}\`, so it is unknown whether the package is there. It is present on ${streamsList}. Retry before you change \`distro.release\` / \`distro.channel\`.\n`;
   } else {
     out += `The package exists in the feed (present on ${streamsList}). If your \`avocado.yaml\`'s \`distro.release\` doesn't match one of these, switch it and re-run \`avocado install\` — most commonly the package is on the release that matches your hardware (\`2026\` for newer boards, \`2024\` otherwise). If you're already on a matching stream, a "not found" build error usually means a broken transitive dependency or arch-specific metadata, not a missing top-level package.\n`;
   }

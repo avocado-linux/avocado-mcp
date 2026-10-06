@@ -118,7 +118,7 @@ export function registerProjectTools(
             content: [
               {
                 type: "text",
-                text: renderReferenceMatch(target, task, matches),
+                text: `${renderReferenceMatch(target, task, matches)}\n\n${feed.describe()}`,
               },
             ],
           };
@@ -133,7 +133,7 @@ export function registerProjectTools(
         extraExtensions,
         release: starterFeed.release,
         channel: starterFeed.channel,
-        repoUrl: feedArgs.repoUrl,
+        repoUrl: feedArgs.repoUrl?.trim() || undefined,
       });
       const validation = await validateAvocadoYaml(yaml);
 
@@ -170,6 +170,7 @@ export function registerProjectTools(
       out += `avocado build --no-tui > /tmp/avocado-build.log 2>&1\n`;
       out += `script -q /dev/null avocado provision -r ${rt} --no-tui > /tmp/avocado-provision.log 2>&1\n`;
       out += "```\n\n";
+      out += `${feed.describe()}\n\n`;
       out += `## avocado.yaml\n\n\`\`\`yaml\n${yaml}\`\`\``;
 
       return { content: [{ type: "text", text: out }] };
