@@ -316,7 +316,8 @@ export function registerDiagnosticsTools(
         for (const n of profile.notes) out += `- ${n}\n`;
       }
       out += `\nFor authoritative per-target documentation, see:\n\n`;
-      out += `\`https://docs.peridio.com/hardware/${target}\` (or the parent vendor's section).\n`;
+      out += `\`https://docs.peridio.com/hardware/${target}\` (or the parent vendor's section).\n\n`;
+      out += feed.describe();
 
       return { content: [{ type: "text", text: out }] };
     },
