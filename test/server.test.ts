@@ -126,3 +126,20 @@ test("a flag-like serial port is rejected by the tool's input schema", async () 
     JSON.stringify(res.content),
   );
 });
+
+test("init-project refuses feed args that would inject into avocado.yaml", async () => {
+  const { client } = await connect();
+  for (const args of [
+    { release: "2026\n  repo:\n    url: https://evil.example" },
+    { repoUrl: "https://a.example/x\n    tls_verify: false" },
+    { repoUrl: "https://ci:s3cr3t@mirror.example/avocado" },
+  ]) {
+    const res = await client.callTool({
+      name: "init-project",
+      arguments: { target: "qemux86-64", forceFromScratch: true, ...args },
+    });
+    const text = (res.content as { text: string }[])[0].text;
+    assert.match(text, /^# init-project failed/, JSON.stringify(args));
+    assert.doesNotMatch(text, /```yaml|s3cr3t/, JSON.stringify(args));
+  }
+});

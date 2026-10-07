@@ -77,7 +77,7 @@ const MAX_PATH_LEN = 128;
 const TARGETS_CACHE_TTL_MS = 10 * 60 * 1000;
 const USER_AGENT = "avocado-mcp-server";
 
-function isSafeSegment(s: unknown): s is string {
+export function isSafeSegment(s: unknown): s is string {
   return (
     typeof s === "string" &&
     s.length > 0 &&
@@ -103,21 +103,36 @@ function isSafeReleasever(p: unknown): p is string {
   );
 }
 
+/** Mask `user:password@` in a URL so credentials never reach tool output. */
+export function redactUrl(url: string): string {
+  return url.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/?#]*@/i, "$1***@");
+}
+
 /** Validate a feed and return its normalised base URL. Throws on anything unsafe. */
 export function validateFeed(feed: FeedSpec): string {
+  const shown = redactUrl(feed.baseUrl);
+  // `new URL()` silently strips tabs/newlines, so check the raw string: the
+  // value can also end up verbatim in a generated avocado.yaml.
+  if (/[\s\x00-\x1f\x7f]/.test(feed.baseUrl)) {
+    throw new Error(
+      `Repo URL must not contain whitespace or control characters: ${JSON.stringify(shown)}`,
+    );
+  }
   let u: URL;
   try {
     u = new URL(feed.baseUrl);
   } catch {
-    throw new Error(`Invalid repo URL: ${JSON.stringify(feed.baseUrl)}`);
+    throw new Error(`Invalid repo URL: ${JSON.stringify(shown)}`);
   }
   if (u.protocol !== "https:" && u.protocol !== "http:") {
-    throw new Error(`Repo URL must be http(s): ${feed.baseUrl}`);
+    throw new Error(`Repo URL must be http(s): ${shown}`);
+  }
+  // Node's fetch refuses credentialed URLs (and echoes them in the error).
+  if (u.username || u.password) {
+    throw new Error(`Repo URL must not include credentials: ${shown}`);
   }
   if (u.search || u.hash) {
-    throw new Error(
-      `Repo URL must not carry a query or fragment: ${feed.baseUrl}`,
-    );
+    throw new Error(`Repo URL must not carry a query or fragment: ${shown}`);
   }
   if (!isSafeReleasever(feed.releasever)) {
     throw new Error(`Invalid releasever: ${feed.releasever}`);
@@ -450,7 +465,7 @@ export class RepoClient {
       return {
         packages: [],
         errors: [
-          `No repositories configured for target "${target}" in ${feed.baseUrl}/${feed.manifestPath}. Verify the target name and the configured feed — list-targets shows the canonical list.`,
+          `No repositories configured for target "${target}" in ${redactUrl(feed.baseUrl)}/${feed.manifestPath}. Verify the target name and the configured feed — list-targets shows the canonical list.`,
         ],
       };
     }
