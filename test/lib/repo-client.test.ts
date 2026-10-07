@@ -1,7 +1,12 @@
 import { test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { gzipSync } from "node:zlib";
-import { DEFAULT_FEED, RepoClient } from "../../src/lib/repo-client.js";
+import {
+  DEFAULT_FEED,
+  RepoClient,
+  redactUrl,
+  validateFeed,
+} from "../../src/lib/repo-client.js";
 
 const realFetch = globalThis.fetch;
 afterEach(() => {
@@ -95,7 +100,13 @@ test("an invalid feed never becomes a URL — it degrades to null", async () => 
       `unsafe releasever must degrade to null: ${JSON.stringify(bad)}`,
     );
   }
-  for (const baseUrl of ["file:///etc", "https://x.test/?q=1", "not a url"]) {
+  for (const baseUrl of [
+    "file:///etc",
+    "https://x.test/?q=1",
+    "not a url",
+    "https://a.test/x\n    tls_verify: false",
+    "https://ci:s3cr3t@mirror.test/avocado",
+  ]) {
     assert.equal(
       await rc.getTargetManifest({ ...DEFAULT_FEED, baseUrl }),
       null,
@@ -173,4 +184,14 @@ test("a dead feed degrades to null, not an unhandled rejection", async () => {
 test("HTTP 500 on targets.json degrades to null", async () => {
   stubFeed({ status: 500 });
   assert.equal(await new RepoClient().getTargetManifest(), null);
+});
+
+test("credentials never appear in feed errors or redacted URLs", () => {
+  const baseUrl = "https://ci:s3cr3t@mirror.test/avocado";
+  assert.equal(redactUrl(baseUrl), "https://***@mirror.test/avocado");
+  assert.equal(redactUrl(DEFAULT_FEED.baseUrl), DEFAULT_FEED.baseUrl);
+  assert.throws(
+    () => validateFeed({ ...DEFAULT_FEED, baseUrl }),
+    (e: Error) => !e.message.includes("s3cr3t"),
+  );
 });

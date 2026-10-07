@@ -8,7 +8,7 @@ import {
   addPackageToExtension,
   listExtensions,
 } from "../lib/yaml-ops.js";
-import { RepoClient } from "../lib/repo-client.js";
+import { RepoClient, isSafeSegment, validateFeed } from "../lib/repo-client.js";
 import {
   searchReferencesScored,
   type ScoredReference,
@@ -78,6 +78,25 @@ export function registerProjectTools(
       ...feedArgs
     }) => {
       const feed = feedContextFrom(feedArgs);
+      // The feed values are written into the generated avocado.yaml, so an
+      // invalid feed must stop here rather than fall through to the starter.
+      try {
+        validateFeed(feed.base);
+        for (const v of [feed.base.release, feed.base.channel]) {
+          if (v !== undefined && !isSafeSegment(v)) {
+            throw new Error(`Invalid release/channel: ${JSON.stringify(v)}`);
+          }
+        }
+      } catch (e) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `# init-project failed\n\n❌ ${(e as Error).message}\n\n${feed.describe()}`,
+            },
+          ],
+        };
+      }
       let validTargets;
       try {
         validTargets = await repoClient.getTargetsConfig(feed.base);

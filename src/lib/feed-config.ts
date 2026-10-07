@@ -30,7 +30,7 @@
 import { existsSync, readFileSync, statSync } from "fs";
 import { dirname, isAbsolute, join, resolve } from "path";
 import { parse as parseYaml } from "yaml";
-import type { FeedSpec } from "./repo-client.js";
+import { redactUrl, type FeedSpec } from "./repo-client.js";
 
 export const DEFAULT_REPO_URL = "https://repo.avocadolinux.org";
 export const DEFAULT_RELEASE = "2024";
@@ -561,7 +561,7 @@ export class FeedContext {
   structured(targets: string[] = []): FeedSummary {
     const base = this.base;
     return {
-      repoUrl: base.baseUrl,
+      repoUrl: redactUrl(base.baseUrl),
       repoUrlOverridden: repoUrlOverridden(base),
       defaultRepoUrl: DEFAULT_REPO_URL,
       releasever: base.releasever,
@@ -611,7 +611,7 @@ function dedupNotes(notes: string[]): string[] {
 }
 
 export function feedUrl(feed: FeedSpec, path = feed.releasever): string {
-  return `${feed.baseUrl}/${path}`;
+  return `${redactUrl(feed.baseUrl)}/${path}`;
 }
 
 /** Where targets.json is fetched from — for error messages. */
@@ -634,8 +634,8 @@ function describeFeeds(
   if (base.configPath) out += `; config \`${base.configPath}\``;
   out += `\n`;
   out += repoUrlOverridden(base)
-    ? `**Repo URL:** \`${base.baseUrl}\` — **overridden** by ${s.repoUrl} (default is \`${DEFAULT_REPO_URL}\`)\n`
-    : `**Repo URL:** \`${base.baseUrl}\` (default, not overridden)\n`;
+    ? `**Repo URL:** \`${redactUrl(base.baseUrl)}\` — **overridden** by ${s.repoUrl} (default is \`${DEFAULT_REPO_URL}\`)\n`
+    : `**Repo URL:** \`${redactUrl(base.baseUrl)}\` (default, not overridden)\n`;
   perTarget.forEach((f, i) => {
     if (f.snapshot && f.releasever !== base.releasever) {
       out += `**Snapshot pin:** \`${targets[i]}\` → \`${feedUrl(f)}\` (${f.sources.releasever} — matches what \`avocado install\` resolves)\n`;
