@@ -114,7 +114,7 @@ Include a keyword form too — the feed search matches summaries, so \`mqtt\` ca
 
 Each dependency comes back with:
 
-- \`status\`: \`present\` (any hit) or \`missing\` (no hit across all its queries). Matching is **optimistic** — a summary-only hit still counts as present.
+- \`status\`: \`present\` (any hit), \`missing\` (no hit across all its queries), or \`not-checked\` (no hit, but the project enables a feed the MCP can't read, such as a private \`org:\` feed). Report \`not-checked\` rows as unknown, not as gaps. Matching is **optimistic**: a summary-only hit still counts as present.
 - \`confidence\`: \`exact\` (feed name == query), \`strong\` (name prefix/substring match), or \`fuzzy\` (summary-only hit — optimistically counted, but a maintainer should verify). Carry this straight into the report's Match-confidence column.
 - \`match\`: the best feed package (name + version + repo) for PRESENT rows.
 - \`alternatives\`: near-miss package names — useful context for the maintainer and for spotting a better match.

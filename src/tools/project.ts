@@ -15,7 +15,11 @@ import {
 } from "../lib/references-client.js";
 import { resolveTarget } from "../lib/target-resolver.js";
 import { qemuArchAdvisory } from "./discovery.js";
-import { feedArgsShape, feedContextFrom } from "./feed-args.js";
+import {
+  feedArgsShape,
+  feedContextFrom,
+  renderNotChecked,
+} from "./feed-args.js";
 
 export function registerProjectTools(
   server: McpServer,
@@ -521,7 +525,7 @@ export function registerProjectTools(
     {
       title: "Add a feed package to an extension",
       description:
-        "Add a single feed package to an existing extension's packages map. **Use this as the default path for adding ANY library or dependency** — feed packages beat vendored / pip-installed / npm-installed deps on every axis (versioning, security updates, image size, dependency resolution). Verifies the package exists — in the feed the YAML is configured for (distro.release / distro.channel / distro.repo.url, AVOCADO_* env overrides, and the lock file's snapshot pin when `projectDir` is given) — for one of the project's targets before adding; rejects unknown packages with a 'did you mean' list. If `search-packages` shows the user's library isn't in the feed, THEN consider vendoring (see `avocado://skills/app-development`).",
+        "Add a single feed package to an existing extension's packages map. **Use this as the default path for adding ANY library or dependency**. Feed packages beat vendored / pip-installed / npm-installed deps on every axis (versioning, security updates, image size, dependency resolution). Verifies the package exists for one of the project's targets before adding. It checks every feed the YAML enables: the distro feed (distro.release, distro.channel, distro.repo, AVOCADO_* env overrides, and the avocado.lock snapshot pin when `projectDir` is given) and `repos:` feeds listed in `distro.feeds`. Rejects unknown packages with a 'did you mean' list. When a feed can't be read (for example a private `org:` feed), it adds the package with a warning instead of rejecting it. If `search-packages` shows the user's library isn't in the feed, THEN consider vendoring (see `avocado://skills/app-development`).",
       inputSchema: {
         yaml: z.string().describe("Current avocado.yaml content."),
         extension: z
@@ -561,14 +565,14 @@ export function registerProjectTools(
       const feed = feedContextFrom({ projectDir }, yaml);
       try {
         // Verify the package exists for the user's targets
-        const { results } = await repoClient.searchPackages(
+        const { results, notChecked } = await repoClient.searchPackages(
           targets,
           packageName,
           5,
           (t) => feed.forTarget(t),
         );
         const exactMatch = results.find((r) => r.name === packageName);
-        if (!exactMatch) {
+        if (!exactMatch && notChecked.length === 0) {
           return {
             content: [
               {
@@ -600,7 +604,9 @@ export function registerProjectTools(
                 "add-package-to-extension",
                 newYaml,
                 validation,
-                `✅ Verified \`${packageName}\` (v${exactMatch.version}) exists in repo \`${exactMatch.repo}\` for the queried target(s).\n\n${feed.describe(targets)}`,
+                exactMatch
+                  ? `✅ Verified \`${packageName}\` (v${exactMatch.version}) exists in feed \`${exactMatch.feed ?? "avocado"}\`, repo \`${exactMatch.repo}\` for the queried target(s).\n\n${feed.describe(targets)}`
+                  : `⚠️ Could not verify \`${packageName}\`. It is not in the feeds the MCP read, and some enabled feeds were not checked. Run \`avocado install\` to confirm the package resolves.\n${renderNotChecked(notChecked)}\n${feed.describe(targets)}`,
               ),
             },
           ],
