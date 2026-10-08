@@ -41,11 +41,11 @@ Run \`environment-check\` to verify all of these at once before starting work.
 3. **Scaffold the project.** Call \`init-project\` with the chosen \`target\` and \`task\` (the user's task in their own words — e.g. "python web app", "mqtt sensor", "qemu trial run"). The tool searches the reference catalog first and prefers a matching reference whenever one fits — references are pre-built, verified, working projects, and they save substantial time vs. building YAML from scratch. The tool returns either:
    - **A reference scaffold command** (\`avocado init --target <target> --reference <slug> <slug> && cd <slug>\`) when a reference matches. Read the reference with \`get-reference\` to understand what it sets up before suggesting edits.
    - **A from-scratch starter YAML** when no reference fits (or when called with \`forceFromScratch: true\`). Use \`add-extension\` / \`add-package-to-extension\` to extend it. Schema-first, package-verified.
-4. **Install packages.** The user runs \`avocado install\` (or \`avocado install -f\` on a fresh scaffold) to resolve and stage all packages declared in \`avocado.yaml\` into the SDK. This is a separate step from build.
+4. **Install packages.** The user runs \`avocado install\` to resolve and stage all packages declared in \`avocado.yaml\` into the SDK. This is a separate step from build.
 5. **Build.** The user runs \`avocado build\` locally. The CLI pulls the SDK container, compiles, and produces a system image from the already-staged packages.
-6. **Provision (first time only).** The user runs \`avocado provision -r dev\` (with the right \`--profile\` for the target — usually \`sd\` for an SD card). This flashes the image to media. **If YOU (the LLM) are running this via Bash**, wrap with \`script -q /dev/null avocado provision ... --no-tui\` — the command shells out to \`docker run -it\` internally and fails under a non-TTY harness with \`the input device is not a TTY\`. \`--no-tui\` alone does not fix this. See \`avocado://skills/iterative-deployment\` for the full rule.
+6. **Provision (first time only).** The user runs \`avocado provision dev\` (with the right \`--profile\` for the target, usually \`sd\` for an SD card). This flashes the image to media. **If YOU (the LLM) are running this via Bash**, no wrapper is needed. Set \`AVOCADO_NONINTERACTIVE=1\` and pass \`--no-tui\`. See \`avocado://skills/iterative-deployment\` for the full rule.
 7. **Boot the device** with the provisioned media. Default root password is empty in the \`dev\` runtime.
-8. **Iterate with \`avocado deploy\`.** After the device is up and on the network, subsequent edits don't need a reflash. Run \`avocado build && avocado deploy -r dev -d <device-ip>\` to OTA changes in seconds. **\`deploy\` is sideloading — it requires the device to have been provisioned at least once.** See \`avocado://skills/iterative-deployment\` for the full flow.
+8. **Iterate with \`avocado deploy\`.** After the device is up and on the network, subsequent edits don't need a reflash. Run \`avocado build && avocado deploy dev -d <device-ip>\` to OTA changes in seconds. **\`deploy\` is sideloading. It requires the device to have been provisioned at least once.** See \`avocado://skills/iterative-deployment\` for the full flow.
 
 ## Provision vs deploy — when to use which
 
@@ -53,8 +53,8 @@ These are NOT interchangeable. Get this wrong and the user wastes 5+ minutes fla
 
 | Situation | Command | Prompt |
 |---|---|---|
-| Device has never been flashed with Avocado OS | \`avocado provision -r dev\` (with profile per target) | \`/provision-device\` |
-| Device has Avocado OS, is on the network, you have its IP | \`avocado deploy -r dev -d <ip>\` | \`/build-and-deploy\` |
+| Device has never been flashed with Avocado OS | \`avocado provision dev\` (with profile per target) | \`/provision-device\` |
+| Device has Avocado OS, is on the network, you have its IP | \`avocado deploy dev -d <ip>\` | \`/build-and-deploy\` |
 
 **Always ask the user up front when they want to push work to a device:** _"Has this device been provisioned with Avocado before, or is this the first time?"_ Route to \`/provision-device\` or \`/build-and-deploy\` based on the answer. Don't assume.
 

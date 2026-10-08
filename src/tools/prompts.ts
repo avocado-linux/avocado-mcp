@@ -60,7 +60,7 @@ export function registerPrompts(server: McpServer): void {
               "5. Call `get-device-connection-info` to get the target's exact serial parameters (baud, voltage, pinout) and credentials. Use these as-is.",
               "6. Call `get-tmux-uart-snippet` with the chosen `emulator` (preference tio > picocom > minicom) and run the returned `tmux new-session` command in Bash to bridge the console.",
               "7. Send the standard diagnostic battery into the session and capture results: `systemctl --failed`, `systemctl status <suspect-unit> --no-pager -n 30`, `journalctl -xeu <suspect-unit> --no-pager -b | tail -100`, `journalctl -p err -b --no-pager | tail -50`, `dmesg --color=never | tail -30`, and anything tailored to the symptom.",
-              "8. **If on-device logs don't explain the symptom, iterate on the project itself.** You have full edit access to the app source under `app/` in the user's project. Common moves: escalate log level to DEBUG (Python `logging.basicConfig`, Rust `RUST_LOG=debug` via the systemd unit, Node `LOG_LEVEL=debug`), add targeted log statements at suspect lines, or change the systemd unit's `ExecStart` to pass `--verbose`. Then rebuild + redeploy with the `/build-and-deploy` prompt (or invoke `avocado build` then `avocado deploy -r dev -d <ip>` directly per `avocado://skills/avocado-cli-execution`), restart the unit on the device, reproduce the symptom, and re-read the logs. See `avocado://skills/device-debugging` for per-language recipes. **Always clean up debug logging** before declaring the fix done.",
+              "8. **If on-device logs don't explain the symptom, iterate on the project itself.** You have full edit access to the app source under `app/` in the user's project. Common moves: escalate log level to DEBUG (Python `logging.basicConfig`, Rust `RUST_LOG=debug` via the systemd unit, Node `LOG_LEVEL=debug`), add targeted log statements at suspect lines, or change the systemd unit's `ExecStart` to pass `--verbose`. Then rebuild + redeploy with the `/build-and-deploy` prompt (or invoke `avocado build` then `avocado deploy dev -d <ip>` directly per `avocado://skills/avocado-cli-execution`), restart the unit on the device, reproduce the symptom, and re-read the logs. See `avocado://skills/device-debugging` for per-language recipes. **Always clean up debug logging** before declaring the fix done.",
               "9. **Only after** the above confirms the device is reachable + healthy enough, AND if I want more comfortable interactive work, switch to SSH (`ssh root@<host> '<command>'` via Bash directly — no MCP tool needed).",
               "",
               "Summarise findings clearly, with next-step suggestions, after running the diagnostics. If you added debug logging during the session, note what you added and where so I can review or revert.",
@@ -99,7 +99,7 @@ export function registerPrompts(server: McpServer): void {
               "",
               "Please walk me through recovery:",
               "",
-              "1. If I haven't pasted the log yet, ask for it now. **If I have output from a recent failed run, use what already exists** — don't re-run `avocado install` / `avocado build` just to capture output; they're slow and noisy. Where to look depends on the execution channel (see `avocado://skills/avocado-cli-execution`): on the `bash` channel, read `/tmp/avocado-install.log` / `/tmp/avocado-build.log` with `Read` or `tail -200`; on the `host-tool` channel, call `avocado_cli_status` with the most-recent `run_id` (bump `tailLines` if needed). If neither is available, ask me to paste the log.",
+              "1. If I haven't pasted the log yet, ask for it now. **If I have output from a recent failed run, use what already exists.** Don't re-run `avocado install` / `avocado build` just to capture output. They're slow and noisy. Where to look depends on the execution channel (see `avocado://skills/avocado-cli-execution`): on the `bash` channel, read `.avocado/logs/install.log` / `.avocado/logs/build.log` in the project with `Read` or `tail -200`. On the `host-tool` channel, call `avocado_cli_status` with the most-recent `run_id` (bump `tailLines` if needed). If neither is available, ask me to paste the log.",
               "2. Call `explain-build-error` with the log, `targets` set to mine, AND `projectDir` set to my project. The tool will: (a) match against pattern fingerprints, (b) extract failing package names and look them up on my configured feed, plus the `edge` channel of both releases (`2024` and `2026`) — the streams almost everyone is on.",
               "3. **If the result includes any `Hook script:` pattern, branch HERE — this is a user-code failure, not an Avocado bug.** Read `avocado://skills/extension-build-debugging`. Then: (a) Read the failing hook file (path is in the error) at the indicated line. (b) Call `get-reference-file` on a closely related reference's same hook (e.g. `python-flask/app-install.sh`) to compare patterns. (c) Apply the fix from the skill's failure-mode table. Do NOT continue with SDK / cross-channel investigation — those don't apply to hook failures.",
               "4. If the package investigation shows the package present on my configured stream AND the log mentions `libc` / `GLIBC` / SONAMEs, this points at host-arch / arch-metadata. Run `uname -m` and `sw_vers` (or `lsb_release -a`) via Bash to capture my host details, then advise on host swap (e.g. x86_64 Linux for aarch64-broken paths).",
@@ -118,7 +118,7 @@ export function registerPrompts(server: McpServer): void {
 
   server.prompt(
     "build-and-deploy",
-    "Build the current Avocado OS project and push it to a running device — fully automated. Optimised loop: tries `avocado build` first; only falls back to `avocado install -f` if the build fails with a missing-package signal. Then `avocado deploy -r <runtime> -d <device>` and on-device verification. This is the canonical iteration loop after the first provision; the user shouldn't need to copy-paste commands.",
+    "Build the current Avocado OS project and push it to a running device, fully automated. Optimised loop: tries `avocado build` first and only falls back to `avocado install` if the build fails with a missing-package signal. Then `avocado deploy <runtime> -d <device>` and on-device verification. This is the canonical iteration loop after the first provision. The user doesn't need to copy-paste commands.",
     {
       device: z
         .string()
@@ -138,15 +138,15 @@ export function registerPrompts(server: McpServer): void {
         .describe(
           "Target architecture override. Usually inferred from `default_target` in the YAML or the `AVOCADO_TARGET` env var; only pass this if you need to override.",
         ),
-      forceInstall: z
+      runInstall: z
         .string()
         .optional()
         .describe(
-          "Pass 'true' to run `avocado install -f` unconditionally before building. Default behaviour (any other value, or omitted): try `avocado build` first and only run install if the build fails with a signal that install is needed (missing package, unresolved extension). Set 'true' when you KNOW the user has just edited the YAML to add packages/extensions and want to short-circuit the build-fail-retry roundtrip.",
+          "Pass 'true' to run `avocado install` before building. Default behaviour (any other value, or omitted): try `avocado build` first and only run install if the build fails with a signal that install is needed (missing package, unresolved extension). Set 'true' when you KNOW the user has just edited the YAML to add packages/extensions and want to skip the build-fail-retry roundtrip. This never passes `-f`: a forced install erases every extension's built content.",
         ),
     },
-    ({ device, runtime, target, forceInstall: forceInstallStr }) => {
-      const forceInstall = forceInstallStr === "true";
+    ({ device, runtime, target, runInstall: runInstallStr }) => {
+      const runInstall = runInstallStr === "true";
       const r = runtime ?? "dev";
       return {
         messages: [
@@ -171,16 +171,16 @@ export function registerPrompts(server: McpServer): void {
                   ? `3. Confirm the device at \`${device}\` is reachable: \`ping -c 1\` (timeout 2s) and \`ssh -o ConnectTimeout=5 -o BatchMode=yes root@${device.replace(/^[^@]+@/, "").replace(/:.*$/, "")} true\` (the second one is the load-bearing check — \`avocado deploy\` needs sshd). If unreachable, stop and tell me what failed; **a network-unreachable device is also a signal it might not be provisioned** — ask me to confirm.`
                   : `3. Ask me for the device IP / hostname if I haven't provided one. Then confirm it's reachable: \`ping -c 1\` (timeout 2s) and \`ssh -o ConnectTimeout=5 -o BatchMode=yes root@<host> true\`. If unreachable, stop — and check whether the device has been provisioned at all.`,
                 `4. Verify the project's \`avocado.yaml\` exists and that the \`${r}\` runtime is declared under \`runtimes:\` (use \`list-yaml-extensions\` or read the file directly). If the runtime isn't there, ask me which runtime to use.`,
-                forceInstall
-                  ? `5. **Install forced.** Invoke \`avocado install -f\` per \`avocado://skills/avocado-cli-execution\`. Status: \`✅ install succeeded\` or \`❌ install failed (exit N)\`. If failed, surface the top errors, pass the output to \`explain-build-error\` with my target, and STOP.`
+                runInstall
+                  ? `5. **Install first.** Invoke \`avocado install\` per \`avocado://skills/avocado-cli-execution\`. Status: \`✅ install succeeded\` or \`❌ install failed (exit N)\`. If failed, surface the top errors, pass the output to \`explain-build-error\` with my target, and STOP.`
                   : `5. **Skip install — start with build.** \`avocado install\` is the slow part of the loop and is NOT needed when only source files / overlays / hook scripts have changed. The default is to skip it. Only run install if step 6 (build) tells us it's needed.`,
                 `6. Invoke \`avocado build\` per \`avocado://skills/avocado-cli-execution\`. Status: \`✅ build succeeded — image at <path if shown>\` or \`❌ build failed (exit N)\`.
 
    **If build failed, decide:** does the captured error look like a missing-package / unresolved-extension / "needs install" signal? Specifically: \`nothing provides X\`, \`no package matching\`, \`package X not found\`, \`unable to find a match\`, or an explicit CLI message asking the user to run \`avocado install\`?
 
-   - **If yes (install needed):** tell me \`🔄 build failed because of a missing dependency — running install and retrying\`, then invoke \`avocado install -f\` (same channel). Report install ✅/❌. If install succeeded, re-run \`avocado build\` and report build ✅/❌ again. If the retried build still fails, surface to \`explain-build-error\` and STOP — don't proceed to deploy.
+   - **If yes (install needed):** tell me \`🔄 build failed because of a missing dependency — running install and retrying\`, then invoke \`avocado install\` (same channel). Report install ✅/❌. If install succeeded, re-run \`avocado build\` and report build ✅/❌ again. If the retried build still fails, surface to \`explain-build-error\` and STOP. Don't proceed to deploy.
    - **If no (real build error):** pass the output to \`explain-build-error\` with my target and STOP — running install won't help. Don't proceed to deploy.`,
-                `7. Invoke \`avocado deploy -r ${r} ${device ? `-d ${device}` : "-d <device>"}${target ? ` -t ${target}` : ""}\` per \`avocado://skills/avocado-cli-execution\`. The deploy is staged via a local HTTP server and SSH-triggered on the device. Status: \`✅ deploy succeeded — pushed runtime '${r}' to <device>\` or \`❌ deploy failed (exit N)\`. If it failed mid-stream, name the stage that failed (TUF metadata generation, HTTP server bind, SSH to device, \`avocadoctl runtime add\` on device).`,
+                `7. Invoke \`avocado deploy ${r} ${device ? `-d ${device}` : "-d <device>"}${target ? ` -t ${target}` : ""}\` per \`avocado://skills/avocado-cli-execution\`. The deploy is staged via a local HTTP server and SSH-triggered on the device. Status: \`✅ deploy succeeded — pushed runtime '${r}' to <device>\` or \`❌ deploy failed (exit N)\`. If it failed mid-stream, name the stage that failed (TUF metadata generation, HTTP server bind, SSH to device, \`avocadoctl runtime add\` on device).`,
                 `8. **Verify on the device.** Use whatever channel is already established (UART tmux session or SSH). Targeted check: \`systemctl is-active <relevant-unit>\`, \`rpm -q <newly-added-package>\`, or whatever fits the change just deployed. Bound your output (\`--no-pager -n 20\`, \`| tail -20\`) per the token-discipline rules in \`avocado://skills/tmux-uart-bridge\`. Status: \`✅ <unit> active\` / \`❌ <unit> failed: <reason>\`.`,
                 `9. Final summary paragraph: confirm build ✅/❌ (and install ✅/❌ if it was run), deploy ✅/❌, on-device verification ✅/❌. Call out anything I should test manually next.`,
                 "",
@@ -302,18 +302,19 @@ export function registerPrompts(server: McpServer): void {
                 "",
                 "**Always pass `--no-tui`** to `avocado build` and `avocado provision` when running under Bash with captured output — the default TUI renders ANSI escapes that garble captured log files.",
                 "",
-                "**`avocado provision` needs a TTY.** It shells out to `docker run -it` internally, which fails under a non-TTY harness with `the input device is not a TTY`. Wrap it with `script -q /dev/null` to give it a pseudo-TTY: `script -q /dev/null avocado provision ... --no-tui`. This is required when you (the LLM) are running it via Bash. If a human is running it directly in a terminal, the wrap is unnecessary.",
+                "**`avocado provision` needs no wrapper.** The CLI detects a non-TTY stdin and starts the SDK container without a PTY. When you (the LLM) run it via Bash, set `AVOCADO_NONINTERACTIVE=1` so it never waits for an answer. If you see `the input device is not a TTY`, the CLI is too old: tell me to run `avocado upgrade`. On macOS, a host-side SD card write asks for confirmation and cancels with no terminal (`Operation cancelled.`). In that case, ask me to run the provision command in my own terminal.",
                 "",
                 "**Filter the noise** — `avocado build` and `avocado provision` are extremely verbose. Use this pattern:",
                 "",
                 "```bash",
-                "# Capture full output to a file, surface only what matters",
-                "<command> > /tmp/avocado-<step>.log 2>&1",
+                "# Capture full output to a file in the project, surface only what matters",
+                "mkdir -p .avocado/logs",
+                "<command> > .avocado/logs/<step>.log 2>&1",
                 "RC=$?",
                 'echo "exit: $RC"',
-                "tail -40 /tmp/avocado-<step>.log",
+                "tail -40 .avocado/logs/<step>.log",
                 "echo '---errors---'",
-                "grep -iE 'error|failed|nothing provides|broken' /tmp/avocado-<step>.log | tail -40 || true",
+                "grep -iE 'error|failed|nothing provides|broken' .avocado/logs/<step>.log | tail -40 || true",
                 "```",
                 "",
                 "**Status reporting is not optional.** After every `avocado` command (build, provision), surface a one-line `✅` / `❌` to me before moving on. Don't go silent.",
@@ -333,8 +334,8 @@ export function registerPrompts(server: McpServer): void {
                 "   - **Device in the right state** for the profile (Jetson: recovery mode with FC REC shorted to GND, USB-C connected; x86: BIOS set to boot from the chosen media; SD-card targets: card NOT yet inserted into target).",
                 "   - For QEMU targets: none of the above — the VM runs on this host.",
                 `6. Verify the project's \`avocado.yaml\` exists in CWD and that the \`${r}\` runtime is declared. If not, ask me which runtime to use.`,
-                `7. Run \`avocado build --no-tui\` with the redirect-to-file pattern above. Status: \`✅ build succeeded\` or \`❌ build failed (exit N)\`. **If build failed because of a missing-package / unresolved-extension signal** (\`nothing provides\`, \`no package matching\`, \`unable to find a match\`), tell me \`🔄 build failed because of a missing dependency — running install and retrying\`, then run \`avocado install -f --no-tui\` and retry build. **If real build error** (compile / hook / OOM / schema), pass log to \`explain-build-error\` and STOP. Don't proceed to provision if build failed.`,
-                `8. Run the provision command. Look up the exact invocation from \`get-provisioning-steps\` — it varies by target (\`avocado provision -r ${r}\` for default, \`avocado provision -r ${r} --profile sd\` for SD-card targets, etc.). Wrap with \`script\` and capture: \`script -q /dev/null avocado provision -r ${r} [--profile <prof>] --no-tui > /tmp/avocado-provision.log 2>&1\`. Status: \`✅ provision succeeded\` or \`❌ provision failed (exit N)\`. If failed, pass log to \`diagnose-provision-log\` and STOP.`,
+                `7. Run \`avocado build --no-tui\` with the redirect-to-file pattern above. Status: \`✅ build succeeded\` or \`❌ build failed (exit N)\`. **If build failed because of a missing-package / unresolved-extension signal** (\`nothing provides\`, \`no package matching\`, \`unable to find a match\`), tell me \`🔄 build failed because of a missing dependency — running install and retrying\`, then run \`avocado install --no-tui\` and retry build. **If real build error** (compile / hook / OOM / schema), pass log to \`explain-build-error\` and STOP. Don't proceed to provision if build failed.`,
+                `8. Run the provision command. Look up the exact invocation from \`get-provisioning-steps\`. It varies by target (\`avocado provision ${r}\` for default, \`avocado provision ${r} --profile sd\` for SD-card targets, etc.). Capture the output: \`AVOCADO_NONINTERACTIVE=1 avocado provision ${r} [--profile <prof>] --no-tui > .avocado/logs/provision.log 2>&1\`. Status: \`✅ provision succeeded\` or \`❌ provision failed (exit N)\`. If failed, pass log to \`diagnose-provision-log\` and STOP.`,
                 "9. **Physical handoff.** Tell me the exact action(s) to take to boot the device, target-specific:",
                 "   - SD-card targets: eject the SD card from the host, insert it into the target, apply power. Note any LED behaviour to watch for.",
                 "   - USB targets: same pattern with the USB drive; mention BIOS boot-from-USB if needed.",
@@ -381,7 +382,7 @@ export function registerPrompts(server: McpServer): void {
               "5. Call `init-project` with the chosen `target` AND `task` (my task in my own words). The tool will search the reference catalog first and prefer a matching reference — that's almost always faster than from-scratch. If a reference is shown with ⚠️ unlisted compatibility for my target, surface that warning to me; references not tested on my hardware may need extra debugging. If `init-project` returns a reference scaffold command, also call `get-reference` for that slug so you understand what it sets up before suggesting edits.",
               "6. Call `get-provisioning-steps` so I know exactly which `avocado provision` invocation to run for my target.",
               "",
-              "Finish by giving me the exact commands I should run next: `avocado install` (resolves packages, required before build), then `avocado build`, then the provisioning command. Explain what each does and what to expect. **Also tell me** about the faster iteration loop for after the first provision: once the device is on the network, `avocado deploy -r dev -d <device-ip>` pushes subsequent changes in seconds without re-flashing — see `avocado://skills/iterative-deployment`.",
+              "Finish by giving me the exact commands I should run next: `avocado install` (resolves packages, required before build), then `avocado build`, then the provisioning command. Explain what each does and what to expect. **Also tell me** about the faster iteration loop for after the first provision: once the device is on the network, `avocado deploy dev -d <device-ip>` pushes subsequent changes in seconds without re-flashing. See `avocado://skills/iterative-deployment`.",
             ].join("\n"),
           },
         },
@@ -419,13 +420,13 @@ export function registerPrompts(server: McpServer): void {
               "",
               "1. Call `environment-check` and read `avocado://skills/avocado-cli-execution` to establish the execution channel for this session. **If the channel is `host-tool`, stop** — the Connect tools run `avocado` locally and can't reach the Mac's CLI/credentials/project from inside the VM. Tell me to run `/setup-connect` from a workstation (bash) session, or to run `avocado connect …` directly on the Mac.",
               "2. Read `avocado://skills/avocado-connect` — this is the authoritative reference for Connect concepts, the upload/deploy lifecycle, and the correct tool sequence.",
-              "3. Call `connect-auth-status`. If `logged_in` is false, stop and tell me to run `avocado connect auth login` first. If `token_valid` is false, tell me the token may be expired and to re-login.",
+              "3. Call `connect-auth-status`. If `logged_in` is false, stop and tell me to run `avocado login` first. If `token_valid` is false, tell me the token may be expired and to re-login.",
               "4. Call `connect-list-resources { resource: 'orgs' }`. Present the org list. If only one org, auto-select it (tell me which one). If multiple, ask me to choose.",
               "5. Call `connect-list-resources { resource: 'projects', org: '<id>' }` with the chosen org. Present the project list. If only one, auto-select; if multiple, ask me to choose.",
               "6. Call `connect-list-resources { resource: 'cohorts', org: '<id>', project: '<id>' }` with the chosen project. Present the cohort list. If only one, auto-select; if multiple, ask me to choose. If no cohorts exist, tell me to create one in the Connect web UI first.",
               "7. Confirm the selections with me before proceeding.",
-              "8. Call `connect-init` with the confirmed `directory`, `org`, `project`, `cohort`, and `runtime`.",
-              "9. On success, tell me: (a) which files were modified in `avocado.yaml`, (b) that I need to run `avocado build` to compile the new Connect extension into my runtime, and (c) that after provisioning a device with this build, it will self-enroll into the cohort at first boot.",
+              "8. Call `connect-init` with the confirmed `directory`, `org`, `project`, `cohort`, and `runtime`. If `avocado.yaml` already has a `connect:` section, warn me first: a second init creates a new claim token and overwrites the device config.",
+              "9. On success, tell me: (a) which files were modified in `avocado.yaml`, (b) that `connect init` added three extensions (`avocado-ext-connect-config`, `avocado-ext-connect`, `avocado-ext-tunnels`) and that I need to run `avocado install && avocado build` to include them in my runtime, and (c) that after provisioning a device with this build, it will self-enroll into the cohort at first boot.",
               "",
               "If `connect-init` fails, surface the exact error message and suggest remediation (re-login, check org/project/cohort IDs, etc.).",
             ].join("\n"),

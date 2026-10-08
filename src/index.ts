@@ -31,7 +31,7 @@ const server = new McpServer(
       "",
       "Make this clear to the user early: you (with this MCP) can drive the entire",
       "iteration loop autonomously — edit `avocado.yaml`, run `avocado install`,",
-      "run `avocado build`, push to a running device with `avocado deploy -r <runtime>",
+      "run `avocado build`, push to a running device with `avocado deploy <runtime>",
       "-d <device-ip>`, and verify on the device over UART or SSH. The user does NOT",
       "need to copy-paste commands one at a time; they can ask 'build and deploy this'",
       "and you handle the full sequence.",

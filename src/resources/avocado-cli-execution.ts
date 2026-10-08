@@ -48,7 +48,7 @@ There are two ways the LLM in this session can invoke \`avocado <args>\`. Pickin
 
 - **Do NOT pass \`--no-tui\`.** The host already runs the CLI without a TTY, so output is line-oriented by default. Passing \`--no-tui\` is harmless but unnecessary noise.
 - **Do NOT also run \`avocado\` via the Bash tool in the same session.** That would invoke a different CLI inside the VM with the wrong config and no credentials — silently divergent results from what the user sees. If you absolutely need to inspect VM state, use Bash for non-\`avocado\` commands only.
-- **Do NOT redirect output to \`/tmp/...\` files.** Capture happens on the host; \`outputTail\` already gives you the recent lines. The full output stays in host memory for the duration of the run.
+- **Do NOT redirect output to log files.** Capture happens on the host, and \`outputTail\` already gives you the recent lines. The full output stays in host memory for the duration of the run.
 - **Status reporting after each call:** surface a one-line \`✅ <subcommand> succeeded\` / \`❌ <subcommand> failed (exit N)\` once \`status\` flips to terminal, just like the bash channel. The user is watching for these.
 - **Wait with \`await_avocado_cli\`, not scheduled polls.** This is the single most important rule in this skill. \`await_avocado_cli\` blocks the host MCP's response until the avocado-cli process actually exits — the host pushes the terminal state into your tool call within milliseconds of it happening. No pacing hints, no fixed cadence, no scheduled follow-up. The pattern:
   1. Kick off the work with \`run_avocado_cli\` and capture the \`run_id\`.
@@ -80,9 +80,9 @@ There are two ways the LLM in this session can invoke \`avocado <args>\`. Pickin
 
 | What you want | Call |
 |---|---|
-| \`avocado install -f\` for project \`myapp\` | \`run_avocado_cli({ args: ["install", "-f"], project: "myapp" })\` → \`await_avocado_cli({ run_id })\` (loop on \`timedOut\`) |
+| \`avocado install\` for project \`myapp\` | \`run_avocado_cli({ args: ["install"], project: "myapp" })\` → \`await_avocado_cli({ run_id })\` (loop on \`timedOut\`) |
 | \`avocado build\` for project \`myapp\` | \`run_avocado_cli({ args: ["build"], project: "myapp" })\` → \`await_avocado_cli({ run_id })\` |
-| \`avocado deploy -r dev -d 192.168.1.42\` | \`run_avocado_cli({ args: ["deploy", "-r", "dev", "-d", "192.168.1.42"], project: "myapp" })\` → \`await_avocado_cli({ run_id })\` |
+| \`avocado deploy dev -d 192.168.1.42\` | \`run_avocado_cli({ args: ["deploy", "dev", "-d", "192.168.1.42"], project: "myapp" })\` → \`await_avocado_cli({ run_id })\` |
 | \`avocado --version\` | \`run_avocado_cli({ args: ["--version"] })\` → \`await_avocado_cli({ run_id })\` (returns in seconds; no project needed) |
 | Multi-tens-of-minutes provision flash | \`run_avocado_cli\` → \`await_avocado_cli\` ×2-3 rounds → if still going, switch to \`schedule_task\` |
 
@@ -117,13 +117,14 @@ When the host MCP is delegating, work splits cleanly along this matrix. **Pickin
 ### Canonical pattern (use this for every install / build / deploy invocation)
 
 \`\`\`bash
-# Capture full output to a file, surface only what matters
-avocado install -f --no-tui > /tmp/avocado-install.log 2>&1
+# Capture full output to a file in the project, surface only what matters
+mkdir -p .avocado/logs
+avocado install --no-tui > .avocado/logs/install.log 2>&1
 INSTALL_RC=$?
 echo "exit: $INSTALL_RC"
-tail -40 /tmp/avocado-install.log
+tail -40 .avocado/logs/install.log
 echo '---errors---'
-grep -iE 'error|failed|nothing provides|broken' /tmp/avocado-install.log | tail -40 || true
+grep -iE 'error|failed|nothing provides|broken' .avocado/logs/install.log | tail -40 || true
 \`\`\`
 
 Read those three slices (exit code, tail, grepped errors) and report a one-line ✅/❌ status. The full log stays on disk and you only need to load more if the diagnosis isn't obvious. If \`explain-build-error\` needs more context, pass it the file contents — don't re-run the build.
@@ -131,18 +132,23 @@ Read those three slices (exit code, tail, grepped errors) and report a one-line 
 ### Rules for the bash channel
 
 - **Always pass \`--no-tui\`** to \`avocado install\` / \`avocado build\` / \`avocado deploy\` when running under Bash with captured output. The default TUI renders status spinners, redraws, and ANSI escape sequences that turn a captured log file into garbage. \`--no-tui\` produces line-oriented stdout. Only omit the flag if a human is running the command directly in their own terminal.
-- **\`avocado provision\` needs a pseudo-TTY — wrap with \`script\`.** \`avocado provision\` shells out to \`docker run -it\` internally, which requires a TTY. The Bash tool runs without one, so the call fails immediately with \`the input device is not a TTY\`. \`--no-tui\` does NOT fix this — it only affects Avocado's own output, not Docker's \`-it\` requirement. Use \`script -q /dev/null\` to provide a pseudo-TTY: \`script -q /dev/null avocado provision -r dev --no-tui > /tmp/avocado-provision.log 2>&1\`. This wrapper is required for every \`avocado provision\` call via Bash; \`install\` / \`build\` / \`deploy\` do NOT need it.
+- **\`avocado provision\` needs no wrapper.** Since 1.0.0-rc.2 the CLI detects that stdin is not a terminal and starts the SDK container without a PTY. For headless runs, set \`AVOCADO_NONINTERACTIVE=1\` so the CLI never waits for an answer: \`mkdir -p .avocado/logs && AVOCADO_NONINTERACTIVE=1 avocado provision dev --no-tui > .avocado/logs/provision.log 2>&1\`. If you see \`the input device is not a TTY\`, the CLI is too old. Run \`avocado upgrade\`. On macOS, a host-side SD card write asks for confirmation and cancels with no terminal, so the user must run that provision in their own terminal.
 - **Collect and filter the CLI's own output. Do not inspect its internals.** The \`avocado\` CLI is the orchestrator and the single source of truth: run it, wait for it to exit, and read its exit code + what it printed. Never \`docker logs\` / \`docker ps\` / \`docker exec\` to peek into the SDK container — that's racy, noisy, and will break when the implementation changes.
 - **Status reporting after each command:** surface a one-line \`✅ <subcommand> succeeded\` / \`❌ <subcommand> failed (exit N)\`. Silent runs that only summarise at the end are a regression.
-- **Re-use captured logs.** If \`/tmp/avocado-install.log\` or \`/tmp/avocado-build.log\` already exists from a recent run, \`tail -200\` it rather than re-running the slow command just to capture output.
+- **Re-use captured logs.** If \`.avocado/logs/install.log\` or \`.avocado/logs/build.log\` already exists from a recent run, \`tail -200\` it rather than re-running the slow command just to capture output.
 
 ### Conventional log paths
 
 | Subcommand | Log file |
 |---|---|
-| \`avocado install\` | \`/tmp/avocado-install.log\` |
-| \`avocado build\` | \`/tmp/avocado-build.log\` |
-| \`avocado deploy\` | \`/tmp/avocado-deploy.log\` |
+| \`avocado install\` | \`.avocado/logs/install.log\` |
+| \`avocado build\` | \`.avocado/logs/build.log\` |
+| \`avocado provision\` | \`.avocado/logs/provision.log\` |
+| \`avocado deploy\` | \`.avocado/logs/deploy.log\` |
+
+The paths are relative to the project directory. Run \`mkdir -p .avocado/logs\` first. \`avocado init\` adds \`.avocado/\` to \`.gitignore\`, so the logs stay out of git.
+
+For machine-readable output, \`install\`, \`build\`, \`provision\` and \`deploy\` accept \`--output json\`. It skips the TUI and prints NDJSON events, one JSON object per line.
 
 ---
 
