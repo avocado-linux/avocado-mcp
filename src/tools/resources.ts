@@ -16,6 +16,7 @@ import * as avocadoConnect from "../resources/avocado-connect.js";
 import * as upstreamSources from "../resources/upstream-sources.js";
 import * as packageCoverage from "../resources/package-coverage.js";
 import * as containerBackend from "../resources/container-backend.js";
+import * as feedsAndLockfile from "../resources/feeds-and-lockfile.js";
 
 interface Skill {
   uri: string;
@@ -42,6 +43,7 @@ const SKILLS: Skill[] = [
   toSkill(upstreamSources),
   toSkill(packageCoverage),
   toSkill(containerBackend),
+  toSkill(feedsAndLockfile),
 ];
 
 function toSkill(mod: {
