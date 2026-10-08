@@ -14,6 +14,7 @@ import {
   streamLabel,
 } from "./feed-args.js";
 import { resolveTarget } from "../lib/target-resolver.js";
+import { isCliOutdated, MIN_CLI_VERSION } from "../lib/cli-version.js";
 import {
   getSelectableSlugs,
   filterSelectable,
@@ -320,6 +321,12 @@ export function registerDiscoveryTools(
           detail: z
             .string()
             .describe("Version output if present, or failure message."),
+          outdated: z
+            .boolean()
+            .optional()
+            .describe(
+              `True when the CLI is older than ${MIN_CLI_VERSION}. The advice from this MCP assumes ${MIN_CLI_VERSION} or later.`,
+            ),
         }),
         docker: z.object({
           ok: z.boolean(),
@@ -347,12 +354,16 @@ export function registerDiscoveryTools(
     async ({ projectDir }) => {
       const host = { arch: normalizedHostArch(), platform: osPlatform() };
       const feed = feedContextFrom({ projectDir });
-      const [cli, docker, disk, delegation] = await Promise.all([
+      const [cliCheck, docker, disk, delegation] = await Promise.all([
         checkBinary("avocado", ["--version"]),
         checkContainerEngine(host.platform),
         checkDiskGB(),
         probeHostMcp(),
       ]);
+      const cli = {
+        ...cliCheck,
+        outdated: cliCheck.ok && isCliOutdated(cliCheck.detail),
+      };
 
       // When the host MCP is delegating CLI calls, the LOCAL avocado /
       // Docker / disk checks describe an environment we don't actually
@@ -373,7 +384,7 @@ export function registerDiscoveryTools(
       }
       out += `| Check | Status | Detail |\n`;
       out += `|-------|--------|--------|\n`;
-      out += `| \`avocado\` CLI on PATH | ${cli.ok ? "✅" : "❌"} | ${cli.detail} |\n`;
+      out += `| \`avocado\` CLI on PATH | ${cli.ok ? (cli.outdated ? "⚠️" : "✅") : "❌"} | ${cli.detail} |\n`;
       out += `| Container engine | ${docker.ok ? "✅" : "❌"} | ${docker.detail} |\n`;
       out += `| Free disk (\`$HOME\`) | ${disk.ok ? "✅" : "❌"} | ${disk.freeGB.toFixed(1)} GB free (need ≥${MIN_FREE_GB}) |\n`;
 
@@ -392,6 +403,11 @@ export function registerDiscoveryTools(
         out += `- **Channel:** \`bash\`.\n`;
         out += `- **Probe of \`${HOST_MCP_URL}\`:** ${delegation.detail}. This is the normal channel on a developer workstation.\n`;
         out += `- **Use the redirect-to-file + tail + grep pattern** in \`avocado://skills/avocado-cli-execution\` so long CLI output doesn't flood context.\n`;
+      }
+
+      if (cli.outdated && !delegation.available) {
+        out += `\n## ⚠️ Upgrade the avocado CLI\n\n`;
+        out += `This CLI is older than ${MIN_CLI_VERSION}. The commands this MCP gives assume ${MIN_CLI_VERSION} or later. Older CLIs can prompt during install or need a TTY for provision. Run \`avocado upgrade\` to move to the latest release, or \`avocado upgrade --version <version>\` for a specific one.\n`;
       }
 
       out += `\n## Package feed\n\n${feed.describe()}`;
