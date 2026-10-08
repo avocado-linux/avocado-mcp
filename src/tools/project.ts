@@ -26,7 +26,7 @@ export function registerProjectTools(
     {
       title: "Scaffold a new Avocado project",
       description:
-        "Scaffold a new Avocado OS project. ALWAYS searches the reference catalog first — references are pre-built, verified, working projects that dramatically beat starting from scratch. If a reference matches the user's task, returns the `avocado init --reference` CLI command to clone it. Falls back to a minimal from-scratch starter YAML only when no reference fits, or when `forceFromScratch: true`. Pass the user's task in their own words via `task`.",
+        "Scaffold a new Avocado OS project. ALWAYS searches the reference catalog first. References are pre-built, verified, working projects that dramatically beat starting from scratch. If a reference matches the user's task, returns the `avocado init --reference` CLI command to clone it. When no reference fits, or when `forceFromScratch: true`, returns the `avocado init --target` command and the edits to make after it. Set `cliAvailable: false` only when the avocado CLI cannot be used. The tool then returns a starter YAML copied from the CLI template. Pass the user's task in their own words via `task`.",
       inputSchema: {
         target: z
           .string()
@@ -43,7 +43,19 @@ export function registerProjectTools(
           .boolean()
           .optional()
           .describe(
-            "Skip the reference search and return a blank starter YAML. Use only when the user explicitly wants a from-scratch project or no reference can serve their use case.",
+            "Skip the reference search and start from the CLI's default template. Use only when the user explicitly wants a from-scratch project or no reference can serve their use case.",
+          ),
+        board: z
+          .string()
+          .optional()
+          .describe(
+            "Board variant within the target, for modules that ship on more than one carrier board (e.g. 'mic-712-ox-16gb' on jetson-orin-nx, 'variscite-sonata' on imx8mp-var-dart). Written as `default_target_board`. It selects `avocado-bsp-{{ avocado.target.board }}`. Omit when the target has one board.",
+          ),
+        cliAvailable: z
+          .boolean()
+          .optional()
+          .describe(
+            "From-scratch path only. Defaults to true: the tool tells you to run `avocado init`. Set false only when the avocado CLI is not installed and cannot be installed. The tool then returns a starter avocado.yaml copied from the CLI template.",
           ),
         runtimeName: z
           .string()
@@ -75,6 +87,8 @@ export function registerProjectTools(
       forceFromScratch,
       runtimeName,
       extraExtensions,
+      board,
+      cliAvailable,
       ...feedArgs
     }) => {
       const feed = feedContextFrom(feedArgs);
@@ -86,6 +100,22 @@ export function registerProjectTools(
         for (const v of [feed.base.release, feed.base.channel]) {
           if (v !== undefined && !isSafeSegment(v)) {
             throw new Error(`Invalid release/channel: ${JSON.stringify(v)}`);
+          }
+        }
+        // These land in avocado.yaml and in shell commands we print.
+        if (runtimeName !== undefined && !isSafeSegment(runtimeName)) {
+          throw new Error(
+            `Invalid runtimeName: ${JSON.stringify(runtimeName)}`,
+          );
+        }
+        if (board !== undefined && !isSafeSegment(board)) {
+          throw new Error(`Invalid board: ${JSON.stringify(board)}`);
+        }
+        for (const e of extraExtensions ?? []) {
+          // YAML 1.1 (avocado-cli's parser) also breaks lines on U+0085,
+          // U+2028 and U+2029.
+          if (!e.trim() || /[\x00-\x1f\x7f-\x9f\u2028\u2029]/.test(e)) {
+            throw new Error(`Invalid extension name: ${JSON.stringify(e)}`);
           }
         }
       } catch (e) {
@@ -138,26 +168,17 @@ export function registerProjectTools(
             content: [
               {
                 type: "text",
-                text: `${renderReferenceMatch(target, task, matches)}\n\n${feed.describe()}`,
+                text: `${renderReferenceMatch(target, task, matches)}${board ? `\nAfter the scaffold, add \`default_target_board: ${board}\` below \`default_target\` in \`avocado.yaml\`.\n` : ""}\n\n${feed.describe()}`,
               },
             ],
           };
         }
       }
 
-      // From-scratch path.
-      const starterFeed = feed.base;
-      const yaml = buildStarterYaml({
-        target,
-        runtimeName,
-        extraExtensions,
-        release: starterFeed.release,
-        channel: starterFeed.channel,
-        // The parsed URL, not the raw argument: it is what was validated.
-        repoUrl: feedArgs.repoUrl?.trim() ? repoHref : undefined,
-      });
-      const validation = await validateAvocadoYaml(yaml);
-
+      // From-scratch path. `avocado init` writes the CLI's own template, so
+      // it always matches the installed CLI. The vendored copy of that
+      // template is only for a host without the CLI.
+      const repoUrl = feedArgs.repoUrl?.trim() ? repoHref : undefined;
       let out = `# init-project — \`${target}\` (from scratch)\n\n`;
       if (forceFromScratch) {
         out += `_From-scratch path requested explicitly._\n\n`;
@@ -168,14 +189,41 @@ export function registerProjectTools(
       if (archWarning) {
         out += `${archWarning}\n\n`;
       }
-      if (validation.ok) {
-        out += `✅ Generated YAML validates against the current schema (v ${validation.schemaVersion}).\n\n`;
+
+      let yaml: string | undefined;
+      if (cliAvailable === false) {
+        yaml = buildStarterYaml({
+          target,
+          runtimeName,
+          extraExtensions,
+          board,
+          release: feed.base.release,
+          channel: feed.base.channel,
+          // The parsed URL, not the raw argument: it is what was validated.
+          repoUrl,
+        });
+        const validation = await validateAvocadoYaml(yaml);
+        if (validation.ok) {
+          out += `✅ This YAML is the avocado CLI template (\`configs/default.yaml\`) and validates against the schema.\n\n`;
+        } else {
+          out += `⚠️  Generated YAML did NOT validate. Schema may have moved; please report this.\n`;
+          out += validation.errors
+            .map((e) => `- \`${e.instancePath}\`: ${e.message}`)
+            .join("\n");
+          out += `\n\n`;
+        }
+        out += `Save the YAML below as \`avocado.yaml\` at your project root, then:\n\n`;
       } else {
-        out += `⚠️  Generated YAML did NOT validate. Schema may have moved; please report this.\n`;
-        out += validation.errors
-          .map((e) => `- \`${e.instancePath}\`: ${e.message}`)
-          .join("\n");
-        out += `\n\n`;
+        out += renderInitSteps({
+          target,
+          runtimeName,
+          extraExtensions,
+          board,
+          release: feedArgs.release?.trim() || undefined,
+          channel: feedArgs.channel?.trim() || undefined,
+          repoUrl,
+        });
+        out += `Then:\n\n`;
       }
       const rt = runtimeName ?? "dev";
       out += `Save the YAML below as \`avocado.yaml\` at your project root, then:\n\n`;
@@ -192,8 +240,8 @@ export function registerProjectTools(
       out += `avocado build --no-tui > .avocado/logs/build.log 2>&1\n`;
       out += `AVOCADO_NONINTERACTIVE=1 avocado provision ${rt} --no-tui > .avocado/logs/provision.log 2>&1\n`;
       out += "```\n\n";
-      out += `${feed.describe()}\n\n`;
-      out += `## avocado.yaml\n\n\`\`\`yaml\n${yaml}\`\`\``;
+      out += `${feed.describe()}`;
+      if (yaml) out += `\n\n## avocado.yaml\n\n\`\`\`yaml\n${yaml}\`\`\``;
 
       return { content: [{ type: "text", text: out }] };
     },
@@ -204,15 +252,9 @@ export function registerProjectTools(
     {
       title: "Validate an avocado.yaml",
       description:
-        "Validate an avocado.yaml against the current JSON Schema. Returns a pass/fail plus a list of every schema violation with its path. Use this before recommending a `avocado build` to the user — it catches structural problems early.",
+        "Validate an avocado.yaml against the JSON Schema the avocado CLI ships. Returns pass/fail, every schema error with its path, and warnings. Warnings match the CLI: an unknown key is ignored (with a 'did you mean' hint), and some keys are deprecated or have no effect. Warnings do not fail validation, but fix them. Use this before recommending `avocado build` to the user. It catches structural problems early.",
       inputSchema: {
         yaml: z.string().describe("Full avocado.yaml content as a string."),
-        schemaVersion: z
-          .string()
-          .optional()
-          .describe(
-            "Optional schema git ref to validate against (e.g. 'v1.0.0'). Defaults to 'main'.",
-          ),
       },
       outputSchema: {
         ok: z.boolean(),
@@ -224,8 +266,12 @@ export function registerProjectTools(
             message: z.string(),
           }),
         ),
+        warnings: z
+          .array(z.string())
+          .describe(
+            "Keys the CLI ignores or deprecates. The CLI prints a warning for each and keeps going.",
+          ),
         schemaSource: z.string(),
-        schemaVersion: z.string(),
       },
       annotations: {
         title: "Validate an avocado.yaml",
@@ -235,9 +281,9 @@ export function registerProjectTools(
         openWorldHint: true,
       },
     },
-    async ({ yaml, schemaVersion }) => {
-      const result = await validateAvocadoYaml(yaml, schemaVersion);
-      let out = `# validate-yaml\n\n**Schema:** ${result.schemaVersion} (${result.schemaSource})\n\n`;
+    async ({ yaml }) => {
+      const result = await validateAvocadoYaml(yaml);
+      let out = `# validate-yaml\n\n**Schema:** ${result.schemaSource}\n\n`;
       if (result.ok) {
         out += `✅ Valid.\n`;
       } else {
@@ -246,13 +292,14 @@ export function registerProjectTools(
           out += `- \`${e.instancePath}\`: ${e.message}\n`;
         }
       }
+      out += renderWarnings(result.warnings);
       return {
         content: [{ type: "text", text: out }],
         structuredContent: {
           ok: result.ok,
           errors: result.errors,
+          warnings: result.warnings,
           schemaSource: result.schemaSource,
-          schemaVersion: result.schemaVersion,
         },
       };
     },
@@ -263,7 +310,7 @@ export function registerProjectTools(
     {
       title: "Add an extension to avocado.yaml",
       description:
-        "Add a new extension definition to an existing avocado.yaml. Use this when the user wants to define an app/config/library extension. Returns the modified YAML; the schema is checked before returning.",
+        "Add a new extension definition to an existing avocado.yaml. Use this when the user wants to define an app/config/library extension, or to pull an extension from a package feed, a git repository or a local path (`source`). Returns the modified YAML; the schema is checked before returning.",
       inputSchema: {
         yaml: z.string().describe("Current avocado.yaml content."),
         name: z
@@ -272,13 +319,50 @@ export function registerProjectTools(
         types: z
           .array(z.enum(["sysext", "confext"]))
           .min(1)
+          .optional()
           .describe(
-            "Extension types. 'sysext' extends /usr; 'confext' extends /etc. Most app extensions are both.",
+            "Extension types. 'sysext' extends /usr; 'confext' extends /etc. Most app extensions are both. Required for a local extension (no `source`).",
           ),
         version: z
           .string()
           .optional()
-          .describe("Version string for this extension. Defaults to '0.1.0'."),
+          .describe(
+            "Version string for a local extension. Defaults to '0.1.0'. Not used with `source`.",
+          ),
+        source: z
+          .discriminatedUnion("type", [
+            z.object({
+              type: z.literal("package"),
+              version: z.string().describe("Version requirement, e.g. '*'."),
+              package: z
+                .string()
+                .optional()
+                .describe("RPM name, when it differs from the extension name."),
+            }),
+            z.object({
+              type: z.literal("git"),
+              url: z.string().describe("Git repository URL."),
+              ref: z.string().optional().describe("Branch, tag or commit."),
+            }),
+            z.object({
+              type: z.literal("path"),
+              path: z
+                .string()
+                .describe(
+                  "Extension directory, relative to the project (or src_dir), or absolute.",
+                ),
+            }),
+          ])
+          .optional()
+          .describe(
+            "Remote source. Omit for a local extension defined in this file. A source extension gets its definition (types, packages) from that source.",
+          ),
+        dependsOn: z
+          .array(z.string())
+          .optional()
+          .describe(
+            "Extensions this one depends on (`depends_on`). Each item is a name or '<name>: <version requirement>'.",
+          ),
         packages: z
           .record(z.string(), z.string())
           .optional()
@@ -314,15 +398,24 @@ export function registerProjectTools(
       packages,
       overlay,
       enableServices,
+      source,
+      dependsOn,
     }) => {
       try {
+        if (!source && !types) {
+          throw new Error(
+            "Pass `types` for a local extension, or a `source` for a remote one.",
+          );
+        }
         const newYaml = addExtension(yaml, {
           name,
           types,
-          version: version ?? "0.1.0",
+          version: source ? version : (version ?? "0.1.0"),
           packages,
           overlay,
           enableServices,
+          source,
+          dependsOn,
         });
         const validation = await validateAvocadoYaml(newYaml);
         return {
@@ -575,6 +668,55 @@ export function registerProjectTools(
   );
 }
 
+/**
+ * The from-scratch steps when the avocado CLI is available: run `avocado init`
+ * (it has no board, runtime or feed flags), then edit the YAML it writes.
+ */
+function renderInitSteps(opts: {
+  target: string;
+  runtimeName?: string;
+  extraExtensions?: string[];
+  board?: string;
+  release?: string;
+  channel?: string;
+  repoUrl?: string;
+}): string {
+  const rt = opts.runtimeName ?? "dev";
+  let out = `## Create the project with the avocado CLI\n\n`;
+  out += `Run \`avocado init\`. It writes \`avocado.yaml\` from the template of the installed CLI, so the file always matches that CLI. Replace \`<project-dir>\` with the directory for the new project. Omit it to use the current directory.\n\n`;
+  out += "```bash\n";
+  out += `avocado init --target ${opts.target} <project-dir>\n`;
+  out += "```\n\n";
+  out += `\`avocado init\` stops if \`avocado.yaml\` already exists. Add \`--name <name>\` to create the project in \`<project-dir>/<name>/\`.\n\n`;
+
+  const edits: string[] = [];
+  if (opts.board) {
+    edits.push(
+      `Add \`default_target_board: ${opts.board}\` below \`default_target\`. The BSP extension \`avocado-bsp-{{ avocado.target.board }}\` then resolves to \`avocado-bsp-${opts.board}\`.`,
+    );
+  }
+  if (rt !== "dev") {
+    edits.push(`Rename the runtime \`runtimes.dev\` to \`runtimes.${rt}\`.`);
+  }
+  if (opts.extraExtensions && opts.extraExtensions.length > 0) {
+    edits.push(
+      `Add ${opts.extraExtensions.map((e) => `\`${e}\``).join(", ")} to \`runtimes.${rt}.extensions\`. Define each one under \`extensions:\` (use \`add-extension\`).`,
+    );
+  }
+  const distro: string[] = [];
+  if (opts.release) distro.push(`\`distro.release: ${opts.release}\``);
+  if (opts.channel) distro.push(`\`distro.channel: ${opts.channel}\``);
+  if (opts.repoUrl) distro.push(`\`distro.repo.url: ${opts.repoUrl}\``);
+  if (distro.length > 0) edits.push(`Set ${distro.join(", ")}.`);
+
+  if (edits.length > 0) {
+    out += `## Then edit avocado.yaml\n\n`;
+    out += edits.map((e, i) => `${i + 1}. ${e}`).join("\n");
+    out += `\n\nRun \`validate-yaml\` on the edited file.\n\n`;
+  }
+  return out;
+}
+
 function renderReferenceMatch(
   target: string,
   task: string | undefined,
@@ -635,6 +777,7 @@ function renderMutationResult(
   validation: {
     ok: boolean;
     errors: { instancePath: string; message: string }[];
+    warnings: string[];
   },
   prefixNote?: string,
 ): string {
@@ -649,8 +792,17 @@ function renderMutationResult(
     }
     out += `\n`;
   }
+  out += renderWarnings(validation.warnings);
   out += "```yaml\n" + newYaml + "```\n";
   out += `\n**Next:** this YAML edit added/changed packages or extensions, so \`avocado install\` IS needed before the next \`avocado build\`. \`build\` won't pick the new package set up on its own. Run \`avocado install --no-tui && avocado build --no-tui\`.\n`;
   out += `\n**Fast iteration option:** if the user's device is already running and on the network, you can push these changes without reflashing media. After install + build, run \`avocado deploy <runtime> -d <device-ip> --no-tui\` to OTA the update in seconds. The \`/build-and-deploy\` prompt automates the whole sequence. Pass \`runInstall: true\` because you know install IS needed for this edit. See \`avocado://skills/iterative-deployment\` for the full flow. **Offer this proactively.** Most users don't know it exists.\n`;
   return out;
+}
+
+/** The CLI's ignored-key warnings, as a list the model can act on. */
+function renderWarnings(warnings: string[]): string {
+  if (warnings.length === 0) return "";
+  let out = `\n⚠️  ${warnings.length} warning(s). The CLI prints these and keeps going:\n\n`;
+  for (const w of warnings) out += `- ${w}\n`;
+  return out + `\n`;
 }

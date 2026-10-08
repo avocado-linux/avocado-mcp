@@ -1,6 +1,5 @@
-import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { fetchSchema } from "../lib/schema-client.js";
+import { loadSchema } from "../lib/schema-client.js";
 
 export function registerConfigTools(server: McpServer): void {
   server.registerTool(
@@ -8,15 +7,8 @@ export function registerConfigTools(server: McpServer): void {
     {
       title: "Get the avocado.yaml JSON schema",
       description:
-        "REQUIRED: Acquire the JSON schema for Avocado OS configurations. This schema is essential for validating all Avocado configurations and must be obtained before generating any configuration files.",
-      inputSchema: {
-        version: z
-          .string()
-          .optional()
-          .describe(
-            "Git tag/version to fetch (e.g., 'v1.0.0', 'main'). If not provided, fetches the latest version from main branch",
-          ),
-      },
+        "REQUIRED: Get the JSON schema for avocado.yaml. It is the schema the avocado CLI ships, served at https://docs.peridio.com/schemas/avocado-config.json (cached for an hour, with a bundled copy as the offline fallback). Read it before you generate or edit any avocado.yaml.",
+      inputSchema: {},
       annotations: {
         title: "Get the avocado.yaml JSON schema",
         readOnlyHint: true,
@@ -25,32 +17,16 @@ export function registerConfigTools(server: McpServer): void {
         openWorldHint: true,
       },
     },
-    async ({ version }) => {
-      try {
-        const {
-          schema,
-          version: schemaVersion,
-          source,
-        } = await fetchSchema(version);
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: `# Avocado OS Configuration Schema\n\n**Version:** ${schemaVersion}\n**Source:** ${source}\n\nThis schema is **REQUIRED** for validating Avocado OS configurations. Use it to ensure your YAML configurations (avocado.yaml) meet all structural and constraint requirements.\n\n## Key Validation Points\n\n- **Required Properties:** Ensure all required top-level properties are present\n- **Target Validation:** Target names must match schema enum values\n- **Extension Types:** Must be "sysext" or "confext"\n- **Dependencies:** Use exact package names verified through query-repos\n- **Data Types:** All values must match schema type definitions\n\n## Schema Content\n\n\`\`\`json\n${JSON.stringify(schema, null, 2)}\n\`\`\``,
-            },
-          ],
-        };
-      } catch (error) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `# Schema Fetch Error\n\n❌ **Failed to fetch schema:** ${error}\n\n## Troubleshooting\n\n1. **Check version:** Ensure the version/tag exists in the repository\n2. **Try main branch:** Use no version parameter to fetch from main\n3. **Manual download:** Visit https://github.com/avocado-linux/avocado-config to browse available schema files\n\n## Available Actions\n\n- Retry with no version parameter for latest\n- Check GitHub repository for available tags\n- Verify network connectivity`,
-            },
-          ],
-        };
-      }
+    async () => {
+      const { schema, source } = await loadSchema();
+      return {
+        content: [
+          {
+            type: "text",
+            text: `# Avocado OS Configuration Schema\n\n**Source:** ${source}\n\nThis is the schema the avocado CLI uses. Use it to write \`avocado.yaml\` and check it with \`validate-yaml\`.\n\n## How the CLI reads it\n\n- **Unknown keys:** the CLI ignores a key the schema does not describe and prints a warning. It does not fail.\n- **\`x-avocado-warning\`:** the key parses but has no effect. The CLI prints this text as a warning.\n- **\`deprecated\`:** an old key. Do not write it in new YAML.\n- **Targets:** \`definitions.target\` lists the targets Avocado OS ships, but any string is accepted. Use \`list-targets\` for the targets in the feed.\n- **Templates:** values such as \`{{ avocado.target.board }}\` and \`{{ config.distro.release }}\` are resolved by the CLI.\n- **Packages:** the schema does not check package names. Verify them with \`search-packages\`.\n\n## Schema Content\n\n\`\`\`json\n${JSON.stringify(schema, null, 2)}\n\`\`\``,
+          },
+        ],
+      };
     },
   );
 }

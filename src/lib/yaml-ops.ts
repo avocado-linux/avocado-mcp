@@ -1,193 +1,137 @@
 /**
  * avocado.yaml helpers: parse / validate / safe-mutate.
  *
- * Validation uses Ajv against the live JSON Schema fetched from
- * github.com/avocado-linux/avocado-config. Mutations preserve formatting and
- * comments by using the `yaml` package's Document API rather than parse +
- * stringify.
+ * Validation uses Ajv against the CLI's JSON Schema (see schema-client.ts),
+ * and reports keys the CLI ignores as warnings (see config-lint.ts).
+ * Mutations preserve formatting and comments by using the `yaml` package's
+ * Document API rather than parse + stringify.
  */
 
-import { parseDocument, isMap, isSeq, YAMLMap, YAMLSeq, Scalar } from "yaml";
-import { createRequire } from "module";
-import { fetchSchema } from "./schema-client.js";
-
-// Ajv 8 / ajv-formats are CJS modules; reach for them via createRequire to
-// avoid TypeScript Node16-ESM default-interop awkwardness.
-const cjsRequire = createRequire(import.meta.url);
-type AjvErrorObject = {
-  instancePath: string;
-  message?: string;
-  params?: unknown;
-};
-type AjvCtor = new (opts?: unknown) => {
-  compile: (schema: object) => ((data: unknown) => boolean) & {
-    errors?: AjvErrorObject[] | null;
-  };
-};
-const Ajv = cjsRequire("ajv/dist/2020").default as AjvCtor;
-const addFormats = cjsRequire("ajv-formats").default as (
-  ajv: InstanceType<AjvCtor>,
-) => InstanceType<AjvCtor>;
+import { readFileSync } from "fs";
+import {
+  parseDocument,
+  isMap,
+  isSeq,
+  Pair,
+  YAMLMap,
+  YAMLSeq,
+  Scalar,
+} from "yaml";
+import { loadSchema } from "./schema-client.js";
+import { ignoredKeys } from "./config-lint.js";
 
 export interface YamlValidationResult {
+  /** True when there are no errors. Warnings do not fail validation. */
   ok: boolean;
   errors: { instancePath: string; message: string }[];
+  /** Keys the CLI ignores or deprecates. The CLI warns and keeps going. */
+  warnings: string[];
   schemaSource: string;
-  schemaVersion: string;
 }
 
 export async function validateAvocadoYaml(
   yamlText: string,
-  schemaVersion?: string,
 ): Promise<YamlValidationResult> {
-  const { schema, version, source } = await fetchSchema(schemaVersion);
+  const { schema, source, validate } = await loadSchema();
 
+  const fail = (message: string): YamlValidationResult => ({
+    ok: false,
+    errors: [{ instancePath: "", message: `YAML parse error: ${message}` }],
+    warnings: [],
+    schemaSource: source,
+  });
   let parsed: unknown;
   try {
     const doc = parseDocument(yamlText);
-    if (doc.errors.length > 0) {
-      return {
-        ok: false,
-        errors: doc.errors.map((e) => ({
-          instancePath: "",
-          message: `YAML parse error: ${e.message}`,
-        })),
-        schemaSource: source,
-        schemaVersion: version,
-      };
-    }
+    if (doc.errors.length > 0) return fail(doc.errors[0].message);
     parsed = doc.toJS();
   } catch (e) {
-    return {
-      ok: false,
-      errors: [
-        {
-          instancePath: "",
-          message: `YAML parse error: ${(e as Error).message}`,
-        },
-      ],
-      schemaSource: source,
-      schemaVersion: version,
-    };
+    return fail((e as Error).message);
   }
 
-  const ajv = new Ajv({ allErrors: true, strict: false });
-  addFormats(ajv);
-  const validate = ajv.compile(schema as object);
   const ok = validate(parsed);
   const errors: { instancePath: string; message: string }[] = ok
     ? []
-    : (validate.errors ?? []).map((e) => ({
-        instancePath: e.instancePath || "(root)",
-        message: `${e.message ?? "(no message)"}${e.params ? " — " + JSON.stringify(e.params) : ""}`,
-      }));
+    : (validate.errors ?? []).map((e) => {
+        // The schema uses `false` for keys that exclude each other, such as
+        // kernel `cmdline` and `cmdline_extra`.
+        const message =
+          e.keyword === "false schema"
+            ? "must not be set together with another key in this block"
+            : (e.message ?? "(no message)");
+        const params =
+          e.params && Object.keys(e.params).length > 0
+            ? `: ${JSON.stringify(e.params)}`
+            : "";
+        return {
+          instancePath: e.instancePath || "(root)",
+          message: message + params,
+        };
+      });
 
-  return { ok: !!ok, errors, schemaSource: source, schemaVersion: version };
+  return {
+    ok: !!ok,
+    errors,
+    warnings: ignoredKeys(schema, parsed),
+    schemaSource: source,
+  };
 }
 
+const DEFAULT_TEMPLATE = readFileSync(
+  new URL("./schema/default.yaml", import.meta.url),
+  "utf8",
+);
+
 /**
- * Generate a starter avocado.yaml for a given target.
- * Mirrors the avocado-cli's default template.
+ * Starter avocado.yaml for when the avocado CLI is not available. It is the
+ * CLI's own `configs/default.yaml` (vendored next to the schema), with the
+ * caller's values set through the Document API so every value is quoted
+ * correctly. When the CLI is available, `avocado init` is the better path.
  */
 export function buildStarterYaml(opts: {
   target: string;
   runtimeName?: string;
   extraExtensions?: string[];
-  /** Feed to pin the starter to. Defaults to 2024/edge. */
+  /** Feed values. The template default is 2024/edge. */
   release?: string;
   channel?: string;
   repoUrl?: string;
+  /** Written as `default_target_board`. */
+  board?: string;
 }): string {
-  const target = opts.target;
-  const runtime = opts.runtimeName ?? "dev";
-  const extraExt = opts.extraExtensions ?? [];
-  const lines: string[] = [];
-
-  lines.push(`cli_requirement: ">=0.26.0"`);
-  lines.push(``);
-  lines.push(`default_target: ${target}`);
-  lines.push(``);
-  lines.push(`supported_targets:`);
-  lines.push(`  - ${target}`);
-  lines.push(``);
-  lines.push(`distro:`);
-  lines.push(`  release: ${opts.release ?? "2024"}`);
-  lines.push(`  channel: ${opts.channel ?? "edge"}`);
-  if (opts.repoUrl) {
-    lines.push(`  repo:`);
-    lines.push(`    url: ${opts.repoUrl}`);
+  // `- {target}` would parse as a flow map, so substitute a plain word first
+  // and then set the real value as data.
+  const doc = parseDocument(DEFAULT_TEMPLATE.replaceAll("{target}", "TARGET"));
+  doc.set("default_target", opts.target);
+  doc.setIn(["supported_targets", 0], opts.target);
+  if (opts.board) {
+    const root = doc.contents as YAMLMap;
+    const at = root.items.findIndex(
+      (p) => (p.key as Scalar).value === "default_target",
+    );
+    root.items.splice(
+      at + 1,
+      0,
+      doc.createPair("default_target_board", opts.board) as Pair,
+    );
   }
-  lines.push(``);
-  lines.push(`runtimes:`);
-  lines.push(`  ${runtime}:`);
-  lines.push(`    extensions:`);
-  lines.push(`      - avocado-ext-dev`);
-  lines.push(`      - avocado-ext-sshd-dev`);
-  // BSP extension uses Jinja templating so a single avocado.yaml works for
-  // every target in `supported_targets`. `{{ avocado.target }}` resolves at
-  // build time to the active target slug (e.g. `avocado-bsp-raspberrypi5`).
-  lines.push(`      - avocado-bsp-{{ avocado.target }}`);
-  lines.push(`      - config`);
-  lines.push(`      - app`);
-  for (const e of extraExt) lines.push(`      - ${e}`);
-  lines.push(`    packages:`);
-  lines.push(`      avocado-runtime: "*"`);
-  lines.push(``);
-  lines.push(`extensions:`);
-  lines.push(`  avocado-ext-dev:`);
-  lines.push(`    source:`);
-  lines.push(`      type: package`);
-  lines.push(`      version: "*"`);
-  lines.push(``);
-  lines.push(`  avocado-ext-sshd-dev:`);
-  lines.push(`    source:`);
-  lines.push(`      type: package`);
-  lines.push(`      version: "*"`);
-  lines.push(``);
-  // Same templating as in the runtime extension list — the extension key
-  // must match the entry above.
-  lines.push(`  avocado-bsp-{{ avocado.target }}:`);
-  lines.push(`    source:`);
-  lines.push(`      type: package`);
-  lines.push(`      version: "*"`);
-  lines.push(``);
-  lines.push(
-    `  # Your application extension — drop binaries, configs, services here.`,
-  );
-  lines.push(`  app:`);
-  lines.push(`    types:`);
-  lines.push(`      - sysext`);
-  lines.push(`      - confext`);
-  lines.push(`    version: "0.1.0"`);
-  lines.push(`    # packages:`);
-  lines.push(`    #   curl: "*"`);
-  lines.push(``);
-  lines.push(`  # Configuration extension — passwords, users, network config.`);
-  lines.push(`  config:`);
-  lines.push(`    types:`);
-  lines.push(`      - confext`);
-  lines.push(`    version: "0.1.0"`);
-  lines.push(
-    `    # NOT FOR PRODUCTION: empty root password for dev convenience.`,
-  );
-  lines.push(`    users:`);
-  lines.push(`      root:`);
-  lines.push(`        password: ""`);
-  lines.push(``);
-  lines.push(`sdk:`);
-  lines.push(
-    `  image: "docker.io/avocadolinux/sdk:{{ config.distro.release }}-{{ config.distro.channel }}"`,
-  );
-  lines.push(`  container_args:`);
-  lines.push(`    - --privileged`);
-  lines.push(`    - --network=host`);
-  lines.push(`    - -v /dev:/dev`);
-  lines.push(`    - -v /sys:/sys`);
-  lines.push(`  packages:`);
-  lines.push(`    avocado-sdk-toolchain: "*"`);
-  lines.push(``);
 
-  return lines.join("\n");
+  if (opts.release) {
+    doc.setIn(
+      ["distro", "release"],
+      /^\d+$/.test(opts.release) ? Number(opts.release) : opts.release,
+    );
+  }
+  if (opts.channel) doc.setIn(["distro", "channel"], opts.channel);
+  if (opts.repoUrl) doc.setIn(["distro", "repo", "url"], opts.repoUrl);
+
+  const runtime = opts.runtimeName ?? "dev";
+  const runtimes = doc.get("runtimes") as YAMLMap;
+  (runtimes.items[0].key as Scalar).value = runtime;
+  for (const e of opts.extraExtensions ?? []) {
+    doc.addIn(["runtimes", runtime, "extensions"], e);
+  }
+  return doc.toString();
 }
 
 /**
@@ -208,6 +152,12 @@ function parseOrThrow(yamlText: string): ReturnType<typeof parseDocument> {
   return doc;
 }
 
+/** The `source:` forms of the schema's `extensionSource`. */
+export type ExtensionSource =
+  | { type: "package"; version: string; package?: string }
+  | { type: "git"; url: string; ref?: string }
+  | { type: "path"; path: string };
+
 /**
  * Add a new extension definition to an existing avocado.yaml. Preserves
  * existing formatting; appends the new entry under `extensions:`.
@@ -221,6 +171,10 @@ export function addExtension(
     packages?: Record<string, string>;
     overlay?: string;
     enableServices?: string[];
+    /** Extensions this one depends on (`depends_on`). */
+    dependsOn?: string[];
+    /** Remote source. Without it the extension is local to this file. */
+    source?: ExtensionSource;
   },
 ): string {
   const doc = parseOrThrow(yamlText);
@@ -237,6 +191,7 @@ export function addExtension(
   }
 
   const ext: Record<string, unknown> = {};
+  if (opts.source) ext.source = opts.source;
   if (opts.types && opts.types.length > 0) ext.types = opts.types;
   if (opts.version) ext.version = opts.version;
   if (opts.packages && Object.keys(opts.packages).length > 0)
@@ -244,6 +199,8 @@ export function addExtension(
   if (opts.overlay) ext.overlay = opts.overlay;
   if (opts.enableServices && opts.enableServices.length > 0)
     ext.enable_services = opts.enableServices;
+  if (opts.dependsOn && opts.dependsOn.length > 0)
+    ext.depends_on = opts.dependsOn;
 
   extMap.set(opts.name, doc.createNode(ext));
   return doc.toString();
