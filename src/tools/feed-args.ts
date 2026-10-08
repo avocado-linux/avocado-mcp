@@ -12,7 +12,7 @@ export const feedArgsShape = {
     .string()
     .optional()
     .describe(
-      "Absolute path to the Avocado project directory (or its avocado.yaml). **Pass this whenever you're working in a project** — the tool then reads `distro.release` / `distro.channel` / `distro.repo.*` from avocado.yaml, honours AVOCADO_* feed env vars, and applies the lock file's snapshot pin, so results match exactly what `avocado install` will resolve. Omit only for project-less questions (defaults to repo.avocadolinux.org 2024/edge).",
+      "Absolute path to the Avocado project directory (or its avocado.yaml). **Pass this whenever you're working in a project.** The tool then reads `distro.release`, `distro.channel`, `distro.repo`, `repos:` and `distro.feeds` from avocado.yaml, honours AVOCADO_* feed env vars, and applies the snapshot pin from avocado.lock, so results match what `avocado install` resolves. Omit only for project-less questions (defaults to repo.avocadolinux.org 2024/edge).",
     ),
   release: z
     .string()
@@ -94,7 +94,50 @@ export const feedSummarySchema = z
       .record(z.string())
       .describe("Per-target lock-file snapshot pins that were applied."),
     notes: z.array(z.string()),
+    feeds: z
+      .array(
+        z.object({
+          target: z.string(),
+          name: z.string(),
+          kind: z.enum(["distro", "url", "path", "org"]),
+          priority: z.number().int(),
+          location: z
+            .string()
+            .describe("Redacted URL, the path as written, or `org:<org>`."),
+          stages: z.array(z.string()).optional(),
+          status: z.enum(["queried", "not-checked", "excluded"]),
+          reason: z.string().optional(),
+        }),
+      )
+      .optional()
+      .describe(
+        "The project's feed set per target from `repos:` and `distro.feeds`, in dnf priority order. Present only when the project declares named feeds.",
+      ),
   })
   .describe(
     "The effective package feed queried, and where each value came from.",
   );
+
+export const notCheckedSchema = z
+  .array(
+    z.object({
+      target: z.string(),
+      feed: z.string(),
+      reason: z.string(),
+    }),
+  )
+  .describe(
+    "Enabled feeds the MCP could not read (private `org:` feeds, auth failures, unresolved templates). A package missing from the results may still be in one of these.",
+  );
+
+/** Markdown block for feeds the lookup skipped. Empty when there are none. */
+export function renderNotChecked(
+  list: { target: string; feed: string; reason: string }[],
+): string {
+  if (list.length === 0) return "";
+  let out = `\n**Not checked** (a package missing here may be in these feeds):\n`;
+  for (const n of list) {
+    out += `- \`${n.feed}\` for \`${n.target}\`: ${n.reason}\n`;
+  }
+  return out;
+}
