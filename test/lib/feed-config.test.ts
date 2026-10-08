@@ -331,3 +331,298 @@ test("RepoClient fetches targets.json from the head and repos from the snapshot"
     server.close();
   }
 });
+
+// ── avocado.lock and named feeds (repos: / distro.feeds) ───────────────
+
+function project(yaml: string, files: Record<string, string> = {}): string {
+  const dir = mkdtempSync(join(tmpdir(), "feedproj-"));
+  writeFileSync(join(dir, "avocado.yaml"), yaml);
+  for (const [rel, body] of Object.entries(files)) {
+    mkdirSync(join(dir, rel, ".."), { recursive: true });
+    writeFileSync(join(dir, rel), body);
+  }
+  return dir;
+}
+
+const pinLock = (snapshot: string) =>
+  JSON.stringify({
+    version: 8,
+    targets: {
+      qemuarm64: {
+        "repo-snapshot": { release: "2026", channel: "edge", snapshot },
+      },
+    },
+  });
+
+test("avocado.lock wins over the legacy .avocado/lock.json", () => {
+  const dir = project("distro:\n  release: 2026\n  channel: edge\n", {
+    "avocado.lock": pinLock("new"),
+    ".avocado/lock.json": pinLock("old"),
+  });
+  const ctx = FeedContext.load({ projectDir: dir, env: {} });
+  assert.equal(
+    ctx.forTarget("qemuarm64").releasever,
+    "2026/edge/snapshots/new",
+  );
+});
+
+test("falls back to the legacy .avocado/lock.json", () => {
+  const dir = project("distro:\n  release: 2026\n  channel: edge\n", {
+    ".avocado/lock.json": pinLock("old"),
+  });
+  const ctx = FeedContext.load({ projectDir: dir, env: {} });
+  assert.equal(
+    ctx.forTarget("qemuarm64").releasever,
+    "2026/edge/snapshots/old",
+  );
+});
+
+test("a string distro.repo names the repos: entry used as the distro feed", () => {
+  const f = resolveFeed({
+    env: {},
+    target: "qemuarm64",
+    config: cfg(
+      "distro:\n  release: 2026\n  channel: edge\n  repo: mirror\nrepos:\n  mirror:\n    url: https://mirror.example.com\n    tls_verify: false\n",
+    ),
+  });
+  assert.equal(f.baseUrl, "https://mirror.example.com");
+  assert.equal(f.sources.repoUrl, "avocado.yaml repos.mirror.url");
+  assert.equal(f.name, "mirror");
+  assert.equal(f.tls?.insecure, true);
+  assert.deepEqual(
+    f.feeds?.map((e) => [e.name, e.kind]),
+    [["mirror", "distro"]],
+  );
+});
+
+test("repos.avocado is the distro feed when distro.repo is absent", () => {
+  const f = resolveFeed({
+    env: {},
+    config: cfg(
+      "distro:\n  release: 2026\n  channel: edge\nrepos:\n  avocado:\n    url: https://m.example.com\n",
+    ),
+  });
+  assert.equal(f.baseUrl, "https://m.example.com");
+});
+
+test("distro.feeds enables and orders repos:; unlisted entries stay off", () => {
+  const f = resolveFeed({
+    env: {},
+    target: "raspberrypi5",
+    config: cfg(`
+distro:
+  release: 2026
+  channel: edge
+  feeds: [first, avocado, second]
+repos:
+  first:
+    url: https://first.example.com/$releasever/target/$target
+  second:
+    url: https://second.example.com/repo
+  unlisted:
+    url: https://unlisted.example.com/repo
+`),
+  });
+  assert.deepEqual(
+    f.feeds?.map((e) => [e.name, e.priority]),
+    [
+      ["first", 10],
+      ["avocado", 20],
+      ["second", 30],
+    ],
+  );
+  assert.equal(f.priority, 20);
+  assert.deepEqual(
+    f.extraFeeds?.map((x) => x.url),
+    [
+      "https://first.example.com/2026/edge/target/raspberrypi5",
+      "https://second.example.com/repo",
+    ],
+  );
+});
+
+test("stages: and targets: keep a feed out of target package lookups", () => {
+  const f = resolveFeed({
+    env: {},
+    target: "qemuarm64",
+    config: cfg(`
+distro:
+  release: 2026
+  channel: edge
+  feeds: [sdkonly, extonly, pi]
+repos:
+  sdkonly:
+    url: https://a.example.com/r
+    stages: [sdk]
+  extonly:
+    url: https://b.example.com/r
+    stages: [ext]
+  pi:
+    url: https://c.example.com/r
+    targets: [raspberrypi5]
+`),
+  });
+  const status = Object.fromEntries(
+    (f.feeds ?? []).map((e) => [e.name, e.status]),
+  );
+  assert.deepEqual(status, {
+    avocado: "queried",
+    sdkonly: "excluded",
+    extonly: "queried",
+    pi: "excluded",
+  });
+  assert.deepEqual(
+    f.extraFeeds?.map((x) => x.name),
+    ["extonly"],
+  );
+  assert.deepEqual(f.notChecked, []);
+});
+
+test("an org: feed is reported as not checked, never fetched", () => {
+  const f = resolveFeed({
+    env: {},
+    target: "qemuarm64",
+    config: cfg(
+      "distro:\n  release: 2026\n  channel: edge\n  feeds: [acme]\nrepos:\n  acme:\n    org: acme\n",
+    ),
+  });
+  assert.equal(f.extraFeeds?.length, 0);
+  assert.equal(f.notChecked?.[0]?.feed, "acme");
+  assert.match(f.notChecked?.[0]?.reason ?? "", /avocado login/);
+  assert.equal(f.feeds?.[1]?.location, "org:acme");
+});
+
+test("an unset env var in a feed url is not checked, unless the lock recorded the url", () => {
+  const config = cfg(
+    "distro:\n  release: 2026\n  channel: edge\n  feeds: [m]\nrepos:\n  m:\n    url: '{{ env.MIRROR }}/r'\n",
+  );
+  const f = resolveFeed({ env: {}, target: "qemuarm64", config });
+  assert.match(f.notChecked?.[0]?.reason ?? "", /env\.MIRROR/);
+  const g = resolveFeed({
+    env: {},
+    target: "qemuarm64",
+    config,
+    lock: {
+      targets: {
+        qemuarm64: {
+          feeds: [{ name: "m", position: 20, url: "https://locked.example/r" }],
+        },
+      },
+    },
+  });
+  assert.equal(g.extraFeeds?.[0]?.url, "https://locked.example/r");
+  const h = resolveFeed({
+    env: { MIRROR: "https://env.example" },
+    target: "qemuarm64",
+    config,
+  });
+  assert.equal(h.extraFeeds?.[0]?.url, "https://env.example/r");
+});
+
+test("withStream drops the named feeds (they don't follow the stream)", () => {
+  const dir = project(
+    "distro:\n  release: 2026\n  channel: edge\n  feeds: [x]\nrepos:\n  x:\n    url: https://x.example/r\n",
+  );
+  const ctx = FeedContext.load({ projectDir: dir, env: {} });
+  assert.equal(ctx.forTarget("qemuarm64").extraFeeds?.length, 1);
+  assert.equal(
+    ctx.withStream("2024", "edge").forTarget("qemuarm64").extraFeeds,
+    undefined,
+  );
+});
+
+test("named feeds: search reports the matching feed, auth failures and credentials stay out of output", async () => {
+  const pkg = (name: string) =>
+    gzipSync(
+      `<metadata><package type="rpm"><name>${name}</name><arch>aarch64</arch><version epoch="0" ver="1.0" rel="r0"/><summary>s</summary><description>d</description><location href="${name}.rpm"/></package></metadata>`,
+    );
+  const repomd = `<repomd><data type="primary"><location href="repodata/p-primary.xml.gz"/></data></repomd>`;
+  const auths: (string | undefined)[] = [];
+  const server = createServer((req, res) => {
+    const u = req.url ?? "";
+    if (u === "/distro/2026/edge/targets.json") {
+      return res.end(JSON.stringify({ qemuarm64: ["target/qemuarm64"] }));
+    }
+    if (u.startsWith("/distro/2026/edge/target/qemuarm64/repodata/")) {
+      return res.end(u.endsWith("repomd.xml") ? repomd : pkg("distro-pkg"));
+    }
+    if (u.startsWith("/vendor/qemuarm64/repodata/")) {
+      auths.push(req.headers.authorization);
+      return res.end(u.endsWith("repomd.xml") ? repomd : pkg("vendor-pkg"));
+    }
+    if (u.startsWith("/denied/")) {
+      res.statusCode = 401;
+      return res.end();
+    }
+    res.statusCode = 404;
+    res.end();
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  try {
+    const port = (server.address() as AddressInfo).port;
+    const base = `http://127.0.0.1:${port}`;
+    const dir = project(
+      `
+distro:
+  release: 2026
+  channel: edge
+  repo:
+    url: ${base}/distro
+  feeds: [local, avocado, vendor, denied, acme]
+repos:
+  vendor:
+    url: ${base}/vendor/$target
+    username: robot
+    password: "{{ env.VENDOR_TOKEN }}"
+  denied:
+    url: ${base}/denied
+  local:
+    path: rpms
+  acme:
+    org: acme
+`,
+      {
+        "rpms/repodata/repomd.xml": repomd,
+      },
+    );
+    writeFileSync(
+      join(dir, "rpms", "repodata", "p-primary.xml.gz"),
+      pkg("local-pkg"),
+    );
+    const env = { VENDOR_TOKEN: "s3cret-token" };
+    const ctx = FeedContext.load({ projectDir: dir, env });
+    const client = new RepoClient();
+    const r = await client.searchPackages(["qemuarm64"], "pkg", 10, (t) =>
+      ctx.forTarget(t),
+    );
+    assert.deepEqual(r.errors, []);
+    const byName = Object.fromEntries(r.results.map((p) => [p.name, p.feed]));
+    assert.deepEqual(byName, {
+      "distro-pkg": "avocado",
+      "vendor-pkg": "vendor",
+      "local-pkg": "local",
+    });
+    assert.deepEqual(r.notChecked.map((n) => n.feed).sort(), [
+      "acme",
+      "denied",
+    ]);
+    assert.match(
+      r.notChecked.find((n) => n.feed === "denied")?.reason ?? "",
+      /401/,
+    );
+    // Basic auth reached the feed...
+    assert.equal(
+      auths[0],
+      `Basic ${Buffer.from("robot:s3cret-token").toString("base64")}`,
+    );
+    // ...but never any tool-facing text.
+    const shown = JSON.stringify([
+      r,
+      ctx.describe(["qemuarm64"]),
+      ctx.structured(["qemuarm64"]),
+    ]);
+    assert.doesNotMatch(shown, /s3cret-token|robot/);
+  } finally {
+    server.close();
+  }
+});
