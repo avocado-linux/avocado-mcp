@@ -54,8 +54,8 @@ Requires Node ≥20. `npx` will clone the repo on first run, install dependencie
 | `get-reference`              | Full project bundle: file tree, `avocado.yaml`, README, overlay layout, build hooks  |
 | `get-reference-file`         | Read a single file from a reference (app source, overlay configs, build scripts)     |
 | `get-config-schema`          | Fetch the JSON Schema for `avocado.yaml`                                             |
-| `init-project`               | Generate a starter `avocado.yaml` for a target (validated against schema)            |
-| `validate-yaml`              | Validate an `avocado.yaml` against the current schema                                |
+| `init-project`               | Pick a reference, or give the `avocado init` command and the edits for a new project |
+| `validate-yaml`              | Validate an `avocado.yaml` against the CLI schema; ignored keys come back as warnings |
 | `add-extension`              | Add a new extension definition to existing YAML                                      |
 | `add-runtime`                | Add a new runtime (named composition of extensions) to existing YAML                 |
 | `add-package-to-extension`   | Add a verified package to an extension's packages map                                |
@@ -207,7 +207,7 @@ The server reads from public HTTPS endpoints only:
 - **`github.com/avocado-linux/references`** — full source of every reference project. Used by `get-reference` and `get-reference-file` (fetched via `raw.githubusercontent.com` + GitHub trees API).
 - **`github.com/peridio/docs`** — the Docusaurus source for `docs.peridio.com`. Used by `search-docs` and `get-doc`. Trees API for the manifest (cached 1 h), `raw.githubusercontent.com` for content (cached on disk by blob SHA, no TTL — content-addressable).
 
-The `avocado.yaml` JSON Schema is bundled with the server — no network call for `get-config-schema` / `validate-yaml`.
+The `avocado.yaml` JSON Schema comes from `https://docs.peridio.com/schemas/avocado-config.json` (cached for 1 h in memory and on disk). If the fetch fails, the server uses its copy of `avocado-cli/schemas/avocado-config.json`. Set `AVOCADO_MCP_SCHEMA_OFFLINE=1` to always use that copy. CI fails when the copy differs from avocado-cli `main`. Run `npm run sync-schema` to refresh it.
 
 Caches under `~/.cache/avocado-mcp/` (override with `$AVOCADO_MCP_CACHE_DIR` or `$XDG_CACHE_HOME`). Set `GITHUB_TOKEN` for higher GitHub API rate limits if you'll be using the references / docs tools heavily.
 

@@ -180,7 +180,7 @@ gh api orgs/avocado-linux/repos --paginate --jq '.[] | select(.name | startswith
 |---|---|
 | [\`avocado-os\`](https://github.com/avocado-linux/avocado-os) | The composed Avocado OS extension repo. Mostly metadata. |
 | [\`vendor-openembedded-core\`](https://github.com/avocado-linux/vendor-openembedded-core) | Vendor fork of OpenEmbedded-core, used in the internal build pipeline. **Same read-only guardrail as \`meta-avocado\` and \`bsp-*\` — NOT a layer users fork.** Rare; for tracing upstream Yocto class behavior. |
-| [\`avocado-config\`](https://github.com/avocado-linux/avocado-config) | **TOML config schema only — NOT used by this MCP.** The MCP bundles its own YAML schema. Ignore unless you're investigating the TOML config format specifically. |
+| [\`avocado-config\`](https://github.com/avocado-linux/avocado-config) | **Old TOML config schema. NOT used by this MCP.** The \`avocado.yaml\` schema now ships with avocado-cli (\`schemas/avocado-config.json\`). Ignore this repo. |
 
 ## Anti-patterns
 
