@@ -12,6 +12,8 @@ import {
   feedArgsShape,
   feedContextFrom,
   feedSummarySchema,
+  notCheckedSchema,
+  renderNotChecked,
   streamLabel,
 } from "./feed-args.js";
 import { resolveTarget } from "../lib/target-resolver.js";
@@ -87,7 +89,7 @@ export function registerPackageTools(
     {
       title: "Describe one Avocado package",
       description:
-        "Show detail for a single package by exact name across one or more targets: version, arch, summary, description, and which repo provides it. Use this to confirm a package exists before referencing it in avocado.yaml, OR to answer 'does package X exist for target Y?' as a standalone question. Pass `projectDir` when working in a project so the lookup uses the project's configured feed (release / channel / repo URL / snapshot pin); without it, the default repo.avocadolinux.org 2024/edge feed is used.",
+        "Show detail for a single package by exact name across one or more targets: version, arch, summary, description, and which feed and repo provide it. Use this to confirm a package exists before referencing it in avocado.yaml, OR to answer 'does package X exist for target Y?' as a standalone question. Pass `projectDir` when working in a project so the lookup uses the project's configured feeds (release, channel, repo URL, snapshot pin, and `repos:` feeds enabled in `distro.feeds`). Private `org:` feeds are reported as not checked. Without it, the default repo.avocadolinux.org 2024/edge feed is used.",
       inputSchema: {
         targets: z
           .array(z.string())
@@ -101,6 +103,7 @@ export function registerPackageTools(
         found: z.boolean(),
         results: z.array(
           z.object({
+            feed: z.string().optional(),
             repo: z.string(),
             version: z.string(),
             release: z.string().optional(),
@@ -113,6 +116,7 @@ export function registerPackageTools(
           .array(z.string())
           .optional()
           .describe("If no exact match, top-N near package names."),
+        notChecked: notCheckedSchema.optional(),
         feed: feedSummarySchema.optional(),
       },
       annotations: {
@@ -145,7 +149,7 @@ export function registerPackageTools(
         };
       }
       try {
-        const { results } = await repoClient.searchPackages(
+        const { results, notChecked } = await repoClient.searchPackages(
           targets,
           name,
           200,
@@ -158,11 +162,11 @@ export function registerPackageTools(
             content: [
               {
                 type: "text",
-                text: `# describe-package\n\n${feed.describe(targets)}\nNo exact match for \`${name}\` in ${targets.map((t) => `\`${t}\``).join(", ")}.${
+                text: `# describe-package\n\n${feed.describe(targets)}\nNo exact match for \`${name}\` in ${targets.map((t) => `\`${t}\``).join(", ")}${notChecked.length ? " in the feeds checked" : ""}.${
                   near.length
                     ? `\n\nNearest matches: ${near.map((r) => `\`${r.name}\``).join(", ")}.`
                     : ""
-                }`,
+                }\n${renderNotChecked(notChecked)}`,
               },
             ],
             structuredContent: {
@@ -170,6 +174,7 @@ export function registerPackageTools(
               found: false,
               results: [],
               nearest: near.map((r) => r.name),
+              notChecked,
               feed: feedInfo,
             },
           };
@@ -177,6 +182,7 @@ export function registerPackageTools(
         let out = `# describe-package — \`${name}\`\n\n${feed.describe(targets)}\n`;
         for (const p of exact) {
           out += `## \`${p.repo}\`\n\n`;
+          if (p.feed) out += `- **Feed:** \`${p.feed}\`\n`;
           out += `- **Version:** ${p.version}${p.release ? `-${p.release}` : ""}\n`;
           out += `- **Arch:** \`${p.arch}\`\n`;
           out += `- **Summary:** ${p.summary || "_(none)_"}\n`;
@@ -191,6 +197,7 @@ export function registerPackageTools(
             name,
             found: true,
             results: exact.map((p) => ({
+              feed: p.feed,
               repo: p.repo,
               version: p.version,
               release: p.release,
@@ -226,6 +233,7 @@ export function registerPackageTools(
     version: z.string(),
     release: z.string(),
     arch: z.string(),
+    feed: z.string().optional().describe("Name of the feed that matched."),
     repo: z.string(),
     summary: z.string(),
   });
@@ -235,7 +243,7 @@ export function registerPackageTools(
     {
       title: "Search Avocado package feed",
       description:
-        "Search the live Avocado OS package feed for one or more targets. **This is the first move when the user wants to add ANY library / dependency / system package.** Always check the feed before suggesting `pip install`, `npm install`, `cargo add`, `apt install`, or vendoring — feed packages are version-tracked, dependency-resolved, security-updatable via OTA, and don't bloat the extension image. Matches package name and summary (case-insensitive), ranked by where the hit lands — same default behaviour as `avocado sdk dnf search`. **Pass `projectDir` when working in a project** — the search then runs against the project's configured feed (distro.release / distro.channel / distro.repo.url, AVOCADO_* env overrides, and the lock file's snapshot pin), i.e. exactly what `avocado install` will resolve. No project required for standalone questions: without `projectDir` it searches the default repo.avocadolinux.org 2024/edge feed. Description matching is NOT included — use `describe-package` for full-text details on a specific name. See `avocado://skills/app-development` for the feed-first workflow.",
+        "Search the live Avocado OS package feed for one or more targets. **This is the first move when the user wants to add ANY library / dependency / system package.** Always check the feed before suggesting `pip install`, `npm install`, `cargo add`, `apt install`, or vendoring. Feed packages are version-tracked, dependency-resolved, security-updatable via OTA, and don't bloat the extension image. Matches package name and summary (case-insensitive), ranked by where the hit lands, the same default behaviour as `avocado sdk dnf search`. **Pass `projectDir` when working in a project.** The search then runs against every feed the project enables for the target, as `avocado install` resolves them: the distro feed (distro.release, distro.channel, distro.repo, AVOCADO_* env overrides, the avocado.lock snapshot pin) plus `repos:` feeds listed in `distro.feeds`. Each result names the feed that matched. Private `org:` feeds and feeds that refuse the credentials are listed under `notChecked`. No project required for standalone questions: without `projectDir` it searches the default repo.avocadolinux.org 2024/edge feed. Description matching is NOT included. Use `describe-package` for full-text details on a specific name. See `avocado://skills/app-development` for the feed-first workflow.",
       inputSchema: {
         targets: z
           .array(z.string())
@@ -272,6 +280,7 @@ export function registerPackageTools(
             messages: z.array(z.string()),
           }),
         ),
+        notChecked: notCheckedSchema,
       },
       annotations: {
         title: "Search Avocado package feed",
@@ -305,12 +314,13 @@ export function registerPackageTools(
             shown: 0,
             results: [],
             errors: [],
+            notChecked: [],
           },
           isError: true,
         };
       }
       try {
-        const { totalMatches, results, errors } =
+        const { totalMatches, results, errors, notChecked } =
           await repoClient.searchPackages(targets, query, limit ?? 50, (t) =>
             feed.forTarget(t),
           );
@@ -319,6 +329,7 @@ export function registerPackageTools(
           version: r.version,
           release: r.release,
           arch: r.arch,
+          feed: r.feed,
           repo: r.repo,
           summary: r.summary,
         }));
@@ -326,14 +337,15 @@ export function registerPackageTools(
           content: [
             {
               type: "text",
-              text: renderHeader(
-                query,
-                targets,
-                totalMatches,
-                results.length,
-                errors,
-                feed.describe(targets),
-              ),
+              text:
+                renderHeader(
+                  query,
+                  targets,
+                  totalMatches,
+                  results.length,
+                  errors,
+                  feed.describe(targets),
+                ) + renderNotChecked(notChecked),
             },
             {
               type: "text",
@@ -350,6 +362,7 @@ export function registerPackageTools(
             shown: results.length,
             results: trimmed,
             errors,
+            notChecked,
           },
         };
       } catch (error) {
@@ -370,6 +383,7 @@ export function registerPackageTools(
             shown: 0,
             results: [],
             errors: [],
+            notChecked: [],
           },
           isError: true,
         };
@@ -382,6 +396,7 @@ export function registerPackageTools(
     version: z.string(),
     release: z.string(),
     arch: z.string(),
+    feed: z.string().optional(),
     repo: z.string(),
     summary: z.string(),
   });
@@ -391,7 +406,7 @@ export function registerPackageTools(
     {
       title: "Batch-check dependencies against the Avocado feed",
       description:
-        'Check a WHOLE LIST of dependencies against one target\'s package feed in a SINGLE call — the batch engine behind the `/package-coverage` report. For each dependency you pass a display name plus one or more candidate feed search terms (`queries`); the tool warms the target\'s feed once and returns a present/missing verdict per dependency with a match-confidence tier (`exact`/`strong`/`fuzzy`), the best-matching feed package, and near-miss alternatives, plus an overall coverage summary. **Use this instead of calling `search-packages` once per dependency** — it collapses N round-trips into one and shares the exact `dnf search` scoring. YOU do the name normalization (Debian/Alpine/pip/npm → RPM/Yocto): put every plausible variant for a dependency in its `queries` array (e.g. for `libssl-dev`: `["openssl", "libssl", "ssl"]`). Matching is optimistic — any hit (including a summary-only hit) counts as present, flagged `fuzzy` so a maintainer can verify. See `avocado://skills/package-coverage`.',
+        'Check a WHOLE LIST of dependencies against one target\'s package feed in a SINGLE call. It is the batch engine behind the `/package-coverage` report. For each dependency you pass a display name plus one or more candidate feed search terms (`queries`); the tool warms the target\'s feed once and returns a present/missing/not-checked verdict per dependency (not-checked means no match in the feeds read while an enabled feed, such as a private `org:` feed, could not be read) with a match-confidence tier (`exact`/`strong`/`fuzzy`), the best-matching feed package, and near-miss alternatives, plus an overall coverage summary. **Use this instead of calling `search-packages` once per dependency**. It collapses N round-trips into one and shares the exact `dnf search` scoring. YOU do the name normalization (Debian/Alpine/pip/npm → RPM/Yocto): put every plausible variant for a dependency in its `queries` array (e.g. for `libssl-dev`: `["openssl", "libssl", "ssl"]`). Matching is optimistic: any hit (including a summary-only hit) counts as present, flagged `fuzzy` so a maintainer can verify. See `avocado://skills/package-coverage`.',
       inputSchema: {
         target: z
           .string()
@@ -447,6 +462,12 @@ export function registerPackageTools(
           total: z.number().int(),
           present: z.number().int(),
           missing: z.number().int(),
+          notChecked: z
+            .number()
+            .int()
+            .describe(
+              "No match in the feeds checked, but at least one enabled feed was not checked.",
+            ),
           coveragePercent: z.number().int(),
           exact: z.number().int(),
           strong: z.number().int(),
@@ -456,7 +477,7 @@ export function registerPackageTools(
           z.object({
             name: z.string(),
             ecosystem: z.string().optional(),
-            status: z.enum(["present", "missing"]),
+            status: z.enum(["present", "missing", "not-checked"]),
             confidence: z.enum(["exact", "strong", "fuzzy"]).nullable(),
             match: coverageMatchSchema.nullable(),
             matchedQuery: z.string().nullable(),
@@ -464,6 +485,7 @@ export function registerPackageTools(
           }),
         ),
         feedErrors: z.array(z.string()),
+        notChecked: notCheckedSchema,
       },
       annotations: {
         title: "Batch-check dependencies against the Avocado feed",
@@ -488,6 +510,7 @@ export function registerPackageTools(
         total: 0,
         present: 0,
         missing: 0,
+        notChecked: 0,
         coveragePercent: 0,
         exact: 0,
         strong: 0,
@@ -513,6 +536,7 @@ export function registerPackageTools(
             summary: emptySummary,
             results: [],
             feedErrors: [],
+            notChecked: [],
           },
           isError: true,
         };
@@ -547,6 +571,7 @@ export function registerPackageTools(
             summary: emptySummary,
             results: [],
             feedErrors: [],
+            notChecked: [],
           },
           isError: true,
         };
@@ -554,10 +579,15 @@ export function registerPackageTools(
 
       try {
         // One feed warm-up for the whole batch; cached process-wide after this.
-        const { packages, errors } = await repoClient.fetchTargetPackages(
+        const fetched = await repoClient.fetchTargetPackages(
           target,
           feed.forTarget(target),
         );
+        const { packages, errors } = fetched;
+        const notChecked = fetched.notChecked.map((n) => ({ target, ...n }));
+        // With an unread feed enabled, "no match" is unknown, not missing.
+        const noMatch: "missing" | "not-checked" =
+          notChecked.length > 0 ? "not-checked" : "missing";
 
         // fetchTargetPackages does NOT throw when repos are unreachable — it
         // returns an empty package list plus per-repo errors. Reporting that as
@@ -580,6 +610,7 @@ export function registerPackageTools(
               summary: emptySummary,
               results: [],
               feedErrors: errors,
+              notChecked,
             },
             isError: true,
           };
@@ -603,7 +634,7 @@ export function registerPackageTools(
           return {
             name: dep.name,
             ecosystem: dep.ecosystem,
-            status: (best ? "present" : "missing") as "present" | "missing",
+            status: best ? ("present" as const) : noMatch,
             confidence: best ? scoreToConfidence(best.score) : null,
             match: best
               ? {
@@ -611,6 +642,7 @@ export function registerPackageTools(
                   version: best.version,
                   release: best.release,
                   arch: best.arch,
+                  feed: best.feed,
                   repo: best.repo,
                   summary: best.summary,
                 }
@@ -621,19 +653,24 @@ export function registerPackageTools(
         });
 
         const present = results.filter((r) => r.status === "present").length;
-        const missing = results.length - present;
+        const notCheckedCount = results.filter(
+          (r) => r.status === "not-checked",
+        ).length;
+        const missing = results.length - present - notCheckedCount;
         // Round, but never let rounding show a false 100% while something is
         // missing (199/200 → 99, not 100) or a false 0% while something is
         // present (1/200 → 1, not 0). The headline must not contradict counts.
         let coveragePercent = results.length
           ? Math.round((present / results.length) * 100)
           : 0;
-        if (coveragePercent === 100 && missing > 0) coveragePercent = 99;
+        if (coveragePercent === 100 && present < results.length)
+          coveragePercent = 99;
         if (coveragePercent === 0 && present > 0) coveragePercent = 1;
         const summary = {
           total: results.length,
           present,
           missing,
+          notChecked: notCheckedCount,
           coveragePercent,
           exact: results.filter((r) => r.confidence === "exact").length,
           strong: results.filter((r) => r.confidence === "strong").length,
@@ -644,13 +681,14 @@ export function registerPackageTools(
           content: [
             {
               type: "text",
-              text: renderCoverage(
-                target,
-                feed.describe([target]),
-                summary,
-                results,
-                errors,
-              ),
+              text:
+                renderCoverage(
+                  target,
+                  feed.describe([target]),
+                  summary,
+                  results,
+                  errors,
+                ) + renderNotChecked(notChecked),
             },
           ],
           structuredContent: {
@@ -662,6 +700,7 @@ export function registerPackageTools(
             summary,
             results,
             feedErrors: errors,
+            notChecked,
           },
         };
       } catch (error) {
@@ -681,6 +720,7 @@ export function registerPackageTools(
             summary: emptySummary,
             results: [],
             feedErrors: [],
+            notChecked: [],
           },
           isError: true,
         };
@@ -692,7 +732,7 @@ export function registerPackageTools(
 interface CoverageRow {
   name: string;
   ecosystem?: string;
-  status: "present" | "missing";
+  status: "present" | "missing" | "not-checked";
   confidence: "exact" | "strong" | "fuzzy" | null;
   match: { name: string; version: string } | null;
   alternatives: string[];
@@ -705,6 +745,7 @@ function renderCoverage(
     total: number;
     present: number;
     missing: number;
+    notChecked: number;
     coveragePercent: number;
     exact: number;
     strong: number;
@@ -721,6 +762,9 @@ function renderCoverage(
     out += ` — of which ${summary.exact} exact, ${summary.strong} strong, **${summary.fuzzy} fuzzy** (verify before relying on the number)`;
   }
   out += `\n**Missing:** ${summary.missing}\n`;
+  if (summary.notChecked > 0) {
+    out += `**Not checked:** ${summary.notChecked} (no match in the feeds read, but some enabled feeds were not read)\n`;
+  }
 
   if (errors.length > 0) {
     out += `\n> ⚠️ Some repos failed to fetch (results may be incomplete): ${errors.join("; ")}\n`;
@@ -733,7 +777,8 @@ function renderCoverage(
   out += `\n| Dependency | Ecosystem | Status | Feed package | Version | Confidence | Alternatives |\n`;
   out += `|---|---|---|---|---|---|---|\n`;
   for (const r of results) {
-    const status = r.status === "present" ? "✅" : "❌";
+    const status =
+      r.status === "present" ? "✅" : r.status === "missing" ? "❌" : "❔";
     const pkg = r.match ? `\`${r.match.name}\`` : "—";
     const ver = r.match ? r.match.version : "—";
     const conf = r.confidence ?? "—";
