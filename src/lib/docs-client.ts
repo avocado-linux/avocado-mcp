@@ -7,6 +7,7 @@
  *   src/docs-hardware/      → docs.peridio.com/hardware/
  *   src/docs-guides/        → docs.peridio.com/developer-reference/
  *   src/docs-changelog/     → docs.peridio.com/changelog/
+ *   src/field-notes/        → docs.peridio.com/field-notes/YYYY/MM/DD/<name> (blog)
  *
  * The non-obvious mapping (`docs-guides → /developer-reference/`) is driven
  * by `routeBasePath` in the docs site's `docusaurus.config.js`. We mirror
@@ -39,6 +40,9 @@ const USER_AGENT = "avocado-os-mcp-server";
 const MANIFEST_TTL_MS =
   Number(process.env.AVOCADO_MCP_DOCS_TTL_SEC ?? 3600) * 1000;
 const MAX_FILE_BYTES = 512 * 1024; // 512 KB; trips a warning if a doc is bigger
+/** Bump when the manifest shape or site-path rules change, so old caches rebuild. */
+const MANIFEST_VERSION = 2;
+const CONFIG_PATH = "src/docusaurus.config.js";
 
 /** Section → URL prefix mapping from docusaurus.config.js. */
 const SECTION_ROUTES: Record<string, string> = {
@@ -46,7 +50,11 @@ const SECTION_ROUTES: Record<string, string> = {
   "src/docs-hardware/": "hardware/",
   "src/docs-guides/": "developer-reference/",
   "src/docs-changelog/": "changelog/",
+  "src/field-notes/": "field-notes/",
 };
+
+/** Files the field-notes blog plugin excludes in docusaurus.config.js. */
+const FIELD_NOTES_EXCLUDE = new Set(["src/field-notes/CONTRIBUTING.md"]);
 
 export interface DocEntry {
   /** Path inside the upstream repo, e.g. `src/docs-guides/seeding-var.md`. */
@@ -55,8 +63,8 @@ export interface DocEntry {
   sitePath: string;
   /** Full URL on docs.peridio.com. */
   url: string;
-  /** Section the doc belongs to: overview / hardware / guides / changelog. */
-  section: "overview" | "hardware" | "guides" | "changelog";
+  /** Section the doc belongs to: overview / hardware / guides / changelog / field-notes. */
+  section: "overview" | "hardware" | "guides" | "changelog" | "field-notes";
   /** Frontmatter title (falls back to the filename humanized). */
   title: string;
   /** Frontmatter description, if any. */
@@ -66,8 +74,11 @@ export interface DocEntry {
 }
 
 interface Manifest {
+  version: number;
   indexedAt: number;
   entries: DocEntry[];
+  /** Redirect `from` → `to` site paths from docusaurus.config.js (no leading "/"). */
+  redirects: Record<string, string>;
 }
 
 interface TreeBlob {
@@ -113,21 +124,69 @@ function deriveSection(repoPath: string): DocEntry["section"] | null {
   if (repoPath.startsWith("src/docs-hardware/")) return "hardware";
   if (repoPath.startsWith("src/docs-guides/")) return "guides";
   if (repoPath.startsWith("src/docs-changelog/")) return "changelog";
+  if (repoPath.startsWith("src/field-notes/")) return "field-notes";
   return null;
 }
 
-function deriveSitePath(repoPath: string): string {
+/**
+ * Map a repo path to the path the site serves, without leading or trailing
+ * "/" (the site uses `trailingSlash: false`). `slug` is the frontmatter
+ * `slug:` value, if any.
+ *
+ * Docusaurus rules mirrored here:
+ *   - `foo/index.md` serves at `foo`.
+ *   - An absolute slug (`/x/y`) replaces the path inside the section route.
+ *   - A relative slug (`y`) is resolved against the doc's directory.
+ *   - Blog posts named `YYYY-MM-DD-name` serve at `YYYY/MM/DD/name`.
+ */
+export function deriveSitePath(repoPath: string, slug?: string): string {
   for (const [prefix, route] of Object.entries(SECTION_ROUTES)) {
     if (!repoPath.startsWith(prefix)) continue;
-    let rel = repoPath.slice(prefix.length);
     // Strip the .md / .mdx extension.
-    rel = rel.replace(/\.mdx?$/, "");
-    // Docusaurus default: `index` → "" (the parent dir is the route).
-    if (rel.endsWith("/index")) rel = rel.slice(0, -"index".length);
-    if (rel === "index") rel = "";
-    return route + rel;
+    const rel = repoPath.slice(prefix.length).replace(/\.mdx?$/, "");
+    const segments = rel.split("/");
+    if (segments[segments.length - 1] === "index") segments.pop();
+    let page = segments.join("/");
+    if (slug) {
+      if (slug.startsWith("/")) {
+        page = slug;
+      } else {
+        const dir = rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "";
+        page = dir ? `${dir}/${slug}` : slug;
+      }
+    } else if (prefix === "src/field-notes/") {
+      const m = page.match(/^(\d{4})-(\d{2})-(\d{2})-(.+)$/);
+      if (m) page = `${m[1]}/${m[2]}/${m[3]}/${m[4]}`;
+    }
+    // Trim "/" at both ends, also when `page` is "" and only the route is left.
+    return (route + page.replace(/^\/+|\/+$/g, "")).replace(/\/$/, "");
   }
   return repoPath; // unreachable for filtered tree
+}
+
+/**
+ * True for files Docusaurus does not publish as pages: `_`-prefixed files
+ * and directories (partials, templates) and the field-notes exclude list.
+ */
+export function isUnpublishedPath(repoPath: string): boolean {
+  return (
+    repoPath.split("/").some((s) => s.startsWith("_")) ||
+    FIELD_NOTES_EXCLUDE.has(repoPath)
+  );
+}
+
+/**
+ * Read the `redirects` of plugin-client-redirects from docusaurus.config.js
+ * source. The redirects are plain string literals, so a regex is enough.
+ * Returns `from` → `to` site paths without the leading "/".
+ */
+export function parseRedirects(configSource: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  const re = /from:\s*(['"])(.*?)\1\s*,\s*to:\s*(['"])(.*?)\3/g;
+  for (const m of configSource.matchAll(re)) {
+    out[m[2].replace(/^\/|\/$/g, "")] = m[4].replace(/^\/|\/$/g, "");
+  }
+  return out;
 }
 
 /** Humanize "lockfiles-and-build-stamps" → "Lockfiles And Build Stamps". */
@@ -142,7 +201,7 @@ function humanizeFilename(filename: string): string {
  * Parse YAML frontmatter (between two `---` fences at the file head). We
  * only need a couple of fields; a real YAML parser would be overkill.
  */
-function parseFrontmatter(body: string): {
+export function parseFrontmatter(body: string): {
   meta: Record<string, string>;
   rest: string;
 } {
@@ -158,16 +217,44 @@ function parseFrontmatter(body: string): {
     const m = line.match(/^([A-Za-z_][\w-]*)\s*:\s*(.*)$/);
     if (!m) continue;
     let value = m[2].trim();
-    // Strip surrounding quotes.
+    // Strip surrounding quotes, or a trailing YAML comment on a bare value.
     if (
       (value.startsWith('"') && value.endsWith('"')) ||
       (value.startsWith("'") && value.endsWith("'"))
     ) {
       value = value.slice(1, -1);
+    } else {
+      value = value.replace(/\s+#.*$/, "");
     }
     meta[m[1]] = value;
   }
   return { meta, rest };
+}
+
+/**
+ * Build the catalog entry for one file. Returns null when the file is not a
+ * published page: outside a known section, or `draft: true` (drafts are left
+ * out of the production site).
+ */
+export function toDocEntry(
+  repoPath: string,
+  sha: string,
+  text: string,
+): DocEntry | null {
+  const section = deriveSection(repoPath);
+  if (!section) return null;
+  const { meta } = parseFrontmatter(text);
+  if (meta.draft === "true") return null;
+  const sitePath = deriveSitePath(repoPath, meta.slug || undefined);
+  return {
+    repoPath,
+    sitePath,
+    url: `${SITE_BASE}/${sitePath}`,
+    section,
+    title: meta.title || humanizeFilename(path.basename(repoPath)),
+    description: meta.description || "",
+    sha,
+  };
 }
 
 /**
@@ -193,7 +280,23 @@ async function fetchTree(): Promise<TreeBlob[]> {
   return data.tree
     .filter((b) => b.type === "blob")
     .filter((b) => /\.mdx?$/.test(b.path))
-    .filter((b) => deriveSection(b.path) !== null);
+    .filter((b) => deriveSection(b.path) !== null)
+    .filter((b) => !isUnpublishedPath(b.path));
+}
+
+/** Fetch redirects from the site config. A failure only loses the aliases. */
+async function fetchRedirects(): Promise<Record<string, string>> {
+  const rawUrl = `https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${REPO_BRANCH}/${CONFIG_PATH}`;
+  try {
+    const res = await fetch(rawUrl, { headers: { "User-Agent": USER_AGENT } });
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    return parseRedirects(await res.text());
+  } catch (e) {
+    console.error(
+      `[avocado-mcp] WARN: failed to fetch ${CONFIG_PATH}: ${(e as Error).message}`,
+    );
+    return {};
+  }
 }
 
 /**
@@ -252,7 +355,10 @@ async function buildManifest(): Promise<Manifest> {
     try {
       const raw = await fs.readFile(manifestPath(), "utf8");
       const parsed = JSON.parse(raw) as Manifest;
-      if (now - parsed.indexedAt < MANIFEST_TTL_MS) {
+      if (
+        parsed.version === MANIFEST_VERSION &&
+        now - parsed.indexedAt < MANIFEST_TTL_MS
+      ) {
         manifestCache = parsed;
         return parsed;
       }
@@ -266,34 +372,26 @@ async function buildManifest(): Promise<Manifest> {
     const tree = await fetchTree();
     const entries: DocEntry[] = [];
     for (const blob of tree) {
-      const section = deriveSection(blob.path);
-      if (!section) continue;
-      let title = humanizeFilename(path.basename(blob.path));
-      let description = "";
+      let text: string;
       try {
-        const text = await fetchBlobContent(blob.path, blob.sha);
-        const { meta } = parseFrontmatter(text);
-        if (meta.title) title = meta.title;
-        if (meta.description) description = meta.description;
+        text = await fetchBlobContent(blob.path, blob.sha);
       } catch (e) {
         console.error(
           `[avocado-mcp] WARN: failed to fetch ${blob.path}: ${(e as Error).message}`,
         );
         continue;
       }
-      const sitePath = deriveSitePath(blob.path);
-      entries.push({
-        repoPath: blob.path,
-        sitePath,
-        url: `${SITE_BASE}/${sitePath}`,
-        section,
-        title,
-        description,
-        sha: blob.sha,
-      });
+      const entry = toDocEntry(blob.path, blob.sha, text);
+      if (entry) entries.push(entry);
     }
     entries.sort((a, b) => a.sitePath.localeCompare(b.sitePath));
-    const manifest: Manifest = { indexedAt: Date.now(), entries };
+    const redirects = await fetchRedirects();
+    const manifest: Manifest = {
+      version: MANIFEST_VERSION,
+      indexedAt: Date.now(),
+      entries,
+      redirects,
+    };
     await fs.writeFile(
       manifestPath(),
       JSON.stringify(manifest, null, 2),
@@ -321,23 +419,36 @@ export async function listDocs(filter?: {
 
 /** Find a doc by site-path slug, full URL, or repo path. */
 export async function findDoc(query: string): Promise<DocEntry | null> {
-  const { entries } = await buildManifest();
+  const { entries, redirects } = await buildManifest();
+  return resolveDoc(entries, redirects, query);
+}
+
+/**
+ * Match a query against the entries. Accepts a full URL, a repo path, or a
+ * site path with or without leading and trailing "/". Redirect `from` paths
+ * resolve to their target page.
+ */
+export function resolveDoc(
+  entries: DocEntry[],
+  redirects: Record<string, string>,
+  query: string,
+): DocEntry | null {
   const q = query.trim();
-  // 1. Full URL.
-  if (q.startsWith(SITE_BASE)) {
-    const sitePath = q
-      .slice(SITE_BASE.length)
-      .replace(/^\//, "")
-      .replace(/\/$/, "");
-    return entries.find((e) => e.sitePath === sitePath) ?? null;
-  }
-  // 2. Repo path.
-  if (q.startsWith("src/docs-")) {
+  // 1. Repo path.
+  if (q.startsWith("src/")) {
     return entries.find((e) => e.repoPath === q) ?? null;
   }
-  // 3. Site-path slug (with or without leading slash, with or without trailing slash).
-  const normalized = q.replace(/^\//, "").replace(/\/$/, "");
-  return entries.find((e) => e.sitePath === normalized) ?? null;
+  // 2. Full URL or site path. Drop the host, any #anchor or ?query, and the
+  // leading and trailing "/".
+  const sitePath = (q.startsWith(SITE_BASE) ? q.slice(SITE_BASE.length) : q)
+    .replace(/[?#].*$/, "")
+    .replace(/^\/+|\/+$/g, "");
+  const target = redirects[sitePath] ?? sitePath;
+  return (
+    entries.find((e) => e.sitePath === sitePath) ??
+    entries.find((e) => e.sitePath === target) ??
+    null
+  );
 }
 
 /** Fetch the raw markdown content for a doc (frontmatter included; caller decides whether to strip). */

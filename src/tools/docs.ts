@@ -8,7 +8,13 @@ import {
 } from "../lib/docs-client.js";
 import { searchDocs } from "../lib/docs-search.js";
 
-const SECTION_ENUM = z.enum(["overview", "hardware", "guides", "changelog"]);
+const SECTION_ENUM = z.enum([
+  "overview",
+  "hardware",
+  "guides",
+  "changelog",
+  "field-notes",
+]);
 
 export function registerDocsTools(server: McpServer): void {
   const docEntrySchema = z.object({
@@ -34,7 +40,7 @@ export function registerDocsTools(server: McpServer): void {
             "Free-text search. Omit to browse the full catalog grouped by section. Examples: 'seeding the var partition', 'cross compile python', 'hardware in the loop'.",
           ),
         section: SECTION_ENUM.optional().describe(
-          "Optional filter: 'overview' (about, getting started), 'hardware' (support matrix, board guides), 'guides' (developer reference), 'changelog' (release notes).",
+          "Optional filter: 'overview' (about, getting started), 'hardware' (support matrix, board guides), 'guides' (developer reference), 'changelog' (release notes), 'field-notes' (engineering write-ups from the field).",
         ),
         max_results: z
           .number()
@@ -189,7 +195,7 @@ export function registerDocsTools(server: McpServer): void {
           .string()
           .min(1)
           .describe(
-            "Site slug, full URL, or repo path. Examples: 'developer-reference/seeding-var', 'hardware/raspberrypi5', 'https://docs.peridio.com/developer-reference/seeding-var'.",
+            "Site slug, full URL, or repo path. Examples: 'developer-reference/seeding-var', 'hardware/raspberry-pi/raspberry-pi-5', 'https://docs.peridio.com/developer-reference/seeding-var'.",
           ),
       },
       annotations: {
@@ -253,6 +259,7 @@ function groupBySection(
     "hardware",
     "guides",
     "changelog",
+    "field-notes",
   ];
   const out = new Map<DocEntry["section"], DocEntry[]>();
   for (const s of order) out.set(s, []);
