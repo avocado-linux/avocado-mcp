@@ -45,7 +45,7 @@ Requires Node ≥20. `npx` will clone the repo on first run, install dependencie
 
 | Tool                         | Purpose                                                                              |
 | ---------------------------- | ------------------------------------------------------------------------------------ |
-| `environment-check`          | Verify host has `avocado` CLI on PATH, Docker daemon, ≥8 GB free disk; reports host arch + OS |
+| `environment-check`          | Verify host has `avocado` CLI on PATH, a container engine (avocado-vm on macOS, Docker Engine on Linux), and ≥8 GB free disk. Reports host arch + OS |
 | `list-targets`               | Every Avocado target currently supported by the package feed                         |
 | `search-packages`            | Substring search across the project's configured RPM feed (`projectDir`), or the default feed |
 | `describe-package`           | Detail view for one package: version, arch, summary, description                     |
@@ -66,8 +66,11 @@ Requires Node ≥20. `npx` will clone the repo on first run, install dependencie
 | `search-docs`                | Browse or BM25-search the Peridio + Avocado docs at `docs.peridio.com` (omit `query` to browse)|
 | `get-doc`                    | Fetch a full documentation page by slug, URL, or repo path                           |
 | `detect-serial-ports`        | List USB serial adapters on the host (macOS / Linux) for UART debugging              |
-| `get-device-connection-info` | Show recommended baud/parity for a target plus the tmux session name to use          |
+| `get-device-connection-info` | Show UART parameters (baud, voltage, parity), default login, and wiring caveats for a target |
 | `get-tmux-uart-snippet`      | Emit copy-paste tmux commands for attaching to a UART and streaming/capturing output |
+| `connect-auth-status`        | Check if this machine is logged in to Avocado Connect, and list the user and orgs  |
+| `connect-list-resources`     | List Connect orgs, projects, cohorts, or runtimes to get IDs for `connect-init`      |
+| `connect-init`               | Run `avocado connect init` to link a project to Connect and add OTA config to a runtime |
 
 ### Skills (resources)
 
@@ -85,8 +88,11 @@ Background knowledge the LLM reads to ground itself before invoking tools:
 - `avocado://skills/extension-build-debugging`
 - `avocado://skills/iterative-deployment`
 - `avocado://skills/app-development`
+- `avocado://skills/avocado-cli-execution`
+- `avocado://skills/avocado-connect`
 - `avocado://skills/upstream-sources`
 - `avocado://skills/package-coverage`
+- `avocado://skills/container-backend`
 
 ### Prompts
 
@@ -95,10 +101,11 @@ Pre-built workflows the user can invoke by name:
 - `start-avocado-project` — walks through target pick → init → next-steps for a fresh project.
 - `debug-device` — walks through attaching to a device over UART/tmux and capturing logs (the default debug channel).
 - `debug-device-ssh` — peer to `debug-device` for the case when the device is already known healthy and on the network. Passwordless root in the dev runtime.
-- `debug-build-failure` — recovery walkthrough for failed `avocado install` / `avocado build`: known-issues triage, cross-channel package lookup, host/arch checks.
+- `debug-build-failure`: recovers from a failed `avocado install` or `avocado build`. Covers log-pattern analysis, cross-channel package lookup, hook-script triage, and host/arch checks.
 - `provision-device` — fully automated first-time flash: env check → target validation → per-target caveats → build → provision → physical handoff → first-boot UART verification.
 - `build-and-deploy` — fully automated `avocado build && avocado deploy` (with conditional `install` on missing-package errors) to a running device, with verification. The canonical iteration loop after first provision.
 - `package-coverage` — for users moving off Docker: ingests a Dockerfile or SBOM (CycloneDX / SPDX) plus a target, extracts runtime dependencies, checks each against the live package feed, researches gaps on the web, and writes a shareable `package-coverage.md` (present/missing table + upstream links + headline coverage %) for an Avocado OS feed maintainer.
+- `setup-connect`: links a project to Avocado Connect for fleet OTA updates. It checks auth, picks the org, project, and cohort, runs `avocado connect init`, then rebuilds.
 
 ## Recommended flow
 
@@ -137,16 +144,16 @@ npm run dev
 Run against the MCP Inspector (browser UI for poking individual tools):
 
 ```bash
-npm run test
+npm run inspect
 ```
 
 Unit tests (`test/**/*.test.ts`, run with `node --test`):
 
 ```bash
-npm run test:unit
+npm test
 ```
 
-Format-check, type-check, unit tests:
+Format check and type check:
 
 ```bash
 npm run checks

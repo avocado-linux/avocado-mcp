@@ -124,15 +124,6 @@ async function main() {
   await server.connect(transport);
 }
 
-// TEMP instrumentation: confirm how each consumer (Claude Code / ACP /
-// microclaw) spawns us. stderr is safe — it does not pollute the JSON-RPC
-// stream on stdout. Remove once the root cause is confirmed.
-console.error(
-  "[avocado-mcp] argv1=%s import.meta.url=%s",
-  process.argv[1],
-  import.meta.url,
-);
-
 // Run main() when this module is the entry point. npx installs the bin as a
 // symlink, so process.argv[1] is the symlink path while import.meta.url is the
 // resolved real path — a naive `file://${argv[1]}` comparison fails and main()

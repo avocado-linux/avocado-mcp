@@ -53,7 +53,7 @@ export function registerReferenceTools(server: McpServer): void {
         readOnlyHint: true,
         destructiveHint: false,
         idempotentHint: true,
-        openWorldHint: false,
+        openWorldHint: true,
       },
     },
     async ({ query, target }) => {

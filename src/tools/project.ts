@@ -231,7 +231,7 @@ export function registerProjectTools(
         readOnlyHint: true,
         destructiveHint: false,
         idempotentHint: true,
-        openWorldHint: false,
+        openWorldHint: true,
       },
     },
     async ({ yaml, schemaVersion }) => {
