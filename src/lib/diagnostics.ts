@@ -7,7 +7,7 @@
  * positives, and the LLM can extrapolate further from the raw log.
  */
 
-import type { FeedSelector } from "./repo-client.js";
+import { NO_TARGET_REPOS, type FeedSelector } from "./repo-client.js";
 
 export interface Diagnosis {
   label: string;
@@ -376,19 +376,20 @@ function normalizePackageName(raw: string): string {
 }
 
 /**
- * Feed streams the build-error investigator AUTO-probes for a failing
- * package, in addition to the project's own configured feed (which is always
- * probed first). Six streams exist — channels `next` / `edge` / `stable`
- * (`apollo` is retired) across releases `2024` and `2026` — and all are
- * queryable via explicit `release`/`channel` args on `search-packages` etc.
- * But in practice ~all users run `edge` on the release that matches their
- * hardware (2024 or 2026) and don't switch channels, so the automatic probe
- * covers just those two edge streams to keep the diagnosis fast. Extend this
- * list only if the common-case stream set changes.
+ * Feed streams the build-error investigator probes for a failing package,
+ * after the project's own configured feeds (always probed first). These are
+ * the streams live on repo.avocadolinux.org (2026-10): 2024 has `edge` and
+ * `next`, and 2026 has `next`, `edge` and `stable`. `next` matters because
+ * newer boards ship there first (RB3 Gen 2 is only on 2026/next). A stream
+ * whose targets.json lacks the target is dropped from the result, so the
+ * extra probes cost one small fetch each.
  */
 export const INVESTIGATION_STREAMS: { release: string; channel: string }[] = [
+  { release: "2026", channel: "next" },
   { release: "2026", channel: "edge" },
+  { release: "2026", channel: "stable" },
   { release: "2024", channel: "edge" },
+  { release: "2024", channel: "next" },
 ];
 
 export interface StreamPresence {
@@ -399,6 +400,8 @@ export interface StreamPresence {
   hits: { repo: string; version: string }[];
   /** Set when the feed for this stream couldn't be reached (e.g. not live). */
   error?: string;
+  /** Enabled feeds the lookup could not read, e.g. private `org:` feeds. */
+  notChecked?: { feed: string; reason: string }[];
 }
 
 export interface PackageInvestigation {
@@ -415,6 +418,7 @@ export interface RepoLookup {
   ): Promise<{
     results: { name: string; repo: string; version: string }[];
     errors?: { target: string; messages: string[] }[];
+    notChecked?: { feed: string; reason: string }[];
   }>;
 }
 
@@ -451,35 +455,60 @@ export async function investigatePackages(
 ): Promise<PackageInvestigation[]> {
   const tasks = names.map(async (name): Promise<PackageInvestigation> => {
     const streams = await Promise.all(
-      probes.map(async ({ release, channel, configured, feed }) => {
-        try {
-          const r = await repo.searchPackages(targets, name, 20, feed);
-          const hits = dedupHits(r.results.filter((x) => x.name === name));
-          // A stream that isn't reachable (e.g. no targets.json) comes back
-          // as per-target errors, not a throw — report it, not "not found".
-          const errs = (r.errors ?? []).flatMap((e) => e.messages);
-          return {
-            release,
-            channel,
-            configured,
-            hits,
-            error:
-              hits.length === 0 && errs.length > 0
-                ? errs.join("; ")
-                : undefined,
-          };
-        } catch (e) {
-          return {
-            release,
-            channel,
-            configured,
-            hits: [],
-            error: (e as Error).message,
-          };
-        }
-      }),
+      probes.map(
+        async ({
+          release,
+          channel,
+          configured,
+          feed,
+        }): Promise<StreamPresence | undefined> => {
+          try {
+            const r = await repo.searchPackages(targets, name, 20, feed);
+            const hits = dedupHits(r.results.filter((x) => x.name === name));
+            // A stream that isn't reachable (e.g. no targets.json) comes back
+            // as per-target errors, not a throw. Report it, not "not found".
+            const errs = (r.errors ?? []).flatMap((e) => e.messages);
+            // An alternate stream that doesn't carry the target says nothing
+            // about the package. Drop it instead of reporting an error.
+            if (
+              !configured &&
+              hits.length === 0 &&
+              errs.length > 0 &&
+              errs.every((e) => e.startsWith(NO_TARGET_REPOS))
+            ) {
+              return undefined;
+            }
+            const notChecked = (r.notChecked ?? []).map(({ feed, reason }) => ({
+              feed,
+              reason,
+            }));
+            return {
+              release,
+              channel,
+              configured,
+              hits,
+              error:
+                hits.length === 0 && errs.length > 0
+                  ? errs.join("; ")
+                  : undefined,
+              ...(notChecked.length > 0 ? { notChecked } : {}),
+            };
+          } catch (e) {
+            return {
+              release,
+              channel,
+              configured,
+              hits: [],
+              error: (e as Error).message,
+            };
+          }
+        },
+      ),
     );
-    return { name, streams };
+    return {
+      name,
+      streams: streams.filter((x): x is StreamPresence => x !== undefined),
+    };
   });
   return Promise.all(tasks);
 }
@@ -497,6 +526,15 @@ const ARCH_MISMATCH_WORKAROUND = [
   ``,
   `**Do NOT** suggest \`--platform\` or other invented flags. \`--sdk-arch\` (values \`aarch64\` or \`x86-64\`) is the only arch override. Verify any flag with \`avocado --help\` before recommending.`,
 ].join("\n");
+
+/** Feeds the configured stream enables but the lookup could not read. */
+function renderStreamNotChecked(inv: PackageInvestigation): string {
+  const list = inv.streams.find((s) => s.configured)?.notChecked ?? [];
+  if (list.length === 0) return "";
+  return `Not checked on your configured feeds: ${list
+    .map((n) => `\`${n.feed}\` (${n.reason})`)
+    .join("; ")}. The package may come from one of these.\n\n`;
+}
 
 function renderInvestigation(
   inv: PackageInvestigation,
@@ -523,6 +561,7 @@ function renderInvestigation(
         .join(", ")} — those may or may not carry it; retry to be sure.)`;
     }
     out += ` Either the name is wrong (try \`search-packages\` with a partial name) or the package is target-specific (BSP packages typically carry a target suffix).\n\n`;
+    out += renderStreamNotChecked(inv);
     return out;
   }
 

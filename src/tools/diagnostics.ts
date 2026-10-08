@@ -104,7 +104,7 @@ export function registerDiagnosticsTools(
     {
       title: "Diagnose an avocado build/install log",
       description:
-        "Analyze the output of `avocado build` or `avocado install` for known failure patterns AND actively probe the package feed. When you pass `targets`, the tool extracts any failing package names from the log and looks them up on the `edge` channel of both releases (`2024` and `2026` — the streams ~all users are on), turning generic 'package not found' advice into a concrete answer (e.g. 'present on 2026/edge only, switch distro.release'). Always pass `targets` if you know them. **When no curated pattern matches**, the tool falls back to a generic log-shape extraction: error-line excerpts, exit code, suggested-file-paths, and explicit next-step routing (`search-docs`, `search-packages`, `Read` mentioned files). Never returns an empty response when the log has errors — if `diagnoses` is empty and `shape.hasErrors` is true, the prose response contains the fallback diagnosis.",
+        "Analyze the output of `avocado build` or `avocado install` for known failure patterns AND actively probe the package feed. When you pass `targets`, the tool extracts any failing package names from the log and looks them up first on the project's configured feeds (with `projectDir`, this includes `repos:` feeds enabled in `distro.feeds`), then on every live stream (2026/next, 2026/edge, 2026/stable, 2024/edge, 2024/next) that carries the target, turning generic 'package not found' advice into a concrete answer (e.g. 'present on 2026/edge only, switch distro.release'). Always pass `targets` if you know them. **When no curated pattern matches**, the tool falls back to a generic log-shape extraction: error-line excerpts, exit code, suggested-file-paths, and explicit next-step routing (`search-docs`, `search-packages`, `Read` mentioned files). Never returns an empty response when the log has errors. If `diagnoses` is empty and `shape.hasErrors` is true, the prose response contains the fallback diagnosis.",
       inputSchema: {
         log: z
           .string()
@@ -116,7 +116,7 @@ export function registerDiagnosticsTools(
           .array(z.string())
           .optional()
           .describe(
-            "Target(s) the user was building for (e.g. ['jetson-orin-nano-devkit']). Strongly recommended — enables a package lookup on the project's configured feed plus the `edge` channel of releases 2024 and 2026, which often surfaces the actual cause when patterns alone are inconclusive.",
+            "Target(s) the user was building for (e.g. ['jetson-orin-nano-devkit']). Strongly recommended. Enables a package lookup on the project's configured feeds plus every live stream that carries the target, which often surfaces the actual cause when patterns alone are inconclusive.",
           ),
         ...feedArgsShape,
       },
@@ -137,13 +137,19 @@ export function registerDiagnosticsTools(
                     z.object({ repo: z.string(), version: z.string() }),
                   ),
                   error: z.string().optional(),
+                  notChecked: z
+                    .array(z.object({ feed: z.string(), reason: z.string() }))
+                    .optional()
+                    .describe(
+                      "Enabled feeds the lookup could not read, e.g. private `org:` feeds.",
+                    ),
                 }),
               ),
             }),
           )
           .optional()
           .describe(
-            "Per-package lookup on the project's configured feed plus the `edge` channel of releases 2024 and 2026 (the common-case streams). Only populated when `targets` was supplied.",
+            "Per-package lookup on the project's configured feeds, then on each live stream that carries the target. Only populated when `targets` was supplied.",
           ),
         shape: logShapeSchema,
         feed: feedSummarySchema.optional(),
@@ -407,9 +413,9 @@ function guessProfile(target: string): {
 }
 
 /**
- * Streams the build-error investigator probes: the project's configured feed
- * first (with its per-target snapshot pins), then the common-case edge
- * streams. Alternates are resolved from the same project config, so they
+ * Streams the build-error investigator probes: the project's configured feeds
+ * first (with per-target snapshot pins and `repos:` feeds), then the live
+ * streams in INVESTIGATION_STREAMS. Alternates are resolved from the same project config, so they
  * keep its repo URL and TLS settings; one identical to the configured stream
  * is skipped.
  */
