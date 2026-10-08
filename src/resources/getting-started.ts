@@ -74,7 +74,7 @@ If you skip this, \`avocado build\` will produce an image with stale package con
 
 ## Where things live
 
-- **The schema** for \`avocado.yaml\`: \`github.com/avocado-linux/avocado-config\`. Fetch it with \`get-config-schema\` before authoring YAML — this is mandatory, the LLM should never guess YAML structure.
+- **The schema** for \`avocado.yaml\`: the avocado CLI ships it, and the docs site serves it at \`https://docs.peridio.com/schemas/avocado-config.json\`. Get it with \`get-config-schema\` before you write YAML. Never guess the YAML structure.
 - **The package feed**: \`repo.avocadolinux.org\` by default, laid out as \`{release}/{channel}\` (e.g. \`2024/edge\`). The project picks one via \`distro.release\` / \`distro.channel\` (and optionally \`distro.repo.url\`). RPM-format, queried via \`search-packages\` / \`describe-package\` — pass \`projectDir\` so they query the project's feed.
 - **Reference projects**: see \`references-catalog\`. Copyable examples that already build and provision.
 - **CLI docs**: \`docs.peridio.com/developer-reference/avocado-cli/overview\`.
