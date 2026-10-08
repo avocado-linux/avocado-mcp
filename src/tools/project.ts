@@ -80,8 +80,9 @@ export function registerProjectTools(
       const feed = feedContextFrom(feedArgs);
       // The feed values are written into the generated avocado.yaml, so an
       // invalid feed must stop here rather than fall through to the starter.
+      let repoHref: string;
       try {
-        validateFeed(feed.base);
+        repoHref = validateFeed(feed.base);
         for (const v of [feed.base.release, feed.base.channel]) {
           if (v !== undefined && !isSafeSegment(v)) {
             throw new Error(`Invalid release/channel: ${JSON.stringify(v)}`);
@@ -152,7 +153,8 @@ export function registerProjectTools(
         extraExtensions,
         release: starterFeed.release,
         channel: starterFeed.channel,
-        repoUrl: feedArgs.repoUrl?.trim() || undefined,
+        // The parsed URL, not the raw argument: it is what was validated.
+        repoUrl: feedArgs.repoUrl?.trim() ? repoHref : undefined,
       });
       const validation = await validateAvocadoYaml(yaml);
 
