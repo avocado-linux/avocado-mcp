@@ -39,6 +39,8 @@ export interface FeedPackage {
   /** Full repo sub-path under {baseUrl}/{releasever}/, e.g. "target/armv8a_tegra" */
   repo: string;
   href: string;
+  /** Name of the feed that served the package (`avocado` for the distro feed). */
+  feed?: string;
 }
 
 export type TargetManifest = Record<string, string[]>;
@@ -53,7 +55,49 @@ export interface FeedSpec {
   releasever: string;
   manifestPath: string;
   tls?: { ca?: string; insecure?: boolean };
+  /** Feed name for reporting. Defaults to `avocado`. */
+  name?: string;
+  /** dnf priority of the distro feed among the named feeds. */
+  priority?: number;
+  /** Named feeds from `repos:` that are enabled for this target. */
+  extraFeeds?: ExtraFeed[];
+  /** Named feeds the MCP can't read, with the reason. */
+  notChecked?: NotChecked[];
 }
+
+/**
+ * One named feed from `repos:`. A `url:` feed is a single dnf repo at that
+ * URL. A `path:` feed is a local directory with `repodata/`.
+ */
+export interface ExtraFeed {
+  name: string;
+  priority: number;
+  url?: string;
+  path?: string;
+  tls?: { ca?: string; insecure?: boolean };
+  /** Basic auth from `username`/`password`. Never shown in output. */
+  auth?: { username: string; password: string };
+}
+
+export interface NotChecked {
+  feed: string;
+  reason: string;
+}
+
+/** An HTTP error status from a feed, so callers can tell auth failures apart. */
+export class FeedHttpError extends Error {
+  constructor(
+    url: string,
+    readonly status: number,
+  ) {
+    super(`${url} returned ${status}`);
+  }
+}
+
+export const DISTRO_FEED_NAME = "avocado";
+
+/** Start of the error when a target is not in the distro feed's targets.json. */
+export const NO_TARGET_REPOS = "No repositories configured for target";
 
 export const DEFAULT_FEED: FeedSpec = {
   baseUrl: "https://repo.avocadolinux.org",
@@ -108,20 +152,20 @@ export function redactUrl(url: string): string {
   return url.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/?#]*@/i, "$1***@");
 }
 
-/** Validate a feed and return its normalised base URL. Throws on anything unsafe. */
-export function validateFeed(feed: FeedSpec): string {
-  const shown = redactUrl(feed.baseUrl);
+/** Validate a repo URL and return it normalised. Throws on anything unsafe. */
+export function validateRepoUrl(url: string): string {
+  const shown = redactUrl(url);
   // `new URL()` silently strips tabs/newlines, so check the raw string. C1
   // controls are included because YAML 1.1 (avocado-cli's parser) treats
   // U+0085 as a line break.
-  if (/[\s\x00-\x1f\x7f-\x9f]/.test(feed.baseUrl)) {
+  if (/[\s\x00-\x1f\x7f-\x9f]/.test(url)) {
     throw new Error(
       `Repo URL must not contain whitespace or control characters: ${JSON.stringify(shown)}`,
     );
   }
   let u: URL;
   try {
-    u = new URL(feed.baseUrl);
+    u = new URL(url);
   } catch {
     throw new Error(`Invalid repo URL: ${JSON.stringify(shown)}`);
   }
@@ -135,13 +179,19 @@ export function validateFeed(feed: FeedSpec): string {
   if (u.search || u.hash) {
     throw new Error(`Repo URL must not carry a query or fragment: ${shown}`);
   }
+  return u.href.replace(/\/+$/, "");
+}
+
+/** Validate a feed and return its normalised base URL. Throws on anything unsafe. */
+export function validateFeed(feed: FeedSpec): string {
+  const base = validateRepoUrl(feed.baseUrl);
   if (!isSafeReleasever(feed.releasever)) {
     throw new Error(`Invalid releasever: ${feed.releasever}`);
   }
   if (!isSafeReleasever(feed.manifestPath)) {
     throw new Error(`Invalid manifest path: ${feed.manifestPath}`);
   }
-  return u.href.replace(/\/+$/, "");
+  return base;
 }
 
 function feedKey(feed: FeedSpec): string {
@@ -154,15 +204,26 @@ function repoUrl(feed: FeedSpec, path: string): string {
   return `${base}/${feed.releasever}/${path}`;
 }
 
+/** How to reach a feed: TLS posture and optional basic auth. */
+type FeedConn = Pick<ExtraFeed, "tls" | "auth">;
+
 /**
  * GET with the feed's TLS posture. Plain `fetch` unless a custom CA or
  * insecure mode is configured, in which case we fall back to node:https
  * (Node's global fetch can't take per-request CAs without undici).
+ *
+ * Basic auth is sent only to the origin of `url`. Node's fetch drops the
+ * header on a cross-origin redirect, and the node:https path below does the
+ * same.
  */
-async function feedFetch(url: string, feed: FeedSpec): Promise<Response> {
-  const tls = feed.tls;
+async function feedFetch(url: string, conn: FeedConn): Promise<Response> {
+  const tls = conn.tls;
+  const headers: Record<string, string> = { "User-Agent": USER_AGENT };
+  if (conn.auth) {
+    headers.Authorization = `Basic ${Buffer.from(`${conn.auth.username}:${conn.auth.password}`).toString("base64")}`;
+  }
   if (!tls || (!tls.ca && !tls.insecure) || !url.startsWith("https:")) {
-    return fetch(url, { headers: { "User-Agent": USER_AGENT } });
+    return fetch(url, { headers });
   }
   const { request } = await import("https");
   const { readFileSync } = await import("fs");
@@ -184,7 +245,7 @@ async function feedFetch(url: string, feed: FeedSpec): Promise<Response> {
         const req = request(
           current,
           {
-            headers: { "User-Agent": USER_AGENT },
+            headers,
             ca,
             rejectUnauthorized: !tls.insecure,
           },
@@ -197,10 +258,14 @@ async function feedFetch(url: string, feed: FeedSpec): Promise<Response> {
     const status = res.statusCode ?? 0;
     if (status >= 300 && status < 400 && res.headers.location) {
       res.resume();
-      current = new URL(res.headers.location, current).href;
-      if (!current.startsWith("https:")) {
-        throw new Error(`Refusing non-https redirect to ${current}`);
+      const next = new URL(res.headers.location, current);
+      if (next.protocol !== "https:") {
+        throw new Error(
+          `Refusing non-https redirect to ${redactUrl(next.href)}`,
+        );
       }
+      if (next.origin !== new URL(current).origin) delete headers.Authorization;
+      current = next.href;
       continue;
     }
     const body = Readable.toWeb(res) as unknown as ReadableStream<Uint8Array>;
@@ -242,12 +307,12 @@ async function readBounded(
 
 async function fetchBoundedText(
   url: string,
-  feed: FeedSpec,
+  conn: FeedConn,
   maxBytes: number,
   label: string,
 ): Promise<string> {
-  const res = await feedFetch(url, feed);
-  if (!res.ok) throw new Error(`${url} returned ${res.status}`);
+  const res = await feedFetch(url, conn);
+  if (!res.ok) throw new FeedHttpError(url, res.status);
   if (!res.body) throw new Error(`${url} returned no body`);
   const bytes = await readBounded(res.body, maxBytes, label);
   return new TextDecoder("utf-8").decode(bytes);
@@ -275,7 +340,11 @@ function unescapeXml(s: string): string {
     .replace(/&apos;/g, "'");
 }
 
-function parsePrimaryXml(xml: string, repo: string): FeedPackage[] {
+function parsePrimaryXml(
+  xml: string,
+  repo: string,
+  feed: string,
+): FeedPackage[] {
   const out: FeedPackage[] = [];
   const pkgRe = /<package\s+type="rpm">([\s\S]*?)<\/package>/g;
   let m: RegExpExecArray | null;
@@ -305,9 +374,48 @@ function parsePrimaryXml(xml: string, repo: string): FeedPackage[] {
       arch,
       repo,
       href,
+      feed,
     });
   }
   return out;
+}
+
+/** Pull the primary.xml.gz href out of repomd.xml, refusing anything odd. */
+function primaryHref(repomdText: string, repo: string): string {
+  const match = repomdText.match(
+    /<data\s+type="primary">[\s\S]*?<location\s+href="([^"]+)"/,
+  );
+  if (!match) {
+    throw new Error(`No primary location in repomd.xml for ${repo}`);
+  }
+  if (!SAFE_HREF_RE.test(match[1])) {
+    throw new Error(`Untrusted primary href in repomd.xml for ${repo}`);
+  }
+  return match[1];
+}
+
+/**
+ * Read a `path:` feed from disk. Not cached: the user rebuilds these RPMs
+ * locally, and reading a few files is cheap.
+ */
+async function readLocalRepo(
+  dir: string,
+  feed: string,
+): Promise<FeedPackage[]> {
+  const { readFile, stat } = await import("fs/promises");
+  const { join } = await import("path");
+  const repomdPath = join(dir, "repodata", "repomd.xml");
+  if ((await stat(repomdPath)).size > MAX_REPOMD_BYTES) {
+    throw new Error(`repomd.xml (${feed}) exceeded ${MAX_REPOMD_BYTES} bytes`);
+  }
+  const href = primaryHref(await readFile(repomdPath, "utf-8"), feed);
+  const gz = await readFile(join(dir, href));
+  const xml = await gunzipBoundedText(
+    new Blob([gz]).stream(),
+    MAX_PRIMARY_DECOMPRESSED_BYTES,
+    `primary.xml (${feed})`,
+  );
+  return parsePrimaryXml(xml, feed, feed);
 }
 
 /** A feed for every target, or a per-target resolver (snapshot pins are per target). */
@@ -414,32 +522,47 @@ export class RepoClient {
     feed: FeedSpec,
     repo: string,
   ): Promise<FeedPackage[]> {
-    const cacheKey = `${feedKey(feed)}::${repo}`;
+    const name = feed.name ?? DISTRO_FEED_NAME;
+    return this.fetchPackagesAt(
+      repoUrl(feed, repo),
+      feed,
+      repo,
+      name,
+      `${feedKey(feed)}::${name}::${repo}`,
+    );
+  }
+
+  /** Fetch + parse one named feed from `repos:`. */
+  async fetchExtraFeed(extra: ExtraFeed): Promise<FeedPackage[]> {
+    if (extra.path) return readLocalRepo(extra.path, extra.name);
+    if (!extra.url) throw new Error(`Feed ${extra.name} has no url or path`);
+    const base = validateRepoUrl(extra.url);
+    // Keyed per feed, including TLS and the auth identity (never the secret).
+    const key = `${extra.name}::${base}::${extra.tls?.ca ?? ""}::${extra.tls?.insecure ? 1 : 0}::${extra.auth?.username ?? ""}`;
+    return this.fetchPackagesAt(base, extra, extra.name, extra.name, key);
+  }
+
+  private async fetchPackagesAt(
+    base: string,
+    conn: FeedConn,
+    repo: string,
+    feedName: string,
+    cacheKey: string,
+  ): Promise<FeedPackage[]> {
     const cached = this.packagesCache.get(cacheKey);
     if (cached) return cached;
 
-    const base = repoUrl(feed, repo);
-
     const repomdText = await fetchBoundedText(
       `${base}/repodata/repomd.xml`,
-      feed,
+      conn,
       MAX_REPOMD_BYTES,
       `repomd.xml (${repo})`,
     );
-    const match = repomdText.match(
-      /<data\s+type="primary">[\s\S]*?<location\s+href="([^"]+)"/,
-    );
-    if (!match) {
-      throw new Error(`No primary location in repomd.xml for ${repo}`);
-    }
-    const href = match[1];
-    if (!SAFE_HREF_RE.test(href)) {
-      throw new Error(`Untrusted primary href in repomd.xml for ${repo}`);
-    }
+    const href = primaryHref(repomdText, repo);
 
     const url = `${base}/${href}`;
-    const res = await feedFetch(url, feed);
-    if (!res.ok) throw new Error(`primary.xml.gz ${res.status} for ${repo}`);
+    const res = await feedFetch(url, conn);
+    if (!res.ok) throw new FeedHttpError(url, res.status);
     if (!res.body)
       throw new Error(`primary.xml.gz returned no body for ${repo}`);
     const xml = await gunzipBoundedText(
@@ -448,39 +571,70 @@ export class RepoClient {
       `primary.xml (${repo})`,
     );
 
-    const packages = parsePrimaryXml(xml, repo);
+    const packages = parsePrimaryXml(xml, repo, feedName);
     this.packagesCache.set(cacheKey, packages);
     return packages;
   }
 
   /**
-   * Fetch every repo configured for a target. Per-repo errors are returned
-   * non-fatally; partial success still counts.
+   * Fetch every repo configured for a target: the distro feed's repos from
+   * targets.json, then the named feeds in `feed.extraFeeds`. Results come
+   * back in dnf priority order. Per-repo errors are returned non-fatally;
+   * partial success still counts. A named feed that answers 401/403 is
+   * reported in `notChecked`, not as an error, because its content is
+   * unknown rather than absent.
    */
   async fetchTargetPackages(
     target: string,
     feed: FeedSpec = DEFAULT_FEED,
-  ): Promise<{ packages: FeedPackage[]; errors: string[] }> {
+  ): Promise<{
+    packages: FeedPackage[];
+    errors: string[];
+    notChecked: NotChecked[];
+  }> {
+    const errors: string[] = [];
+    const notChecked: NotChecked[] = [...(feed.notChecked ?? [])];
+    const groups: { priority: number; packages: FeedPackage[] }[] = [];
+
     const repos = await this.getRepositoryPathsForTarget(target, feed);
     if (repos.length === 0) {
-      return {
-        packages: [],
-        errors: [
-          `No repositories configured for target "${target}" in ${redactUrl(feed.baseUrl)}/${feed.manifestPath}. Verify the target name and the configured feed — list-targets shows the canonical list.`,
-        ],
-      };
+      errors.push(
+        `${NO_TARGET_REPOS} "${target}" in ${redactUrl(feed.baseUrl)}/${feed.manifestPath}. Verify the target name and the configured feed. list-targets shows the canonical list.`,
+      );
     }
-
-    const settled = await Promise.allSettled(
-      repos.map((r) => this.fetchRepoPackages(feed, r)),
-    );
-    const packages: FeedPackage[] = [];
-    const errors: string[] = [];
-    settled.forEach((r, i) => {
-      if (r.status === "fulfilled") packages.push(...r.value);
+    const extras = feed.extraFeeds ?? [];
+    const [distro, named] = await Promise.all([
+      Promise.allSettled(repos.map((r) => this.fetchRepoPackages(feed, r))),
+      Promise.allSettled(extras.map((x) => this.fetchExtraFeed(x))),
+    ]);
+    const distroPackages: FeedPackage[] = [];
+    distro.forEach((r, i) => {
+      if (r.status === "fulfilled") distroPackages.push(...r.value);
       else errors.push(`${repos[i]}: ${r.reason?.message ?? r.reason}`);
     });
-    return { packages, errors };
+    groups.push({ priority: feed.priority ?? 0, packages: distroPackages });
+    named.forEach((r, i) => {
+      const x = extras[i];
+      if (r.status === "fulfilled") {
+        groups.push({ priority: x.priority, packages: r.value });
+      } else if (
+        r.reason instanceof FeedHttpError &&
+        (r.reason.status === 401 || r.reason.status === 403)
+      ) {
+        notChecked.push({
+          feed: x.name,
+          reason: `the feed answered ${r.reason.status}, so its credentials are missing or rejected. Check \`username\`/\`password\` in \`repos.${x.name}\` and the env vars they read.`,
+        });
+      } else {
+        errors.push(`${x.name}: ${r.reason?.message ?? r.reason}`);
+      }
+    });
+    groups.sort((a, b) => a.priority - b.priority);
+    return {
+      packages: groups.flatMap((g) => g.packages),
+      errors,
+      notChecked,
+    };
   }
 
   /**
@@ -501,17 +655,17 @@ export class RepoClient {
     totalMatches: number;
     results: SearchResult[];
     errors: { target: string; messages: string[] }[];
+    notChecked: (NotChecked & { target: string })[];
   }> {
     const all: FeedPackage[] = [];
     const errors: { target: string; messages: string[] }[] = [];
+    const notChecked: (NotChecked & { target: string })[] = [];
 
     for (const target of targets) {
-      const { packages, errors: tErrors } = await this.fetchTargetPackages(
-        target,
-        feedFor(feed, target),
-      );
-      all.push(...packages);
-      if (tErrors.length > 0) errors.push({ target, messages: tErrors });
+      const r = await this.fetchTargetPackages(target, feedFor(feed, target));
+      all.push(...r.packages);
+      if (r.errors.length > 0) errors.push({ target, messages: r.errors });
+      notChecked.push(...r.notChecked.map((n) => ({ target, ...n })));
     }
 
     const ranked = rankMatches(all, query);
@@ -519,6 +673,7 @@ export class RepoClient {
       totalMatches: ranked.length,
       results: ranked.slice(0, limit),
       errors,
+      notChecked,
     };
   }
 }
