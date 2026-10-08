@@ -140,5 +140,5 @@ This is also what makes \`avocado deploy\` (network push of a single extension) 
 
 ## Pointer to the canonical guide
 
-For the full reference on var-partition seeding (including the exact build flow and SDK requirements for Docker-in-Docker priming), see \`docs.peridio.com\`'s "Seeding the var partition" guide. The MCP's local mirror lives at \`docs/src/docs-guides/seeding-var.md\` in the Avocado monorepo.
+For the full reference on var-partition seeding (including the exact build flow and SDK requirements for Docker-in-Docker priming), see the "Seeding the var partition" guide at https://docs.peridio.com/developer-reference/seeding-var. Fetch it with \`get-doc({ slug: "developer-reference/seeding-var" })\`.
 `;
