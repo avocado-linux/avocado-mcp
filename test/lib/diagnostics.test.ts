@@ -221,3 +221,60 @@ test("a clean log yields no package accusations, and results are capped", () => 
   ).join("\n");
   assert.ok(extractFailingPackages(many).length <= 5);
 });
+
+test("investigatePackages drops alternate streams that lack the target and keeps unread feeds", async () => {
+  const { investigatePackages } = await import("../../src/lib/diagnostics.js");
+  const { NO_TARGET_REPOS } = await import("../../src/lib/repo-client.js");
+  const lookup = {
+    async searchPackages(_t: string[], _q: string, _l: number, feed?: unknown) {
+      if (feed === "configured") {
+        return {
+          results: [],
+          errors: [],
+          notChecked: [{ target: "x", feed: "acme", reason: "private" }],
+        };
+      }
+      if (feed === "missing") {
+        return {
+          results: [],
+          errors: [
+            { target: "x", messages: [`${NO_TARGET_REPOS} "x" in ...`] },
+          ],
+        };
+      }
+      return { results: [{ name: "pkg", repo: "target/x", version: "1" }] };
+    },
+  };
+  const [inv] = await investigatePackages(
+    lookup,
+    ["pkg"],
+    ["x"],
+    [
+      {
+        release: "2026",
+        channel: "edge",
+        configured: true,
+        feed: "configured" as never,
+      },
+      {
+        release: "2026",
+        channel: "stable",
+        configured: false,
+        feed: "missing" as never,
+      },
+      {
+        release: "2026",
+        channel: "next",
+        configured: false,
+        feed: "has" as never,
+      },
+    ],
+  );
+  assert.deepEqual(
+    inv.streams.map((s) => s.channel),
+    ["edge", "next"],
+  );
+  assert.deepEqual(inv.streams[0].notChecked, [
+    { feed: "acme", reason: "private" },
+  ]);
+});
