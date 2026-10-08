@@ -181,15 +181,16 @@ export function registerProjectTools(
       out += `Save the YAML below as \`avocado.yaml\` at your project root, then:\n\n`;
       out += `**For a HUMAN running these in their own terminal:**\n\n`;
       out += "```bash\n";
-      out += `avocado install -f\n`;
+      out += `avocado install\n`;
       out += `avocado build\n`;
-      out += `avocado provision -r ${rt}\n`;
+      out += `avocado provision ${rt}\n`;
       out += "```\n\n";
-      out += `**For an LLM running via the Bash tool (no TTY):** use \`--no-tui\` + redirect-to-file for build/install, and wrap \`avocado provision\` with \`script\` to give it a pseudo-TTY (it shells out to \`docker run -it\`).\n\n`;
+      out += `**For an LLM running via the Bash tool (no TTY):** use \`--no-tui\` + redirect-to-file in \`.avocado/logs/\`. Set \`AVOCADO_NONINTERACTIVE=1\` for \`avocado provision\` so it never waits for an answer. No TTY wrapper is needed.\n\n`;
       out += "```bash\n";
-      out += `avocado install -f --no-tui > /tmp/avocado-install.log 2>&1\n`;
-      out += `avocado build --no-tui > /tmp/avocado-build.log 2>&1\n`;
-      out += `script -q /dev/null avocado provision -r ${rt} --no-tui > /tmp/avocado-provision.log 2>&1\n`;
+      out += `mkdir -p .avocado/logs\n`;
+      out += `avocado install --no-tui > .avocado/logs/install.log 2>&1\n`;
+      out += `avocado build --no-tui > .avocado/logs/build.log 2>&1\n`;
+      out += `AVOCADO_NONINTERACTIVE=1 avocado provision ${rt} --no-tui > .avocado/logs/provision.log 2>&1\n`;
       out += "```\n\n";
       out += `${feed.describe()}\n\n`;
       out += `## avocado.yaml\n\n\`\`\`yaml\n${yaml}\`\`\``;
@@ -619,7 +620,7 @@ function renderReferenceMatch(
   out += `Replace \`<slug>\` with your chosen reference's slug from the table:\n\n`;
   out += "```bash\n";
   out += `avocado init --target ${target} --reference <slug> <slug> && cd <slug>\n`;
-  out += `avocado install -f\n`;
+  out += `avocado install\n`;
   out += `avocado build\n`;
   out += "```\n\n";
   out += `The first command clones the reference project into \`./<slug>/\` and sets \`default_target\` to \`${target}\` in its \`avocado.yaml\`.\n\n`;
@@ -649,7 +650,7 @@ function renderMutationResult(
     out += `\n`;
   }
   out += "```yaml\n" + newYaml + "```\n";
-  out += `\n**Next:** this YAML edit added/changed packages or extensions, so \`avocado install -f\` IS needed before the next \`avocado build\` — \`build\` won't pick the new package set up on its own. Run \`avocado install -f --no-tui && avocado build --no-tui\`.\n`;
-  out += `\n**Fast iteration option:** if the user's device is already running and on the network, you can push these changes without reflashing media. After install + build, run \`avocado deploy -r <runtime> -d <device-ip> --no-tui\` to OTA the update in seconds. The \`/build-and-deploy\` prompt automates the whole sequence — pass \`forceInstall: true\` since you know install IS needed for this edit. See \`avocado://skills/iterative-deployment\` for the full flow. **Offer this proactively** — most users don't know it exists.\n`;
+  out += `\n**Next:** this YAML edit added/changed packages or extensions, so \`avocado install\` IS needed before the next \`avocado build\`. \`build\` won't pick the new package set up on its own. Run \`avocado install --no-tui && avocado build --no-tui\`.\n`;
+  out += `\n**Fast iteration option:** if the user's device is already running and on the network, you can push these changes without reflashing media. After install + build, run \`avocado deploy <runtime> -d <device-ip> --no-tui\` to OTA the update in seconds. The \`/build-and-deploy\` prompt automates the whole sequence. Pass \`runInstall: true\` because you know install IS needed for this edit. See \`avocado://skills/iterative-deployment\` for the full flow. **Offer this proactively.** Most users don't know it exists.\n`;
   return out;
 }

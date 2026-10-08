@@ -25,13 +25,13 @@ interface Pattern {
 
 const PROVISION_PATTERNS: Pattern[] = [
   {
-    label: "Non-TTY harness — needs `script` wrapper",
+    label: "Non-TTY harness: CLI too old",
     match:
       /the input device is not a TTY|stdin is not a (?:terminal|tty)|inappropriate ioctl for device|cannot enable tty/i,
     cause:
-      "`avocado provision` shells out to `docker run -it` internally, which requires a TTY allocated for the container. When you (the LLM) run it via a non-interactive Bash tool, that TTY doesn't exist and the command exits immediately. `--no-tui` does NOT fix this — it only controls Avocado's own output rendering, not Docker's `-it` requirement.",
+      "Docker refused to give the SDK container a TTY because stdin is not a terminal. Since 1.0.0-rc.2 the `avocado` CLI checks stdin first and starts the container without a PTY when there is no terminal, so this error points at an older CLI.",
     suggestion:
-      "Wrap the command with `script -q /dev/null` to provide a pseudo-TTY: `script -q /dev/null avocado provision -r <runtime> [--profile <prof>] --no-tui > /tmp/avocado-provision.log 2>&1`. This is the standard workaround when running interactive-Docker-shelling CLIs from a non-interactive harness. Re-run with the wrapper and the TTY error should disappear.",
+      "Run `avocado --version`. If it is older than 1.0.0-rc.4, run `avocado upgrade`, then retry. No TTY wrapper is needed. For headless runs, set `AVOCADO_NONINTERACTIVE=1`: `mkdir -p .avocado/logs && AVOCADO_NONINTERACTIVE=1 avocado provision <runtime> [--profile <prof>] --no-tui > .avocado/logs/provision.log 2>&1`.",
   },
   {
     label: "QEMU binary missing",
@@ -493,8 +493,9 @@ const ARCH_MISMATCH_WORKAROUND = [
   `1. **Switch to an x86_64 Linux host** to run \`avocado install\` / \`avocado build\`. This is the single most reliable fix when the SDK feed's aarch64 metadata is broken. Native Linux x86_64 or an Intel-CPU Mac both work; Apple Silicon + Rosetta 2 does NOT work.`,
   `2. **Try a different channel** — set \`distro.channel\` to another live channel (\`next\`, \`edge\`, or \`stable\`) in your \`avocado.yaml\` and re-run \`avocado install\`. A package's build/layout can differ between channels; the investigation table above shows where it's actually present.`,
   `3. **Try the other release** — if you're on \`2024\`, try \`distro.release: 2026\` (or vice-versa). Newer hardware and rebuilt packages often land on a different release. Switch releases deliberately — it's a larger change than a channel bump.`,
+  `4. **Emulate an x86-64 SDK on this host** with the global \`--sdk-arch\` flag: \`avocado --sdk-arch x86-64 install\`. The CLI runs the x86-64 SDK container through Docker buildx and QEMU, so it pulls the x86-64 SDK packages. It is much slower than a native SDK. The SDK install is tracked per architecture, so pass the same flag to every later \`avocado\` command for this project.`,
   ``,
-  `**Do NOT** suggest \`--sdk-arch\`, \`--platform\`, or any other \`avocado install\` flag for arch override — no such flag exists. Verify any flag with \`avocado install --help\` before recommending.`,
+  `**Do NOT** suggest \`--platform\` or other invented flags. \`--sdk-arch\` (values \`aarch64\` or \`x86-64\`) is the only arch override. Verify any flag with \`avocado --help\` before recommending.`,
 ].join("\n");
 
 function renderInvestigation(

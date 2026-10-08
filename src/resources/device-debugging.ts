@@ -118,7 +118,7 @@ If the symptom is "service runs but does the wrong thing": you need the app's ow
 
 ## When existing logs aren't enough: add more, then redeploy
 
-**You can iterate on the project to give yourself better signal.** If the on-device logs don't explain the failure, the right move is often to add temporary debug logging to the app, redeploy, and re-read. The full iteration loop is fast — \`avocado install -f --no-tui\` (if extensions changed) → \`avocado build --no-tui\` → \`avocado deploy -r dev -d <device-ip> --no-tui\` → re-read the unit's log. See \`avocado://skills/iterative-deployment\` for the exact mechanics.
+**You can iterate on the project to give yourself better signal.** If the on-device logs don't explain the failure, the right move is often to add temporary debug logging to the app, redeploy, and re-read. The full iteration loop is fast: \`avocado install --no-tui\` (if extensions changed) → \`avocado build --no-tui\` → \`avocado deploy dev -d <device-ip> --no-tui\` → re-read the unit's log. See \`avocado://skills/iterative-deployment\` for the exact mechanics.
 
 What to edit depends on what kind of code is failing:
 
@@ -183,8 +183,9 @@ Write debug output to \`/var/log/my-app-debug.log\` (\`/var\` is the only writab
 2. If inconclusive, identify the smallest code change that adds the missing signal — usually a few extra log statements in the suspect function, OR a log-level escalation in the systemd unit.
 3. Build + deploy via \`/build-and-deploy\` (the prompt) or manually:
    \`\`\`bash
-   avocado build --no-tui > /tmp/avocado-build.log 2>&1 && \\
-   avocado deploy -r dev -d <device-ip> --no-tui
+   mkdir -p .avocado/logs && \\
+   avocado build --no-tui > .avocado/logs/build.log 2>&1 && \\
+   avocado deploy dev -d <device-ip> --no-tui
    \`\`\`
 4. Restart the unit on the device (if your change doesn't itself trigger a restart): \`systemctl restart my-app.service\` via the UART session or SSH.
 5. Reproduce the symptom.

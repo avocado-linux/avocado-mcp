@@ -285,7 +285,7 @@ export function registerConnectTools(server: McpServer): void {
     {
       title: "Initialize a project for Avocado Connect",
       description:
-        "Run `avocado connect init` to link a local project to an Avocado Connect project and add OTA plumbing (connect-config extension + device config overlay) to the specified runtime in `avocado.yaml`. Non-destructive if already initialized — re-running updates the config. **Always run `connect-auth-status` and `connect-list-resources` first to confirm authentication and obtain the correct IDs.** After init, the project must be rebuilt (`avocado build`) to include the new Connect extension.",
+        "Run `avocado connect init` to link a local project to an Avocado Connect project and add OTA plumbing to the specified runtime in `avocado.yaml`: three extensions (`avocado-ext-connect-config`, `avocado-ext-connect`, `avocado-ext-tunnels`) and a device config overlay with a new claim token. Re-running creates another claim token and overwrites the device config, so confirm with the user first. **Always run `connect-auth-status` and `connect-list-resources` first to confirm authentication and obtain the correct IDs.** After init, run `avocado install && avocado build` to include the new extensions.",
       inputSchema: {
         directory: z
           .string()
@@ -372,8 +372,8 @@ export function registerConnectTools(server: McpServer): void {
       }
 
       const summary = completeEvent
-        ? `Connect initialized successfully.\nOrg: ${String(completeEvent["org"] ?? org)}\nProject: ${String(completeEvent["project"] ?? project)}\n\nNext step: run \`avocado build\` to include the new Connect extension in your runtime.`
-        : `connect init completed (exit 0). Run \`avocado build\` to include the new Connect extension.`;
+        ? `Connect initialized successfully.\nOrg: ${String(completeEvent["org"] ?? org)}\nProject: ${String(completeEvent["project"] ?? project)}\n\nNext step: run \`avocado install && avocado build\` to include the three new Connect extensions in your runtime.`
+        : `connect init completed (exit 0). Run \`avocado install && avocado build\` to include the new Connect extensions.`;
 
       if (stderr.trim()) {
         return {

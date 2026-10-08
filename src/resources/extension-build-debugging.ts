@@ -93,12 +93,12 @@ app-compile.sh: line 3: syntax error: unexpected "("
 
 ## Read \`avocado build\`'s output directly — not its internals
 
-The hook script's stdout/stderr is captured by the \`avocado\` CLI and surfaced through its own output. Run \`avocado build\` (or \`avocado install -f\`) as a foreground Bash command, wait for it to finish, and read the printed log. Do NOT inspect the SDK container directly (no \`docker logs\`, no \`docker ps\`, no backgrounding the build). The CLI is the orchestrator and its stdout/stderr is the contract; the SDK container is an implementation detail that may change. Pipe the captured output into \`explain-build-error\` if the diagnosis isn't obvious.
+The hook script's stdout/stderr is captured by the \`avocado\` CLI and surfaced through its own output. Run \`avocado build\` (or \`avocado install\`) as a foreground Bash command, wait for it to finish, and read the printed log. Do NOT inspect the SDK container directly (no \`docker logs\`, no \`docker ps\`, no backgrounding the build). The CLI is the orchestrator and its stdout/stderr is the contract. The SDK container is an implementation detail that may change. Pipe the captured output into \`explain-build-error\` if the diagnosis isn't obvious.
 
 ### For a human running these in their own terminal
 
 \`\`\`bash
-avocado install -f
+avocado install
 avocado build
 \`\`\`
 
@@ -109,15 +109,16 @@ The default TUI gives the human nice progress bars and a status spinner.
 Use \`--no-tui\` + redirect-to-file + \`tail\`/\`grep\` slicing. The default TUI emits ANSI escapes that garble a captured log.
 
 \`\`\`bash
-avocado install -f --no-tui > /tmp/avocado-install.log 2>&1
+mkdir -p .avocado/logs
+avocado install --no-tui > .avocado/logs/install.log 2>&1
 RC=$?
 echo "exit: $RC"
-tail -40 /tmp/avocado-install.log
+tail -40 .avocado/logs/install.log
 echo '---errors---'
-grep -iE 'error|failed|nothing provides|broken' /tmp/avocado-install.log | tail -40 || true
+grep -iE 'error|failed|nothing provides|broken' .avocado/logs/install.log | tail -40 || true
 \`\`\`
 
-Same pattern for \`avocado build --no-tui > /tmp/avocado-build.log 2>&1\`. Pipe failures through \`explain-build-error\` with \`targets: [...]\` set.
+Same pattern for \`avocado build --no-tui > .avocado/logs/build.log 2>&1\`. Pipe failures through \`explain-build-error\` with \`targets: [...]\` set.
 
 ## Triage order when a hook fails
 

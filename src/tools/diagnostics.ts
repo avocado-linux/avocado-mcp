@@ -289,7 +289,7 @@ export function registerDiagnosticsTools(
       }
       const profileArg =
         profile.profile !== "default" ? ` --profile ${profile.profile}` : "";
-      const provisionCmd = `avocado provision -r dev${profileArg}`;
+      const provisionCmd = `avocado provision dev${profileArg}`;
 
       out += `\n## Steps\n\n`;
       if (isQemu) {
@@ -304,12 +304,13 @@ export function registerDiagnosticsTools(
         out += `avocado build --no-tui\n`;
         out += `${provisionCmd} --no-tui\n`;
         out += "```\n\n";
-        out += `**For an LLM running via the Bash tool (NO interactive terminal):** \`avocado provision\` shells out to \`docker run -it\` internally and fails under a non-TTY harness with \`the input device is not a TTY\`. **\`--no-tui\` does NOT fix this** — \`--no-tui\` only controls Avocado's own output rendering, not Docker's TTY requirement. Wrap with \`script -q /dev/null\` to provide a pseudo-TTY:\n\n`;
+        out += `**For an LLM running via the Bash tool (NO interactive terminal):** no TTY wrapper is needed. The CLI detects a non-TTY stdin and starts the SDK container without a PTY. Set \`AVOCADO_NONINTERACTIVE=1\` so it never waits for an answer, and write logs to \`.avocado/logs/\` in the project:\n\n`;
         out += "```bash\n";
-        out += `avocado build --no-tui > /tmp/avocado-build.log 2>&1\n`;
-        out += `script -q /dev/null ${provisionCmd} --no-tui > /tmp/avocado-provision.log 2>&1\n`;
+        out += `mkdir -p .avocado/logs\n`;
+        out += `avocado build --no-tui > .avocado/logs/build.log 2>&1\n`;
+        out += `AVOCADO_NONINTERACTIVE=1 ${provisionCmd} --no-tui > .avocado/logs/provision.log 2>&1\n`;
         out += "```\n\n";
-        out += `**This wrapper is required for every \`avocado provision\` call you make via Bash.** Without it the provision exits immediately with the TTY error; passing \`--no-tui\` alone is not sufficient.\n\n`;
+        out += `If the provision fails with \`the input device is not a TTY\`, the CLI is older than 1.0.0-rc.2. Run \`avocado upgrade\`. On macOS, a host-side SD card write asks for confirmation and cancels with no terminal (\`Operation cancelled.\`). Ask the user to run that provision in their own terminal.\n\n`;
       }
       if (profile.notes.length > 0) {
         out += `## Notes\n\n`;
@@ -377,7 +378,7 @@ function guessProfile(target: string): {
       hostOs: ["macOS", "Linux"],
       warnings: [],
       notes: [
-        "FR201 ships pre-configured for Avocado. `avocado provision -r dev` over the network.",
+        "FR201 ships pre-configured for Avocado. `avocado provision dev` over the network.",
       ],
     };
   }
@@ -400,7 +401,7 @@ function guessProfile(target: string): {
     warnings: ["linuxAutoMount"],
     notes: [
       "On Linux hosts (especially Ubuntu/GNOME), disable auto-mount before provisioning to avoid corrupting the flash: `gsettings set org.gnome.desktop.media-handling automount false`.",
-      "Insert the SD card after `avocado provision -r dev --profile sd` finishes, then apply power to the target.",
+      "Insert the SD card after `avocado provision dev --profile sd` finishes, then apply power to the target.",
     ],
   };
 }

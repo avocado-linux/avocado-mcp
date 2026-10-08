@@ -106,7 +106,7 @@ export const AVOCADO_YAML_SCHEMA: object = {
     runtimes: {
       type: "object",
       description:
-        "Named compositions of extensions. Each key is a runtime name (e.g. 'dev', 'prod'). The CLI accepts `-r <name>` against any key declared here.",
+        "Named compositions of extensions. Each key is a runtime name (e.g. 'dev', 'prod'). Commands such as `avocado provision <name>` take any key declared here.",
       minProperties: 1,
       additionalProperties: { $ref: "#/$defs/runtime" },
     },
@@ -174,7 +174,7 @@ export const AVOCADO_YAML_SCHEMA: object = {
     provision_profiles: {
       type: "object",
       description:
-        "Named provisioning profiles. Each profile passes extra container args / state-file overrides to `avocado provision -P <name>`.",
+        "Named provisioning profiles. Each profile passes extra container args / state-file overrides to `avocado provision --profile <name>`.",
       additionalProperties: { $ref: "#/$defs/provisionProfile" },
     },
 
@@ -514,7 +514,7 @@ export const AVOCADO_YAML_SCHEMA: object = {
     provisionProfile: {
       type: "object",
       description:
-        "Named provisioning profile. Tweaks the container args / state-file path used when `avocado provision -P <name>` runs.",
+        "Named provisioning profile. Tweaks the container args / state-file path used when `avocado provision --profile <name>` runs.",
       properties: {
         container_args: {
           type: "array",

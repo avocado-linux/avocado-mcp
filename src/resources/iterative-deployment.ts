@@ -42,8 +42,8 @@ Most users don't know this exists. Surface it.
 \`\`\`bash
 # (Optional) edit avocado.yaml, app sources, overlays, or hook scripts
 avocado build
-# → if it fails with a missing-package error, run \`avocado install -f\` then re-run build
-avocado deploy -r dev -d 192.168.1.42
+# → if it fails with a missing-package error, run \`avocado install\` then re-run build
+avocado deploy dev -d 192.168.1.42
 # → test on the device (UART or SSH)
 \`\`\`
 
@@ -56,16 +56,17 @@ Use \`--no-tui\` + redirect-to-file + tail/grep slicing on every \`avocado\` cal
 \`\`\`bash
 # 1. (Optional) edit avocado.yaml, app sources, overlays, or hook scripts
 # 2. Build — fast; tells you whether the existing install is still valid
-avocado build --no-tui > /tmp/avocado-build.log 2>&1
+mkdir -p .avocado/logs
+avocado build --no-tui > .avocado/logs/build.log 2>&1
 
 #   If build SUCCEEDS → skip install, go straight to deploy.
 #   If build FAILS with a missing-package / unresolved-extension signal:
 #     → run install, then retry build:
-#     avocado install -f --no-tui > /tmp/avocado-install.log 2>&1 \\
-#       && avocado build --no-tui > /tmp/avocado-build.log 2>&1
+#     avocado install --no-tui > .avocado/logs/install.log 2>&1 \\
+#       && avocado build --no-tui > .avocado/logs/build.log 2>&1
 
 # 3. Deploy — pushes updated images to the running device (no reflash)
-avocado deploy -r dev -d 192.168.1.42 --no-tui
+avocado deploy dev -d 192.168.1.42 --no-tui
 
 # 4. Test on the device (UART or SSH)
 \`\`\`
@@ -99,7 +100,7 @@ When parsing a failed \`avocado build\` log, these patterns indicate install (no
 - \`Error: extension <name> not found\` / similar — extension exists in YAML but isn't installed
 - An explicit message from the CLI like "run avocado install first"
 
-Any of those → run \`avocado install -f --no-tui\`, then retry \`avocado build --no-tui\`. Other build errors (compile failures, hook script errors, OOM, schema errors) are NOT install-fixable — pass them to \`explain-build-error\` instead.
+Any of those → run \`avocado install --no-tui\`, then retry \`avocado build --no-tui\`. Other build errors (compile failures, hook script errors, OOM, schema errors) are NOT install-fixable. Pass them to \`explain-build-error\` instead.
 
 ## The command
 
@@ -111,7 +112,7 @@ avocado deploy [OPTIONS] --device <DEVICE> [NAME]
 
 | Arg / option | Purpose | Example |
 |---|---|---|
-| \`[NAME]\` (positional) OR \`-r <NAME>\` | Runtime name from \`avocado.yaml\`'s \`runtimes:\` map. Usually \`dev\`. | \`-r dev\` |
+| \`[NAME]\` (positional) | Runtime name from \`avocado.yaml\`'s \`runtimes:\` map. Usually \`dev\`. The old \`-r <NAME>\` form is deprecated. | \`dev\` |
 | \`-d, --device <[user@]host[:port]>\` | **Required.** Device address. Defaults: user \`root\`, port \`22\`. | \`-d 192.168.1.42\` or \`-d root@avocado-rpi5.local:22\` |
 | \`-t, --target <TARGET>\` | Optional target override. Usually inferred from \`AVOCADO_TARGET\` env or \`default_target\` in YAML. | \`-t raspberrypi5\` |
 | \`-C, --config <PATH>\` | Path to \`avocado.yaml\`. Default is the file in CWD. | \`-C ./avocado.yaml\` |
@@ -121,13 +122,13 @@ avocado deploy [OPTIONS] --device <DEVICE> [NAME]
 
 \`\`\`bash
 # IP-based, dev runtime
-avocado deploy -r dev -d 192.168.1.42
+avocado deploy dev -d 192.168.1.42
 
 # Hostname (mDNS), dev runtime
-avocado deploy -r dev -d avocado-raspberrypi4.local
+avocado deploy dev -d avocado-raspberrypi4.local
 
 # Custom user + port (rare)
-avocado deploy -r dev -d root@10.0.0.5:2222
+avocado deploy dev -d root@10.0.0.5:2222
 \`\`\`
 
 ## How to read CLI results — collect from \`avocado\`, not from its internals
@@ -137,7 +138,7 @@ avocado deploy -r dev -d root@10.0.0.5:2222
 Today the SDK runs inside a Docker container; that may change. Either way, the rule is the same: read what \`avocado\` prints, not what its internals do.
 
 **Do**:
-- Run \`avocado install -f\` (or \`build\`, or \`deploy\`) as a foreground Bash command.
+- Run \`avocado install\` (or \`build\`, or \`deploy\`) as a foreground Bash command.
 - Wait for it to exit.
 - Read the exit code and the output it printed. That is the result.
 - Pipe failures into \`explain-build-error\` for cross-channel package lookup.
@@ -154,43 +155,41 @@ The only legitimate reason to inspect the host's container runtime directly is i
 
 \`avocado install\`, \`avocado build\`, and \`avocado deploy\` default to a TUI: status spinners, screen redraws, ANSI escapes. That format is fine for a human watching a terminal but it turns a captured log file into garbage that \`grep\` and \`tail\` can't parse. **When you (the LLM) are capturing output to a file, always pass \`--no-tui\`.** It produces clean line-oriented stdout. Only omit it if a human is running the command directly in their own terminal.
 
-### \`avocado provision\` needs a pseudo-TTY — wrap with \`script\`
+### Running \`avocado provision\` from Bash
 
-This is a separate issue from \`--no-tui\` and **the most common reason \`avocado provision\` fails when an LLM runs it via Bash**:
+\`avocado provision\` runs from a non-interactive Bash tool with no wrapper. Since 1.0.0-rc.2 the CLI checks whether stdin is a terminal. Without one, it starts the SDK container without a PTY, so Docker no longer fails with \`the input device is not a TTY\`. If you see that error, the CLI is too old. Run \`avocado upgrade\`.
 
-\`\`\`
-the input device is not a TTY
-\`\`\`
-
-\`avocado provision\` shells out to \`docker run -it\` internally — the \`-t\` flag requires a TTY allocated for the container. The Bash tool runs commands without a TTY, so the call fails immediately. **\`--no-tui\` does NOT fix this** — \`--no-tui\` only affects Avocado's own output rendering, not Docker's TTY requirement.
-
-The fix is to wrap with \`script -q /dev/null\`, which provides a pseudo-TTY:
+For headless runs, set \`AVOCADO_NONINTERACTIVE=1\`. The CLI then never allocates a PTY and never waits for an answer, even when a terminal is attached.
 
 \`\`\`bash
-script -q /dev/null avocado provision -r dev --no-tui > /tmp/avocado-provision.log 2>&1
+mkdir -p .avocado/logs
+AVOCADO_NONINTERACTIVE=1 avocado provision dev --no-tui > .avocado/logs/provision.log 2>&1
 \`\`\`
 
-\`script\` is in coreutils on Linux and util-linux on macOS — it's almost always already installed. \`-q\` suppresses its banner; \`/dev/null\` discards its typescript file (we already have the redirect to \`/tmp/avocado-provision.log\`).
-
-**Rule:** every \`avocado provision\` invocation you make from Bash needs the wrapper. \`avocado build\`, \`avocado install\`, \`avocado deploy\` do NOT need it (they don't shell out to \`docker run -it\` the same way).
+On macOS, a profile that writes an SD card from the host ends with a disk-write step that asks for confirmation. With no terminal, or with \`AVOCADO_NONINTERACTIVE=1\`, the CLI reads that question as "no" and prints \`Operation cancelled.\` Nothing is written to the card. Ask the user to run that provision in their own terminal.
 
 ### Filtering noise — required pattern for install/build
 
 \`avocado install\` and \`avocado build\` produce hundreds of lines (package resolution, downloads, compile output). Loading all of that into context burns tokens. The required pattern:
 
 \`\`\`bash
-# Capture full output to a file; surface only the slices that matter.
-avocado install -f --no-tui > /tmp/avocado-install.log 2>&1
+# Capture full output to a file in the project. Surface only the slices that matter.
+mkdir -p .avocado/logs
+avocado install --no-tui > .avocado/logs/install.log 2>&1
 RC=$?
 echo "exit: $RC"
-tail -40 /tmp/avocado-install.log
+tail -40 .avocado/logs/install.log
 echo '---errors---'
-grep -iE 'error|failed|nothing provides|broken' /tmp/avocado-install.log | tail -40 || true
+grep -iE 'error|failed|nothing provides|broken' .avocado/logs/install.log | tail -40 || true
 \`\`\`
 
-Same pattern for \`avocado build --no-tui > /tmp/avocado-build.log 2>&1\`. You load three small slices: the exit code, the last ~40 lines (where the success/failure summary lives), and any error-like lines. The full log stays on disk for \`explain-build-error\` to ingest if needed.
+Same pattern for \`avocado build --no-tui > .avocado/logs/build.log 2>&1\`. You load three small slices: the exit code, the last ~40 lines (where the success/failure summary lives), and any error-like lines. The full log stays on disk for \`explain-build-error\` to ingest if needed.
+
+Logs go in \`.avocado/logs/\` inside the project. \`avocado init\` adds \`.avocado/\` to \`.gitignore\`, so the logs stay out of git and stay with the project.
 
 \`avocado deploy --no-tui\` is shorter (no SDK compile pass) so a plain run is usually fine — but the same redirect-to-file pattern is safe and recommended.
+
+For machine-readable output, \`install\`, \`build\`, \`provision\` and \`deploy\` accept \`--output json\`. This skips the TUI and prints NDJSON events, one JSON object per line. Use it when you parse the result in code. The text pattern above is enough for most runs.
 
 ### Surface ✅/❌ status to the user after every step
 
@@ -222,7 +221,7 @@ For \`avocado deploy\` to work:
 - **The device must be reachable on the network** from the dev host. \`ping\` and \`ssh root@<host>\` must succeed.
 - **The device must be running the \`dev\` runtime** (or any runtime that includes \`avocado-ext-sshd-dev\`). The runtime ships an sshd with a passwordless root login.
 - **The dev host must be able to bind a local HTTP port** so the device can pull from it. If the user is on a corporate network with host-firewalled inbound, this fails.
-- **The runtime named on \`-r\` must be defined in \`avocado.yaml\`** under \`runtimes:\`.
+- **The runtime you name (the positional \`[NAME]\`) must be defined in \`avocado.yaml\`** under \`runtimes:\`.
 
 If any of these fail, \`avocado deploy\` errors out clearly and the user falls back to \`avocado provision\` + re-flash.
 
@@ -237,7 +236,7 @@ If any of these fail, \`avocado deploy\` errors out clearly and the user falls b
 
 After \`add-extension\`, \`add-runtime\`, \`add-package-to-extension\`, or any manual \`avocado.yaml\` edit, the typical next questions are: "did this build?" and "does it work on my device?" The deploy flow answers both in one short loop. Surface it like this:
 
-> "I've added \`postgresql\` to the \`app\` extension. The next steps are \`avocado install -f && avocado build\`. If your device is already running and reachable (\`192.168.1.42\` from earlier in this conversation), you can push the change to it with \`avocado deploy -r dev -d 192.168.1.42\` — no reflash needed. Want me to run those for you?"
+> "I've added \`postgresql\` to the \`app\` extension. The next steps are \`avocado install && avocado build\`. If your device is already running and reachable (\`192.168.1.42\` from earlier in this conversation), you can push the change to it with \`avocado deploy dev -d 192.168.1.42\` with no reflash. Want me to run those for you?"
 
 This turns a 5-minute reflash cycle into a 30-second push.
 
@@ -285,19 +284,32 @@ In these cases — and ONLY in these cases — clearing SDK state is the right m
 **For a human running these in their own terminal:**
 
 \`\`\`bash
-avocado clean        # clear this project's SDK build artifacts + caches
-avocado prune        # additionally remove the project's named Docker volume (heavier)
+avocado clean        # remove this project's Docker volumes and its .avocado-state file
+avocado prune        # remove abandoned Avocado volumes that no current config uses
 \`\`\`
 
 **For an LLM running via the Bash tool:**
 
 \`\`\`bash
-avocado clean --no-tui > /tmp/avocado-clean.log 2>&1 && tail -20 /tmp/avocado-clean.log
+mkdir -p .avocado/logs
+avocado clean --no-tui > .avocado/logs/clean.log 2>&1 && tail -20 .avocado/logs/clean.log
 \`\`\`
 
-After cleaning, re-run \`avocado install -f && avocado build\` from scratch.
+After cleaning, re-run \`avocado install && avocado build\` from scratch. The volumes are gone, so a plain install starts clean.
 
 **Do NOT** run \`clean\` / \`prune\` reflexively — they discard the cache the iteration loop relies on, and the next build will be slow. They're a recovery tool, not part of the loop. If \`explain-build-error\` returns a curated diagnosis pointing at the YAML or a specific package, fix that instead.
 
-\`avocado clean --help\` and \`avocado prune --help\` show the per-command options (e.g. \`--all\` to clear caches for every project on the host, not just CWD).
+Useful options (neither command has \`--all\`):
+
+| Command | Option | Effect |
+|---|---|---|
+| \`avocado clean\` | \`--skip-volumes\` | Keep the volumes. Use with \`--stamps\` or \`--unlock\`. |
+| \`avocado clean\` | \`--stamps\` | Also remove stamp files. Needs \`-C <config>\` and \`--target <target>\`. |
+| \`avocado clean\` | \`--unlock\` | Also clear lock entries for every sysroot. Needs \`-C <config>\`. |
+| \`avocado clean\` | \`-f, --force\` | Stop and remove containers that still use the volume. |
+| \`avocado prune\` | \`--dry-run\` | List the volumes it would remove. Remove nothing. |
+
+## Reset an install only on request
+
+Plain \`avocado install\` is the routine command. Installs never prompt, so you never need \`-f\` to skip a prompt. \`avocado install -f\` is a deliberate reset: it erases every extension's built content and forces a full rebuild. Use it only when the user asks for a reset, and tell them the next build redoes all of the work.
 `;

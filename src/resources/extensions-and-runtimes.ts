@@ -30,7 +30,7 @@ A runtime is a named combination of extensions that go on the device together. M
 - \`prod\` — production: stripped of dev tooling. Just the app, BSP, and required runtime packages.
 - \`factory\` (optional) — manufacturing runtime: end-of-line tests, provisioner, then hands off to \`prod\`.
 
-Runtimes are switchable: same hardware, different image. \`avocado provision -r prod\` puts the prod runtime on the device.
+Runtimes are switchable: same hardware, different image. \`avocado provision prod\` puts the prod runtime on the device.
 
 ## Overlays
 

@@ -9,7 +9,7 @@ MCP server that turns an AI assistant into a working Avocado OS co-pilot. It hel
 - Browse, read, and copy from reference projects (full source — `avocado.yaml`, app code, overlays, build hooks)
 - First-time provision a device, then push iterative updates via `avocado deploy` — no reflash required
 - Diagnose `avocado build` / `avocado provision` failures; honest fallback when no pattern matches (no empty diagnoses)
-- Look up per-target provisioning steps with the right `script -q /dev/null` wrapper for LLM-driven runs
+- Look up per-target provisioning steps, with headless commands for LLM-driven runs
 - Debug a running device over UART/USB via a long-lived tmux session (default), or SSH once the device is healthy
 - Run closed-loop debugging: read logs, edit code or extensions to add logging, redeploy, re-verify
 
@@ -125,7 +125,7 @@ When invoked directly without a prompt, the underlying conventions are:
 4. **`add-extension` / `add-runtime` / `add-package-to-extension`** for YAML edits; package additions are verified against the live feed.
 5. **`search-packages` / `describe-package`** before adding any library — feed packages beat vendoring / `pip install` / `npm install` on every axis (versioning, security updates, image size).
 6. **`validate-yaml`** runs against a JSON Schema bundled with the MCP, so there's no schema-version drift.
-7. **`get-provisioning-steps`** emits both human and LLM-shaped commands; LLM-driven runs need `script -q /dev/null` to give `avocado provision` a pseudo-TTY.
+7. **`get-provisioning-steps`** emits both human and LLM-shaped commands. LLM-driven runs set `AVOCADO_NONINTERACTIVE=1` and need no TTY wrapper.
 
 If `avocado build` / `install` / `provision` fails, paste the log into `explain-build-error` or `diagnose-provision-log` — they return a curated diagnosis when one fits, and otherwise extract the error lines + file paths + next-step routing rather than returning empty.
 
