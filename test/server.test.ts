@@ -17,6 +17,9 @@ import { registerConnectTools } from "../src/tools/connect.js";
 import { registerSkillResources } from "../src/tools/resources.js";
 import { registerPrompts } from "../src/tools/prompts.js";
 
+// Validate against the vendored schema: no network in tests.
+process.env.AVOCADO_MCP_SCHEMA_OFFLINE = "1";
+
 async function connect() {
   const server = new McpServer({ name: "avocado-os", version: "test" });
   const repoClient = new RepoClient();
@@ -143,4 +146,70 @@ test("init-project refuses feed args that would inject into avocado.yaml", async
     assert.match(text, /^# init-project failed/, JSON.stringify(args));
     assert.doesNotMatch(text, /```yaml|s3cr3t/, JSON.stringify(args));
   }
+});
+
+test("init-project refuses runtime, board and extension values that would inject", async () => {
+  const { client } = await connect();
+  for (const args of [
+    { runtimeName: "dev; rm -rf ~" },
+    { board: "a\nb" },
+    { extraExtensions: ["ok", "x\u0085evil: 1"] },
+  ]) {
+    const res = await client.callTool({
+      name: "init-project",
+      arguments: { target: "qemux86-64", forceFromScratch: true, ...args },
+    });
+    const text = (res.content as { text: string }[])[0].text;
+    assert.match(text, /^# init-project failed/, JSON.stringify(args));
+  }
+});
+
+test("init-project from scratch tells the model to run avocado init", async () => {
+  // No network: the feed's target list is unavailable, so the target is not
+  // checked, and the from-scratch path runs.
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => {
+    throw new Error("offline");
+  }) as typeof fetch;
+  try {
+    const { client } = await connect();
+    const call = async (extra: Record<string, unknown>) => {
+      const res = await client.callTool({
+        name: "init-project",
+        arguments: {
+          target: "jetson-orin-nx",
+          forceFromScratch: true,
+          board: "mic-712-ox-16gb",
+          ...extra,
+        },
+      });
+      return (res.content as { text: string }[])[0].text;
+    };
+
+    const withCli = await call({});
+    assert.match(withCli, /avocado init --target jetson-orin-nx <project-dir>/);
+    assert.match(withCli, /default_target_board: mic-712-ox-16gb/);
+    assert.doesNotMatch(withCli, /```yaml/);
+
+    const noCli = await call({ cliAvailable: false });
+    assert.doesNotMatch(noCli, /avocado init --target/);
+    assert.match(noCli, /```yaml\n# yaml-language-server/);
+    assert.match(noCli, /default_target_board: mic-712-ox-16gb/);
+    assert.match(noCli, /validates against the schema/);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("validate-yaml reports ignored keys as warnings, not errors", async () => {
+  const { client } = await connect();
+  const res = await client.callTool({
+    name: "validate-yaml",
+    arguments: { yaml: "runtimes:\n  dev:\n    extentions: [app]\n" },
+  });
+  const s = res.structuredContent as { ok: boolean; warnings: string[] };
+  assert.equal(s.ok, true);
+  assert.deepEqual(s.warnings, [
+    "unknown key 'runtimes.dev.extentions' is ignored; did you mean 'extensions'?",
+  ]);
 });

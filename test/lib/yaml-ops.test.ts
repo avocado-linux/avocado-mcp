@@ -1,5 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "fs";
+import { parse } from "yaml";
 import {
   addExtension,
   addRuntime,
@@ -8,6 +10,9 @@ import {
   buildStarterYaml,
   validateAvocadoYaml,
 } from "../../src/lib/yaml-ops.js";
+
+// Validate against the vendored schema: no network in tests.
+process.env.AVOCADO_MCP_SCHEMA_OFFLINE = "1";
 
 const WITH_COMMENTS = `# my avocado project
 sdk:
@@ -165,7 +170,66 @@ test("every starter YAML validates against the bundled schema", async () => {
   ]) {
     const res = await validateAvocadoYaml(buildStarterYaml({ target }));
     assert.equal(res.ok, true, `${target}: ${JSON.stringify(res.errors)}`);
+    assert.deepEqual(res.warnings, [], target);
   }
+});
+
+const TEMPLATE = readFileSync(
+  new URL("../../src/lib/schema/default.yaml", import.meta.url),
+  "utf8",
+);
+
+test("the default starter is the CLI template with the target filled in", () => {
+  const out = buildStarterYaml({ target: "raspberrypi5" });
+  assert.deepEqual(
+    parse(out),
+    parse(TEMPLATE.replaceAll("{target}", "raspberrypi5")),
+  );
+  // The editor modeline and the comments survive.
+  assert.match(
+    out,
+    /^# yaml-language-server: \$schema=https:\/\/docs\.peridio\.com\/schemas\/avocado-config\.json/,
+  );
+  assert.match(out, /NOT FOR PRODUCTION/);
+});
+
+test("starter options land where the CLI reads them", async () => {
+  const out = buildStarterYaml({
+    target: "jetson-orin-nx",
+    board: "mic-712-ox-16gb",
+    runtimeName: "prod",
+    extraExtensions: ["avocado-ext-docker"],
+    release: "2026",
+    channel: "stable",
+    repoUrl: "https://mirror.example/avocado",
+  });
+  const y = parse(out);
+  assert.equal(y.default_target, "jetson-orin-nx");
+  assert.deepEqual(y.supported_targets, ["jetson-orin-nx"]);
+  assert.equal(y.default_target_board, "mic-712-ox-16gb");
+  assert.deepEqual(Object.keys(y).slice(0, 3), [
+    "cli_requirement",
+    "default_target",
+    "default_target_board",
+  ]);
+  assert.deepEqual(Object.keys(y.runtimes), ["prod"]);
+  assert.equal(y.runtimes.prod.extensions.at(-1), "avocado-ext-docker");
+  assert.deepEqual(y.distro, {
+    release: 2026,
+    channel: "stable",
+    repo: { url: "https://mirror.example/avocado" },
+  });
+  const res = await validateAvocadoYaml(out);
+  assert.equal(res.ok, true, JSON.stringify(res.errors));
+});
+
+test("a starter value with YAML syntax stays one string", () => {
+  const evil = "x\nruntimes:\n  pwned: {}";
+  const y = parse(
+    buildStarterYaml({ target: "qemux86-64", extraExtensions: [evil] }),
+  );
+  assert.equal(y.runtimes.dev.extensions.at(-1), evil);
+  assert.deepEqual(Object.keys(y.runtimes), ["dev"]);
 });
 
 test("validation of the starter makes no network call", async () => {
@@ -202,4 +266,92 @@ test("schema errors carry an instancePath the model can act on", async () => {
       (e) => typeof e.instancePath === "string" && e.instancePath.length,
     ),
   );
+});
+
+// ---------------------------------------------------------------------------
+// The CLI schema. These configs come from the audit probe: the old
+// hand-written schema got each of them wrong.
+// ---------------------------------------------------------------------------
+
+const BASE =
+  "distro: {release: 2024, channel: edge}\nruntimes:\n  dev:\n    extensions: [app]\n";
+
+for (const [name, yaml] of Object.entries({
+  "git source": `${BASE}extensions:\n  app:\n    source: {type: git, url: https://x/y.git, ref: main}\n`,
+  "path source": `${BASE}extensions:\n  app:\n    source: {type: path, path: ../app}\n`,
+  "version from a file": `${BASE}extensions:\n  app:\n    types: [sysext]\n    version: {file: Cargo.toml, key: package.version, format: toml}\n`,
+  "runtime extension in object form":
+    "distro: {release: 2024, channel: edge}\nruntimes:\n  dev:\n    extensions:\n      - app: {enabled: false}\n",
+  "distro.repo as a repos: name":
+    "distro: {release: 2024, channel: edge, repo: mirror, feeds: [acme]}\nrepos:\n  mirror: {url: https://m}\n  acme: {org: acme}\nruntimes: {dev: {extensions: [a]}}\n",
+  "extension-only config":
+    "supported_targets: '*'\nextensions:\n  foo: {types: [sysext], version: \"1.0.0\"}\n",
+  "new keys (depends_on, verity, var encryption, cmdline_extra)":
+    'distro: {release: 2024, channel: edge}\nkernel: {cmdline_extra: earlycon}\nextensions:\n  app:\n    types: [sysext]\n    version: "1"\n    depends_on: [base]\n    image: {verity: true}\nruntimes:\n  dev:\n    extensions: [app]\n    var: {encrypt: true, hardware: tpm2, recovery: rk}\n    signing: {fit_key: fk}\n',
+})) {
+  test(`valid: ${name}`, async () => {
+    const res = await validateAvocadoYaml(yaml);
+    assert.equal(res.ok, true, JSON.stringify(res.errors));
+    assert.deepEqual(res.warnings, []);
+  });
+}
+
+test("a typo key is a warning, as in the CLI, not an error", async () => {
+  const res = await validateAvocadoYaml(
+    `${BASE}extensions:\n  app:\n    types: [sysext]\n    version: "1"\n    enable_service: [x.service]\nrutimes: {}\n`,
+  );
+  assert.equal(res.ok, true, JSON.stringify(res.errors));
+  assert.deepEqual(res.warnings, [
+    "unknown key 'extensions.app.enable_service' is ignored; did you mean 'enable_services'?",
+    "unknown key 'rutimes' is ignored; did you mean 'runtimes'?",
+  ]);
+});
+
+test("kernel cmdline with cmdline_extra is an error", async () => {
+  const res = await validateAvocadoYaml(
+    "kernel: {cmdline: a, cmdline_extra: b}\n",
+  );
+  assert.equal(res.ok, false);
+  assert.ok(
+    res.errors.some(
+      (e) =>
+        e.instancePath === "/kernel/cmdline_extra" &&
+        /must not be set together/.test(e.message),
+    ),
+    JSON.stringify(res.errors),
+  );
+});
+
+test("an unknown var.hardware value is an error", async () => {
+  const res = await validateAvocadoYaml(
+    "runtimes:\n  dev:\n    extensions: [a]\n    var: {encrypt: true, hardware: bogus}\n",
+  );
+  assert.equal(res.ok, false);
+  assert.ok(
+    res.errors.some((e) => e.instancePath === "/runtimes/dev/var/hardware"),
+    JSON.stringify(res.errors),
+  );
+});
+
+test("add-extension writes git and path sources and depends_on", async () => {
+  let y = addExtension(BASE, {
+    name: "app",
+    source: { type: "git", url: "https://x/y.git", ref: "main" },
+    dependsOn: ["base"],
+  });
+  y = addExtension(y, {
+    name: "base",
+    source: { type: "path", path: "../base" },
+  });
+  const parsed = parse(y);
+  assert.deepEqual(parsed.extensions.app, {
+    source: { type: "git", url: "https://x/y.git", ref: "main" },
+    depends_on: ["base"],
+  });
+  assert.deepEqual(parsed.extensions.base, {
+    source: { type: "path", path: "../base" },
+  });
+  const res = await validateAvocadoYaml(y);
+  assert.equal(res.ok, true, JSON.stringify(res.errors));
+  assert.deepEqual(res.warnings, []);
 });
