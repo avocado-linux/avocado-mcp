@@ -111,9 +111,10 @@ export function redactUrl(url: string): string {
 /** Validate a feed and return its normalised base URL. Throws on anything unsafe. */
 export function validateFeed(feed: FeedSpec): string {
   const shown = redactUrl(feed.baseUrl);
-  // `new URL()` silently strips tabs/newlines, so check the raw string: the
-  // value can also end up verbatim in a generated avocado.yaml.
-  if (/[\s\x00-\x1f\x7f]/.test(feed.baseUrl)) {
+  // `new URL()` silently strips tabs/newlines, so check the raw string. C1
+  // controls are included because YAML 1.1 (avocado-cli's parser) treats
+  // U+0085 as a line break.
+  if (/[\s\x00-\x1f\x7f-\x9f]/.test(feed.baseUrl)) {
     throw new Error(
       `Repo URL must not contain whitespace or control characters: ${JSON.stringify(shown)}`,
     );

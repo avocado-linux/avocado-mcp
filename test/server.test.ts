@@ -132,6 +132,7 @@ test("init-project refuses feed args that would inject into avocado.yaml", async
   for (const args of [
     { release: "2026\n  repo:\n    url: https://evil.example" },
     { repoUrl: "https://a.example/x\n    tls_verify: false" },
+    { repoUrl: "https://a.example/x\u0085tls_verify:\u0085" },
     { repoUrl: "https://ci:s3cr3t@mirror.example/avocado" },
   ]) {
     const res = await client.callTool({
