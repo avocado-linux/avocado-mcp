@@ -6,6 +6,7 @@ import {
   minDiskGB,
   diskRequirement,
   provisionCommand,
+  boardDocsUrl,
   runProvisionCommands,
   getHardwareData,
   clearHardwareDataCache,
@@ -333,4 +334,35 @@ test("board data lookups accept the docs names for a board", () => {
   assert.equal(lookupTarget(DATA, "jetson"), null);
   // Two MIC-733 boards share a target. Do not guess the board.
   assert.equal(lookupTarget(DATA, "Advantech MIC-733"), null);
+});
+
+test("with no board, the plain module is named and linked, not a carrier board", () => {
+  // supported.json lists the MIC-712-OX before the plain Orin NX.
+  const out = targetInfoText(DATA, "jetson-orin-nx", undefined);
+  assert.match(out, /\*\*Name:\*\* NVIDIA Jetson Orin NX\n/);
+  assert.match(
+    out,
+    /\*\*Docs:\*\* https:\/\/docs\.peridio\.com\/hardware\/nvidia\/jetson-orin-nx\n/,
+  );
+  assert.match(
+    out,
+    /Follow the board page: [^\n]*\/hardware\/nvidia\/jetson-orin-nx\./,
+  );
+  assert.doesNotMatch(out, /\*\*Name:\*\* Advantech/);
+  assert.equal(
+    boardDocsUrl(lookupTarget(DATA, "jetson-orin-nx")!),
+    "https://docs.peridio.com/hardware/nvidia/jetson-orin-nx",
+  );
+});
+
+test("a board the data does not list gets no other board's name or page", () => {
+  const out = targetInfoText(DATA, "jetson-agx-orin-devkit", "mic-999");
+  assert.match(out, /Board `mic-999` is not in the docs data/);
+  assert.doesNotMatch(out, /\*\*Name:\*\*/);
+  assert.doesNotMatch(out, /\*\*Docs:\*\*/);
+  assert.doesNotMatch(out, /Follow the board page:/);
+  assert.equal(
+    boardDocsUrl(lookupTarget(DATA, "jetson-orin-nx", "mic-999")!),
+    undefined,
+  );
 });

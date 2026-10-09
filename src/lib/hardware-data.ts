@@ -281,20 +281,26 @@ function docsUrl(path: string | null | undefined): string | undefined {
   return path ? `${DOCS_SITE}${path.replace(/\/+$/, "")}` : undefined;
 }
 
-/** The device row for the board or the docs name the caller passed. */
+/**
+ * The device row for the board or the docs name the caller passed. With
+ * neither, the row with no board: on `jetson-orin-nx` the MIC-712 row comes
+ * first, but the plain module is the one with no board.
+ */
 function matchedDevice(info: TargetInfo): SupportedDevice | undefined {
   if (info.board) return info.devices.find((d) => d.board === info.board);
   if (info.name) return info.devices.find((d) => d.name === info.name);
-  return undefined;
+  return info.devices.find((d) => !d.board);
 }
 
-/** The board page for a target (or for its board), with no trailing slash. */
+/**
+ * The board page for a target (or for its board), with no trailing slash.
+ * Never the page of another board: a board the data does not list gets none.
+ */
 export function boardDocsUrl(info: TargetInfo): string | undefined {
   const device = matchedDevice(info);
   return (
     docsUrl(device?.url) ??
-    docsUrl(info.entries.find((e) => e.hardwareUrl)?.hardwareUrl) ??
-    docsUrl(info.devices.find((d) => d.url)?.url)
+    docsUrl(info.entries.find((e) => e.hardwareUrl)?.hardwareUrl)
   );
 }
 
@@ -669,7 +675,10 @@ export function targetInfoText(
 
   const entry = info.entries[0];
   const device = matchedDevice(info);
-  out += `**Name:** ${device?.name ?? entry?.name ?? info.devices[0].name}\n`;
+  // No name for a board the data does not list. Another board's name is
+  // wrong, and the provisioning text says the board is not in the data.
+  const name = device?.name ?? entry?.name;
+  if (name) out += `**Name:** ${name}\n`;
   if (info.target !== target)
     out += `**Docs target slug:** \`${info.target}\`\n`;
   const page = boardDocsUrl(info);
