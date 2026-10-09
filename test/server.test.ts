@@ -413,6 +413,47 @@ test("one init-project or get-provisioning-steps call fetches each docs file onc
   }
 });
 
+test("init-project lists supported targets, or the feed when the docs are down", async () => {
+  const realFetch = globalThis.fetch;
+  const call = async () => {
+    clearHardwareDataCache();
+    clearSelectableCache();
+    const { client } = await connect(new SupportedTargetsRepo());
+    const res = await client.callTool({
+      name: "init-project",
+      arguments: { target: "no-such-board" },
+    });
+    return (res.content as { text: string }[])[0].text;
+  };
+  try {
+    const restore = serveHardwareFixture();
+    let text: string;
+    try {
+      text = await call();
+    } finally {
+      restore();
+    }
+    assert.match(
+      text,
+      /\*\*Supported targets \(2\):\*\* `qemuarm64`, `raspberrypi5`/,
+    );
+    assert.doesNotMatch(text, /`armv8a`/);
+
+    globalThis.fetch = (async () => {
+      throw new Error("offline");
+    }) as typeof fetch;
+    text = await call();
+    assert.match(
+      text,
+      /\*\*Targets in the feed \(4\):\*\* `armv8a`, `noarch`, `qemuarm64`, `raspberrypi5`/,
+    );
+  } finally {
+    globalThis.fetch = realFetch;
+    clearHardwareDataCache();
+    clearSelectableCache();
+  }
+});
+
 test("a flag-like serial port is rejected by the tool's input schema", async () => {
   // The port pattern lives on the zod field, so the SDK rejects it before the
   // handler — the LLM is told the constraint rather than getting a bare throw.
