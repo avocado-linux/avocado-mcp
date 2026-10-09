@@ -728,3 +728,24 @@ test("a closure error from a cycle or a version conflict is not a missing extens
     );
   }
 });
+
+test("an echoed script line from --verbose does not match", () => {
+  // With --verbose the CLI prints the container script, so the `echo` source
+  // lines of rootfs/image.rs, runtime/build.rs and runtime/deploy.rs appear
+  // in the log although the branch did not run.
+  const echoed = [
+    `    if [ ! -f "$ROOTFS_WORK/etc/passwd" ]; then`,
+    `        echo "ERROR: rootfs staging at $ROOTFS_WORK is missing /etc/passwd. The build volume looks half-populated or stale." >&2`,
+    `            echo "ERROR: rootfs.image.verity is on, which needs the boot FIT rebuilt with the root hash, but no FIT signing key is configured." >&2`,
+    `                echo "ERROR: signing.fit_key_in_bootloader is on but this feed ships no imx-boot-tools/rekey-imx-boot.sh for $TARGET_ARCH." >&2`,
+    `        echo "ERROR: this runtime has extensions with image.verity: true; deploy does not publish their dm-verity hash trees yet, so the device would refuse them." >&2`,
+    `    echo "ERROR: No root.json found at $ROOT_JSON_FILE" >&2`,
+    `echo "ERROR: No root.json found at $ROOT_JSON_FILE" >&2`,
+  ].join("\n");
+  assert.deepEqual(labels(diagnoseBuildLog(echoed)), []);
+  // The emitted line still matches, also after a one-word prefix.
+  assert.deepEqual(
+    labels(diagnoseBuildLog("[ERROR] ERROR: No root.json found at /opt/x")),
+    ["No root.json in the runtime"],
+  );
+});
