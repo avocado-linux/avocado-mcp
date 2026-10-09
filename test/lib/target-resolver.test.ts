@@ -194,3 +194,56 @@ test("resolveTargetInput turns what users type into one slug", async () => {
   }
   assert.deepEqual(resolveTargetInput("toaster", slugs), { candidates: [] });
 });
+
+test("resolveTargetInput uses docs names as aliases", async () => {
+  const { resolveTargetInput } =
+    await import("../../src/lib/target-resolver.js");
+  const slugs = ["icam-540", "jetson-orin-nx", "jetson-agx-orin-devkit"];
+  const aliases = [
+    { name: "Advantech ICAM-540", target: "icam-540" },
+    {
+      name: "Advantech MIC-712-OX",
+      target: "jetson-orin-nx",
+      board: "mic-712-ox-16gb",
+    },
+    { name: "NVIDIA Jetson Orin NX", target: "jetson-orin-nx" },
+    {
+      name: "Advantech MIC-733-AO5A1",
+      target: "jetson-agx-orin-devkit",
+      board: "mic-733-ao5a1",
+    },
+    {
+      name: "Advantech MIC-733-AO6A1",
+      target: "jetson-agx-orin-devkit",
+      board: "mic-733-ao6a1",
+    },
+    { name: "Thundercomm Rubik Pi 3", target: "rubikpi3" },
+  ];
+  assert.deepEqual(
+    resolveTargetInput("Advantech MIC-712-OX", slugs, aliases).board,
+    "mic-712-ox-16gb",
+  );
+  assert.equal(
+    resolveTargetInput("mic-712-ox-16gb", slugs, aliases).target,
+    "jetson-orin-nx",
+  );
+  assert.equal(
+    resolveTargetInput("NVIDIA Jetson Orin NX", slugs, aliases).board,
+    undefined,
+  );
+  assert.equal(
+    resolveTargetInput("MIC-733-AO6A1", slugs, aliases).board,
+    "mic-733-ao6a1",
+  );
+  // Two boards tie: no target, so no silent wrong board.
+  assert.equal(resolveTargetInput("MIC-733", slugs, aliases).target, undefined);
+  // The name matches a target that is not in the list: no other target wins.
+  const m = resolveTargetInput("Thundercomm Rubik Pi 3", slugs, aliases);
+  assert.equal(m.target, undefined);
+  assert.ok(!m.candidates.includes("rubikpi3"));
+  // Without aliases, `advantech` alone does not pick icam-540.
+  assert.equal(
+    resolveTargetInput("Advantech MIC-712-OX", slugs).target,
+    undefined,
+  );
+});

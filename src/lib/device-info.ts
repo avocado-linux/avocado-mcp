@@ -14,6 +14,7 @@ import {
   boardDocsUrl,
   isVirtual,
   lookupTarget,
+  resolvedLine,
   serialCaveats,
   SERIAL_OPTIONAL,
   HARDWARE_DOCS_URL,
@@ -180,7 +181,7 @@ export function getDeviceConnectionInfo(
       "Empty root password, set by the `dev` profile in the top-level `permissions` section of the starter `avocado.yaml` (`rootfs` and `initramfs` use it). NOT FOR PRODUCTION.",
     caveats: info?.requested
       ? [
-          `Resolved \`${info.requested}\` to target \`${info.target}\`.`,
+          resolvedLine(info.requested, info.target, info.resolvedBoard),
           SERIAL_OPTIONAL,
         ]
       : [SERIAL_OPTIONAL],

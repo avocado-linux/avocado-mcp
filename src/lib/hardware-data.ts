@@ -23,7 +23,7 @@ import {
   sameTarget,
 } from "./hardware-support.js";
 import { isSafeSegment } from "./repo-client.js";
-import { resolveTargetInput } from "./target-resolver.js";
+import { resolveTargetInput, type TargetAlias } from "./target-resolver.js";
 
 export const DOCS_SITE = "https://docs.peridio.com";
 export const HARDWARE_DOCS_URL = `${DOCS_SITE}/hardware/support-matrix`;
@@ -156,6 +156,8 @@ export interface TargetInfo {
   devices: SupportedDevice[];
   /** What the caller passed, when it was resolved to another slug ("rpi5"). */
   requested?: string;
+  /** The board taken from the name the caller passed, when it gave none. */
+  resolvedBoard?: string;
 }
 
 /**
@@ -180,10 +182,11 @@ export function lookupTarget(
   const names = targetNames(data);
   // Users type "rpi5" or "Raspberry Pi 5". Resolve that to one slug here, so
   // every tool that reads the board data accepts it. The slug compare below
-  // stays exact.
-  const slug = names.some((n) => sameTarget(target, n))
-    ? target
-    : resolveTargetInput(target, names).target;
+  // stays exact. A board name ("Advantech MIC-712-OX") also gives the board.
+  const match = names.some((n) => sameTarget(target, n))
+    ? { target, board: undefined }
+    : resolveTargetInput(target, names, targetAliases(data, names));
+  const slug = match.target;
   if (!slug) return null;
   const entries = Object.values(data.targets).filter(
     (e) => e?.target && sameTarget(slug, e.target),
@@ -192,7 +195,8 @@ export function lookupTarget(
     (d) => d?.target && sameTarget(slug, d.target),
   );
   if (entries.length === 0 && devices.length === 0) return null;
-  const b = board?.trim() || undefined;
+  const resolvedBoard = board?.trim() ? undefined : match.board;
+  const b = board?.trim() || resolvedBoard;
   // Only a board the data lists gets steps. `covers` then picks the entries
   // that apply to it, so a typo cannot match text in an entry's YAML.
   const known =
@@ -207,6 +211,7 @@ export function lookupTarget(
     virtual: entries.some((e) => e.category === "virtual"),
     devices,
     requested: slug === target ? undefined : target,
+    resolvedBoard,
   };
 }
 
@@ -541,6 +546,31 @@ export function unavailableText(target: string): string {
   return `Board data unavailable: the docs hardware data for \`${target}\` could not be fetched. Do not guess board facts. Read the board page from ${HARDWARE_DOCS_URL}, or try again later.\n`;
 }
 
+/**
+ * The docs names for each target, as resolver aliases: every device name and
+ * board in `supported.json` and `virtual-environment.json`, and every
+ * `targets.json` entry name. Each alias maps to the slug in `slugs` that
+ * names the same target (a feed slug can drop `-devkit`). An alias for a
+ * target not in `slugs` keeps its docs slug, so a name for a missing target
+ * cannot resolve to another one.
+ */
+export function targetAliases(
+  data: HardwareData,
+  slugs: string[],
+): TargetAlias[] {
+  const rows = [...data.devices, ...Object.values(data.targets)];
+  const out: TargetAlias[] = [];
+  for (const r of rows) {
+    if (!r?.target || !r.name) continue;
+    const target = slugs.find((s) => sameTarget(s, r.target)) ?? r.target;
+    const board = r.board?.trim() || undefined;
+    out.push(
+      board ? { name: r.name, target, board } : { name: r.name, target },
+    );
+  }
+  return out;
+}
+
 /** Every target slug in the docs data. */
 function targetNames(data: HardwareData): string[] {
   const names = new Set<string>();
@@ -551,19 +581,42 @@ function targetNames(data: HardwareData): string[] {
 }
 
 export function unknownTargetText(target: string, data?: HardwareData): string {
-  const near = data
-    ? resolveTargetInput(target, targetNames(data)).candidates
-    : [];
+  const names = data ? targetNames(data) : [];
+  const match = data
+    ? resolveTargetInput(target, names, targetAliases(data, names))
+    : { candidates: [] };
+  const near = match.candidates;
+  if (match.boards) {
+    return `${boardChoiceText(target, near[0], match.boards)} The supported boards are at ${HARDWARE_DOCS_URL}.\n`;
+  }
   if (near.length === 0) {
     return `The docs hardware data has no entry for \`${target}\`. Use \`list-targets\` to check the slug. The supported boards are at ${HARDWARE_DOCS_URL}.\n`;
   }
   return `\`${target}\` matches more than one target in the docs hardware data. Did you mean ${near.map((t) => `\`${t}\``).join(", ")}? The supported boards are at ${HARDWARE_DOCS_URL}.\n`;
 }
 
+/** The sentence that asks which board a name means, when it fits several. */
+export function boardChoiceText(
+  input: string,
+  target: string,
+  boards: string[],
+): string {
+  return `\`${input}\` matches more than one board of target \`${target}\`: ${boards.map((b) => `\`${b}\``).join(", ")}. Pass \`target: "${target}"\` and the \`board\`.`;
+}
+
+/** The sentence that says what a user's name resolved to. */
+export function resolvedLine(
+  requested: string,
+  target: string,
+  board?: string,
+): string {
+  return `Resolved \`${requested}\` to target \`${target}\`${board ? ` with board \`${board}\`` : ""}.`;
+}
+
 /** One line that says which slug a user's name resolved to. */
 export function resolvedText(info: TargetInfo): string {
   return info.requested
-    ? `_Resolved \`${info.requested}\` to target \`${info.target}\`._\n\n`
+    ? `_${resolvedLine(info.requested, info.target, info.resolvedBoard)}_\n\n`
     : "";
 }
 

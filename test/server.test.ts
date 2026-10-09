@@ -217,6 +217,45 @@ test("a QEMU target with a board stays virtual", async () => {
   }
 });
 
+test("get-provisioning-steps resolves a docs board name to its target and board", async () => {
+  const restore = serveHardwareFixture();
+  class StubRepo extends RepoClient {
+    override async getTargetsConfig() {
+      return {
+        "icam-540": ["target/armv8a"],
+        "jetson-orin-nx": ["target/armv8a"],
+        rubikpi3: ["target/armv8a"],
+        raspberrypi5: ["target/armv8a"],
+      };
+    }
+  }
+  try {
+    const { client } = await connect(new StubRepo());
+    const call = async (target: string) => {
+      const res = await client.callTool({
+        name: "get-provisioning-steps",
+        arguments: { target },
+      });
+      return (res.content as { text: string }[])[0].text;
+    };
+    const mic = await call("Advantech MIC-712-OX");
+    assert.match(
+      mic,
+      /Resolved `Advantech MIC-712-OX` to target `jetson-orin-nx` with board `mic-712-ox-16gb`/,
+    );
+    assert.match(
+      mic,
+      /# Provisioning `jetson-orin-nx` \(board `mic-712-ox-16gb`\)/,
+    );
+    assert.match(
+      await call("Thundercomm Rubik Pi 3"),
+      /to target `rubikpi3`\./,
+    );
+  } finally {
+    restore();
+  }
+});
+
 test("a flag-like serial port is rejected by the tool's input schema", async () => {
   // The port pattern lives on the zod field, so the SDK rejects it before the
   // handler — the LLM is told the constraint rather than getting a bare throw.
