@@ -1,0 +1,30 @@
+name: Schema drift
+
+# Compares the vendored schema with the live upstream copy. Upstream can
+# change at any time, so this runs on a schedule and only on PRs that touch
+# the vendored files, not on every PR.
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'src/lib/schema/**'
+      - 'scripts/sync-schema.mjs'
+      - '.github/workflows/schema-drift.yml'
+
+jobs:
+  schema-drift:
+    name: Vendored schema matches the live copy
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22.x'
+
+      - name: Compare with docs.peridio.com and avocado-cli main
+        run: node scripts/sync-schema.mjs --check

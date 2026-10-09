@@ -6,8 +6,8 @@
  * memory and on disk under getCacheDir()/schema, and fall back to the copy
  * vendored in `src/lib/schema/` when the fetch fails or the fetched schema
  * does not compile. The fallback is kept in memory for five minutes, then
- * the live schema is tried again. CI fails when the vendored copy drifts from the CLI
- * (`npm run sync-schema` refreshes it).
+ * the live schema is tried again. The schema-drift workflow fails when the
+ * vendored copy drifts from the live one (`npm run sync-schema` refreshes it).
  *
  * Set AVOCADO_MCP_SCHEMA_OFFLINE=1 to skip the network and use the vendored
  * copy (air-gapped hosts, and the test suite).
