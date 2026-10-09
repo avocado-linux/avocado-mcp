@@ -398,7 +398,7 @@ const ERROR_LINE_RE =
 // "returned 0 warnings" / "exited with 2 errors" — those are tallies, not exit
 // codes, and treating them as one lets a benign number mask a real failure.
 const EXIT_CODE_RE =
-  /\b(?:exit(?: code|ed with)?|returned)\s*[:=]?\s*(\d+)\b(?!\s*(?:warning|error|result|package|match|file|byte|line|test|item|second)s?\b)/i;
+  /\b(?:exit(?:ed with)?(?:\s+(?:code|status))?|returned (?:non-zero )?exit (?:code|status))\s*[:=]?\s*(\d+)\b(?!\s*(?:warning|error|result|package|match|file|byte|line|test|item|second)s?\b)/i;
 const FILE_PATH_RE =
   /(?:^|[\s'"`(])((?:\/[A-Za-z0-9._+\-/]+|[A-Za-z]:\\[A-Za-z0-9._+\-\\]+))(?=[\s'"`):,;]|$)/g;
 const COMMAND_RE = /^\s*\$\s+(.+?)$|^\+ (.+?)$|^Running:\s+(.+?)$/m;
@@ -845,7 +845,7 @@ export function renderDiagnoses(
       // or the user pasted something other than a failure log. Say so.
       out += `_No known failure pattern matched, and the log doesn't contain obvious error signals (\`ERROR\`, \`error:\`, \`Failed\`, \`fatal:\`, \`Traceback\`, etc.)._\n\n`;
       out += `Possibilities:\n\n`;
-      out += `- The build/provision actually succeeded. Check the exit code on the original command.\n`;
+      out += `- The \`avocado ${kind}\` command actually succeeded. Check the exit code on the original command.\n`;
       out += `- Only a partial log was pasted — re-paste the section containing the failure.\n`;
       out += `- The failure is silent (process killed by OOM with no error message; check \`dmesg | grep -i "killed process"\`).\n`;
     } else {
