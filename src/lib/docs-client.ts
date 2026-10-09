@@ -244,7 +244,7 @@ export function toDocEntry(
   const section = deriveSection(repoPath);
   if (!section) return null;
   const { meta } = parseFrontmatter(text);
-  if (meta.draft === "true") return null;
+  if (/^true$/i.test(meta.draft ?? "")) return null;
   const sitePath = deriveSitePath(repoPath, meta.slug || undefined);
   return {
     repoPath,
