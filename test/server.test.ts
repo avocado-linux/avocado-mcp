@@ -134,6 +134,9 @@ test("an unknown deploy log gets deploy next steps, not build ones", async () =>
   assert.match(text, /avocadoctl status/);
   assert.match(text, /journalctl/);
   assert.doesNotMatch(text, /build failures|validate-yaml|search-packages/);
+  // Device checks must return on their own in an automated run.
+  assert.match(text, /BatchMode=yes/);
+  assert.doesNotMatch(text, /ssh root@|ping <device-ip>/);
   // No package lookup for a deploy log.
   const sc = res.structuredContent as { investigations?: unknown };
   assert.equal(sc.investigations, undefined);

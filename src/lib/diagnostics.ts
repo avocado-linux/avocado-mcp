@@ -505,10 +505,10 @@ export function renderFallbackDiagnosis(
 
   out += `**Suggested next steps** (in order, stop when you find a useful lead):\n\n`;
   if (kind === "deploy") {
-    out += `1. **Check SSH and the network to the device.** Run \`ping <device-ip>\` and \`ssh root@<device-ip> true\`. Deploy pushes the runtime over SSH and HTTP, so the device must be on and reachable from this host.\n`;
-    out += `2. **Check \`avocadoctl\` on the device.** Run \`ssh root@<device-ip> avocadoctl status\`. A missing or failing \`avocadoctl\` stops the runtime update on the device.\n`;
+    out += `1. **Check SSH and the network to the device.** Run \`ping -c 1 <device-ip>\` and \`ssh -o ConnectTimeout=5 -o BatchMode=yes root@<device-ip> true\`. Both return on their own, so they cannot hang an automated run. Deploy pushes the runtime over SSH and HTTP, so the device must be on and reachable from this host.\n`;
+    out += `2. **Check \`avocadoctl\` on the device.** Run \`ssh -o ConnectTimeout=5 -o BatchMode=yes root@<device-ip> avocadoctl status\`. A missing or failing \`avocadoctl\` stops the runtime update on the device.\n`;
     out += `3. **Compare against the deploy refusals the MCP knows:** extension \`image.verity: true\` (provision instead), no \`root.json\` in the runtime (set \`runtimes.<name>.signing.key\`), and stale or missing build stamps (run \`avocado build\`).\n`;
-    out += `4. **Read the device logs.** Run \`ssh root@<device-ip> journalctl -b --no-pager | tail -n 100\`.\n`;
+    out += `4. **Read the device logs.** Run \`ssh -o ConnectTimeout=5 -o BatchMode=yes root@<device-ip> journalctl -b --no-pager | tail -n 100\`.\n`;
     out += `5. **\`search-docs\`** with a short, distinctive substring of the error line. Then report the error to the user with the extracted lines verbatim. Do not make up a cause.\n`;
     out += `\n**Do not interpret an empty pattern list as "the deploy is fine."** The log has errors. If this failure class is one you see often, file it at \`src/lib/diagnostics.ts\` so future runs get a curated fingerprint.\n`;
     return out;
@@ -852,7 +852,7 @@ export function renderDiagnoses(
       // No rawLog supplied (older callers / fallback). Generic checks.
       out += `No known failure pattern matched. The log may contain a novel error. Common things to check manually:\n\n`;
       if (kind === "deploy") {
-        out += `- Can this host reach the device over SSH? \`ssh root@<device-ip> true\`.\n`;
+        out += `- Can this host reach the device over SSH? \`ssh -o ConnectTimeout=5 -o BatchMode=yes root@<device-ip> true\`.\n`;
         out += `- Does \`avocadoctl status\` run on the device?\n`;
         out += `- What do the device logs say? \`journalctl -b\` on the device.\n`;
       } else if (feedLookup) {
