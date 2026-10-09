@@ -1,7 +1,7 @@
 export const URI = "avocado://skills/filesystem-model";
 export const NAME = "filesystem-model";
 export const DESCRIPTION =
-  "The Avocado filesystem model: root is immutable (assembled from sysext/confext extension images), /var is the only writable partition (persistent across OTAs). The single most important architectural fact to know before authoring an extension — anything that needs to be writable at runtime cannot live in the read-only sysext. Also covers seeding /var content at build time (`var_files`, `docker_images`) vs. creating it at first-boot. **Read this BEFORE: authoring app extensions, adding any service that writes to disk, debugging any 'read-only filesystem' / 'permission denied' / 'EROFS' error on a running device, suggesting a write path under /etc or /usr at runtime, or any time the user asks 'where do I put X?'.**";
+  "The Avocado filesystem model: root is immutable (assembled from sysext/confext extension images), /var is the only writable partition (persistent across OTAs). The single most important architectural fact to know before authoring an extension: anything that needs to be writable at runtime cannot live in the read-only sysext. Also covers seeding /var content (`var_files`, `docker_images`), which reaches the device only through `avocado provision`, never through deploy or OTA, vs. creating it at first boot. **Read this BEFORE: authoring app extensions, adding any service that writes to disk, debugging any 'read-only filesystem' / 'permission denied' / 'EROFS' error on a running device, suggesting a write path under /etc or /usr at runtime, or any time the user asks 'where do I put X?'.**";
 
 export const CONTENT = `# Filesystem model — root-immutable, /var-writable
 
@@ -28,8 +28,8 @@ The rootfs image is signed and (optionally) dm-verity'd. You cannot \`echo > /us
 |---|---|---|
 | Binaries, libraries, systemd unit files, kernel modules | A \`sysext\` extension's \`/usr/\` | Built into the extension's overlay or installed via \`packages:\` |
 | Static configuration, user accounts, network settings | A \`confext\` extension's \`/etc/\` | Built into the extension's overlay |
-| Application state (databases, caches, logs) | \`/var/\` on the device | Created by the app at runtime, OR seeded at build time via \`var_files\` |
-| Container image storage (\`/var/lib/docker\`, podman, etc.) | \`/var/\` | Either pulled lazily at runtime, OR seeded at build time via \`docker_images\` + \`var_files\` exclusion |
+| Application state (databases, caches, logs) | \`/var/\` on the device | Created by the app at runtime, OR seeded at provision via \`var_files\` |
+| Container image storage (\`/var/lib/docker\`, podman, etc.) | \`/var/\` | Either pulled lazily at runtime, OR seeded at provision via \`docker_images\` + \`var_files\` exclusion |
 | Anything the user-facing app writes at runtime | \`/var/\` | The app's responsibility — it must point its data dir there |
 
 ## The implication for extensions
@@ -53,9 +53,16 @@ extensions:
 
 Without that line, \`avocado ext image\` bakes \`/var/lib/pgsql/\` into the read-only erofs image. PostgreSQL starts, tries to write to \`/var/lib/pgsql/\`, hits read-only, refuses to run.
 
-## Seeding /var at build time
+## Seeding /var
 
-Two mechanisms, controlled separately.
+Two mechanisms, controlled separately. Both end up in the var partition image, and \`avocado provision\` makes that image (CLI 1.0.0-rc.4 and later):
+
+- \`avocado build\` copies the runtime \`var_files\` into a staging tree. It does not make a var image.
+- \`avocado provision\` pulls the \`docker_images\` and makes the var image from the staging tree. The provision profile then writes it to the media with the rest of the image.
+
+**Seeded content reaches a device only at provision.** \`avocado deploy\` and a Connect OTA update never write \`var_files\` or \`docker_images\` content. They stage new images under \`/var/lib/avocado/\` and leave the rest of \`/var\` as it is. Thus a new \`var_files\` entry or a new image in \`docker_images\` needs a reprovision, which erases the device. On a device that is already in use, ship the content in an extension, or let the app create or download it at runtime.
+
+The docs guide "Seeding the var partition" still says that the seeding runs during \`avocado build\`. The CLI moved it to provision in 1.0.0-rc.4. Trust the CLI.
 
 ### \`runtimes.<name>.var_files\` — copy files from source tree into /var
 
@@ -74,7 +81,7 @@ runtimes:
 
 Each entry is \`{source, dest}\`. The \`source\` is project-relative; the \`dest\` is rooted at \`/var/\` on the device (so \`dest: lib/myapp/\` → \`/var/lib/myapp/\`). Directories are copied recursively — convention is to add a trailing slash for clarity.
 
-### \`extensions.<name>.docker_images\` — pre-pull container images at build time
+### \`extensions.<name>.docker_images\`: pre-pull container images at provision
 
 Use this when the device needs to start containers offline on first boot:
 
@@ -90,7 +97,7 @@ extensions:
       - var/lib/docker/**                   # exclude from sysext
 \`\`\`
 
-During \`avocado build\`, the CLI spins up an ephemeral \`dockerd\` inside the SDK container, pulls each image for the target architecture, and stages the populated \`/var/lib/docker/\` into the var partition image. The result: a device that has the images cached on first boot, no network required.
+During \`avocado provision\`, the CLI starts a temporary \`dockerd\` inside the SDK container, pulls each image for the target architecture, and writes the populated \`/var/lib/docker/\` into the var partition image. The device has the images cached on first boot, with no network.
 
 The \`extensions.my-app.var_files: ["var/lib/docker/**"]\` line is mandatory in this pattern. Without it, the SDK tries to bake the Docker storage into the read-only sysext and fails.
 
@@ -100,14 +107,14 @@ This trips people up. Pay attention:
 
 | Location | Shape | Purpose |
 |---|---|---|
-| \`runtimes.<name>.var_files\` | \`[{source, dest}, ...]\` | **Copy in**: stage files from project tree into the var image |
+| \`runtimes.<name>.var_files\` | \`[{source, dest}, ...]\` | **Copy in**: stage files from the project tree for the var image that provision makes |
 | \`extensions.<name>.var_files\` | \`[glob, ...]\` | **Exclude**: tell \`avocado ext image\` not to bake these paths into the read-only sysext |
 
 They serve opposite roles. The runtime-level one says "put this on var"; the extension-level one says "don't put this in the sysext."
 
 ## When to seed vs. when to create at first boot
 
-| Situation | Seed at build time? | First-boot create? |
+| Situation | Seed at provision? | First-boot create? |
 |---|---|---|
 | Default config a user shouldn't have to think about | Seed | — |
 | TLS certificates, device identity | Seed | — |
@@ -136,7 +143,8 @@ This is also what makes \`avocado deploy\` (network push of a single extension) 
 2. **Forgetting the \`extensions.*.var_files\` exclusion list.** If your extension's package installs files under \`/var\`, you must exclude them or the build fails or the device errors out.
 3. **Editing files in \`/etc\` interactively.** They're overlaid via confext. Edits don't persist across reboots unless you ship the change in a confext.
 4. **Storing secrets in the sysext.** It's a signed, world-readable image. Put secrets in \`/var/\` (seeded at provision time) or use TPM-sealed storage.
-5. **Assuming \`docker pull\` works on first boot without internet.** It doesn't. Use \`docker_images\` to pre-pull at build time.
+5. **Assuming \`docker pull\` works on first boot without internet.** It doesn't. Use \`docker_images\` to pre-pull at provision.
+6. **Expecting \`avocado deploy\` to update seeded \`/var\` content.** It does not. Deploy and OTA never write \`var_files\` or \`docker_images\`. Only a provision writes them.
 
 ## Pointer to the canonical guide
 

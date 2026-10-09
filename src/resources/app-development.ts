@@ -79,8 +79,8 @@ Read \`avocado://skills/filesystem-model\` for the deep reason the overlay tree 
 | **Static configuration** | \`app/overlay/etc/myapp/...\` | Baked into a confext extension |
 | **systemd unit files** | \`app/overlay/usr/lib/systemd/system/\` | ALWAYS the root unit dir, NEVER \`/etc/systemd/system/\` (overlay paths must mirror device paths exactly) |
 | **systemd unit overrides / drop-ins** | \`app/overlay/etc/systemd/system/<unit>.d/<override>.conf\` | confext |
-| **Default \`/var\` content (config seeds, certs, default databases)** | Seeded via \`runtimes.<name>.var_files: [{source, dest}, ...]\` | Copied into the var image at build time |
-| **Pre-pulled Docker images for offline boot** | \`extensions.<name>.docker_images: [{image, tag}, ...]\` | Pulled at build time into \`/var/lib/docker\` |
+| **Default \`/var\` content (config seeds, certs, default databases)** | Seeded via \`runtimes.<name>.var_files: [{source, dest}, ...]\` | Staged by \`avocado build\`, written into the var image by \`avocado provision\`. Deploy and OTA never update it. |
+| **Pre-pulled Docker images for offline boot** | \`extensions.<name>.docker_images: [{image, tag}, ...]\` | Pulled by \`avocado provision\` into \`/var/lib/docker\`. Deploy and OTA never update them. To run them, the runtime needs \`avocado-ext-docker\`. |
 | **Anything writable at runtime** | \`/var/\` on the device (not in the sysext) | Created at first boot OR seeded via \`var_files\` |
 
 The two most common mistakes:
@@ -140,7 +140,7 @@ When the user is starting feature work, surface these questions early so the pro
 - **Does it need network access?** If yes — clients (curl, http libs) or servers (sshd is in dev runtime; for HTTP servers you ship your own).
 - **Does it need a systemd unit?** Almost always yes for anything long-running. Plan the overlay path.
 - **Are there hardware-specific libraries?** (GPIO, camera, etc.) — these are target-specific feed packages; ensure they're available for the chosen target.
-- **Will the app need state seeded at install time?** (TLS certs, default config, container images for offline.) That goes in \`runtimes.<name>.var_files\` or \`extensions.<name>.docker_images\` — see \`avocado://skills/filesystem-model\`.
+- **Will the app need state seeded at provision?** (TLS certs, default config, container images for offline.) That goes in \`runtimes.<name>.var_files\` or \`extensions.<name>.docker_images\`. It reaches the device only through \`avocado provision\`, not through deploy. See \`avocado://skills/filesystem-model\`.
 
 Get answers to these before scaffolding so the structure fits the feature.
 `;
