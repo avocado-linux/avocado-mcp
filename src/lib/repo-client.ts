@@ -65,6 +65,11 @@ export interface FeedSpec {
   extraFeeds?: ExtraFeed[];
   /** Named feeds the MCP can't read, with the reason. */
   notChecked?: NotChecked[];
+  /**
+   * Leave out the `target/<machine>-ext` repo. Extension and runtime installs
+   * run dnf with `--disablerepo=${AVOCADO_TARGET}-target-ext` (avocado-cli).
+   */
+  skipExtRepo?: boolean;
 }
 
 /**
@@ -98,8 +103,17 @@ export class FeedHttpError extends Error {
 
 export const DISTRO_FEED_NAME = "avocado";
 
-/** Start of the error when a target is not in the distro feed's targets.json. */
+/**
+ * Start of the error when the distro feed's targets.json was read and does
+ * not list the target. A targets.json that failed to load gives a different
+ * error, so callers can tell "absent" from "unknown".
+ */
 export const NO_TARGET_REPOS = "No repositories configured for target";
+
+/** The distro feed's per-target extension repo, e.g. `target/armv8a-ext`. */
+function isExtRepo(path: string): boolean {
+  return path.startsWith("target/") && path.endsWith("-ext");
+}
 
 export const DEFAULT_FEED: FeedSpec = {
   baseUrl: "https://repo.avocadolinux.org",
@@ -429,12 +443,16 @@ function feedFor(sel: FeedSelector | undefined, target: string): FeedSpec {
 }
 
 export class RepoClient {
+  /**
+   * Both caches hold the promise, so concurrent callers share one download.
+   * A failed fetch is removed so the next call retries.
+   */
   private targetsCache = new Map<
     string,
-    { data: TargetManifest; expiresAt: number }
+    { data: Promise<TargetManifest | null>; expiresAt: number }
   >();
   /** key: `${feedKey}::${repo}` */
-  private packagesCache = new Map<string, FeedPackage[]>();
+  private packagesCache = new Map<string, Promise<FeedPackage[]>>();
 
   /**
    * Fetch the per-target manifest. Validates every entry; entries that don't
@@ -462,6 +480,22 @@ export class RepoClient {
     const cached = this.targetsCache.get(cacheKey);
     if (cached && now < cached.expiresAt) return cached.data;
 
+    const entry = {
+      data: this.loadTargetManifest(base, feed),
+      expiresAt: now + TARGETS_CACHE_TTL_MS,
+    };
+    this.targetsCache.set(cacheKey, entry);
+    const out = await entry.data;
+    if (!out && this.targetsCache.get(cacheKey) === entry) {
+      this.targetsCache.delete(cacheKey);
+    }
+    return out;
+  }
+
+  private async loadTargetManifest(
+    base: string,
+    feed: FeedSpec,
+  ): Promise<TargetManifest | null> {
     try {
       const url = `${base}/${feed.manifestPath}/targets.json`;
       const text = await fetchBoundedText(
@@ -491,10 +525,6 @@ export class RepoClient {
         }
         if (paths.length > 0) out[target] = paths;
       }
-      this.targetsCache.set(cacheKey, {
-        data: out,
-        expiresAt: now + TARGETS_CACHE_TTL_MS,
-      });
       return out;
     } catch (error) {
       console.error(`[ERROR] Failed to fetch targets configuration:`, error);
@@ -505,15 +535,6 @@ export class RepoClient {
   /** Backwards-compatible name used elsewhere in the codebase. */
   async getTargetsConfig(feed?: FeedSpec): Promise<TargetManifest | null> {
     return this.getTargetManifest(feed);
-  }
-
-  async getRepositoryPathsForTarget(
-    target: string,
-    feed?: FeedSpec,
-  ): Promise<string[]> {
-    const manifest = await this.getTargetManifest(feed);
-    if (!manifest || !manifest[target]) return [];
-    return manifest[target];
   }
 
   /**
@@ -559,7 +580,22 @@ export class RepoClient {
   ): Promise<FeedPackage[]> {
     const cached = this.packagesCache.get(cacheKey);
     if (cached) return cached;
+    const pending = this.loadPackagesAt(base, conn, repo, feedName);
+    this.packagesCache.set(cacheKey, pending);
+    pending.catch(() => {
+      if (this.packagesCache.get(cacheKey) === pending) {
+        this.packagesCache.delete(cacheKey);
+      }
+    });
+    return pending;
+  }
 
+  private async loadPackagesAt(
+    base: string,
+    conn: FeedConn,
+    repo: string,
+    feedName: string,
+  ): Promise<FeedPackage[]> {
     const repomdText = await fetchBoundedText(
       `${base}/repodata/repomd.xml`,
       conn,
@@ -579,9 +615,7 @@ export class RepoClient {
       `primary.xml (${repo})`,
     );
 
-    const packages = parsePrimaryXml(xml, repo, feedName);
-    this.packagesCache.set(cacheKey, packages);
-    return packages;
+    return parsePrimaryXml(xml, repo, feedName);
   }
 
   /**
@@ -604,8 +638,14 @@ export class RepoClient {
     const notChecked: NotChecked[] = [...(feed.notChecked ?? [])];
     const groups: { priority: number; packages: FeedPackage[] }[] = [];
 
-    const repos = await this.getRepositoryPathsForTarget(target, feed);
-    if (repos.length === 0) {
+    const manifest = await this.getTargetManifest(feed);
+    let repos = manifest?.[target] ?? [];
+    if (feed.skipExtRepo) repos = repos.filter((r) => !isExtRepo(r));
+    if (!manifest) {
+      errors.push(
+        `Could not read targets.json from ${redactUrl(feed.baseUrl)}/${feed.manifestPath}. Check the feed URL and the network.`,
+      );
+    } else if (!manifest[target]) {
       errors.push(
         `${NO_TARGET_REPOS} "${target}" in ${redactUrl(feed.baseUrl)}/${feed.manifestPath}. Verify the target name and the configured feed. list-targets shows the canonical list.`,
       );

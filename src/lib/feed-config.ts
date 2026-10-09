@@ -518,6 +518,10 @@ export function resolveFeed(input: ResolveInput): ResolvedFeed {
     priority: named?.distroPriority,
     extraFeeds: named?.extraFeeds,
     notChecked: named?.notChecked,
+    // Extension and runtime installs disable the distro feed's
+    // `target/<machine>-ext` repo. A lookup with no stage keeps it, so
+    // extension packages stay findable.
+    ...(input.stage ? { skipExtRepo: true } : {}),
     feeds: named?.feeds,
     release,
     channel,

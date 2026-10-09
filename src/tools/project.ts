@@ -8,7 +8,12 @@ import {
   addPackageToExtension,
   listExtensions,
 } from "../lib/yaml-ops.js";
-import { RepoClient, isSafeSegment, validateFeed } from "../lib/repo-client.js";
+import {
+  NO_TARGET_REPOS,
+  RepoClient,
+  isSafeSegment,
+  validateFeed,
+} from "../lib/repo-client.js";
 import {
   searchReferencesScored,
   type ScoredReference,
@@ -566,14 +571,26 @@ export function registerProjectTools(
       const feed = feedContextFrom({ projectDir }, yaml, "ext");
       try {
         // Verify the package exists for the user's targets
-        const { results, notChecked } = await repoClient.searchPackages(
+        const { results, errors, notChecked } = await repoClient.searchPackages(
           targets,
           packageName,
           5,
           (t) => feed.forTarget(t),
         );
+        // A feed that failed to load is unread, like a private feed. A target
+        // missing from a targets.json that loaded is a real absence.
+        const failed = errors.flatMap((e) =>
+          e.messages
+            .filter((m) => !m.startsWith(NO_TARGET_REPOS))
+            .map((m) => `- \`${e.target}\`: ${m}`),
+        );
+        const unread =
+          renderNotChecked(notChecked) +
+          (failed.length > 0
+            ? `\n**Failed to load** (the package can be in one of these):\n${failed.join("\n")}\n`
+            : "");
         const exactMatch = results.find((r) => r.name === packageName);
-        if (!exactMatch && notChecked.length === 0) {
+        if (!exactMatch && notChecked.length === 0 && failed.length === 0) {
           return {
             content: [
               {
@@ -606,8 +623,8 @@ export function registerProjectTools(
                 newYaml,
                 validation,
                 exactMatch
-                  ? `✅ Verified \`${packageName}\` (v${exactMatch.version}) exists in feed \`${exactMatch.feed ?? "avocado"}\`, repo \`${exactMatch.repo}\` for the queried target(s).\n${renderNotChecked(notChecked)}\n${feed.describe(targets)}`
-                  : `⚠️ Could not verify \`${packageName}\`. It is not in the feeds the MCP read, and some enabled feeds were not checked. Run \`avocado install\` to confirm the package resolves.\n${renderNotChecked(notChecked)}\n${feed.describe(targets)}`,
+                  ? `✅ Verified \`${packageName}\` (v${exactMatch.version}) exists in feed \`${exactMatch.feed ?? "avocado"}\`, repo \`${exactMatch.repo}\` for the queried target(s).\n${unread}\n${feed.describe(targets)}`
+                  : `⚠️ Could not verify \`${packageName}\`. It is not in the feeds the MCP read, and some enabled feeds were not read. Run \`avocado install\` to confirm the package resolves.\n${unread}\n${feed.describe(targets)}`,
               ),
             },
           ],
