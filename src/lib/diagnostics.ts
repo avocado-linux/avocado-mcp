@@ -14,6 +14,8 @@ export interface Diagnosis {
   excerpt: string;
   cause: string;
   suggestion: string;
+  /** A warning the CLI prints on runs that go on; not why a run failed. */
+  warningOnly?: boolean;
 }
 
 interface Pattern {
@@ -21,6 +23,7 @@ interface Pattern {
   match: RegExp;
   cause: string;
   suggestion: string;
+  warningOnly?: boolean;
 }
 
 // Build, provision and deploy all check build stamps before they start, so
@@ -332,6 +335,7 @@ const BUILD_PATTERNS: Pattern[] = [
   {
     label: "Lockfile from another distro release",
     match: /Lock file was created with distro\.release '/,
+    warningOnly: true,
     cause:
       "`avocado.lock` pins packages from a different `distro.release` than `avocado.yaml` names. Locked pins stay in place until you clear them. The same is true for a version change in `avocado.yaml`.",
     suggestion:
@@ -343,6 +347,7 @@ const BUILD_PATTERNS: Pattern[] = [
     label: "avocado.yaml keys ignored",
     match:
       /\.ya?ml: (?:unknown key '[^'\n]+' is ignored|'[^'\n]+' (?:has no effect|is an old (?:name|spelling)|is no longer read|sets no [^\n]*? fields))/,
+    warningOnly: true,
     cause:
       "The CLI found keys in `avocado.yaml` that it does not read. These are warnings. The command continues, but those settings have no effect.",
     suggestion:
@@ -832,6 +837,7 @@ function runPatterns(patterns: Pattern[], log: string): Diagnosis[] {
         excerpt: log.slice(start, end).trim(),
         cause: p.cause,
         suggestion: p.suggestion,
+        ...(p.warningOnly ? { warningOnly: true } : {}),
       });
     }
   }
@@ -853,13 +859,12 @@ export function renderDiagnoses(
   // The package-feed lookup only applies to build and install logs.
   const feedLookup = kind === "build" || kind === "install";
   let out = `# ${headerName}\n\n`;
+  // Generic fallback — extract what we can from the log shape itself.
+  const shape = investigationContext?.rawLog
+    ? extractLogShape(investigationContext.rawLog)
+    : null;
 
   if (diagnoses.length === 0) {
-    // Generic fallback — extract what we can from the log shape itself.
-    const shape = investigationContext?.rawLog
-      ? extractLogShape(investigationContext.rawLog)
-      : null;
-
     if (shape && shape.hasErrors) {
       // Log has clear error signals but no curated pattern matched.
       out += renderFallbackDiagnosis(kind, shape);
@@ -895,6 +900,11 @@ export function renderDiagnoses(
       out += `**Excerpt:**\n\n\`\`\`\n${d.excerpt}\n\`\`\`\n\n`;
       out += `**Cause:** ${d.cause}\n\n`;
       out += `**Fix:** ${d.suggestion}\n\n`;
+    }
+    // Warnings alone do not explain a failed run. Show the errors too.
+    if (shape?.hasErrors && diagnoses.every((d) => d.warningOnly)) {
+      out += `The issues above are warnings. The command does not stop for them, so they do not explain the errors in this log.\n\n`;
+      out += renderFallbackDiagnosis(kind, shape);
     }
   }
 

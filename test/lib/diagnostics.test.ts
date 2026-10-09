@@ -675,3 +675,43 @@ test("--connect-sign gets login advice, and only feed auth gets the env var", ()
   assert.deepEqual(labels(feed), ["Connect login missing or expired"]);
   assert.match(feed[0]!.suggestion, /AVOCADO_CONNECT_TOKEN/);
 });
+
+test("warning-only matches still show the error that failed the run", async () => {
+  const { renderDiagnoses } = await import("../../src/lib/diagnostics.js");
+  // avocado-cli config_lint.rs warning, then runtime/deploy.rs repo server error.
+  const log = [
+    "[WARNING] avocado.yaml: unknown key 'runtimes.dev.pakages' is ignored; did you mean 'packages'?",
+    "ERROR: repo server did not become reachable on port 8080 within 30s",
+  ].join("\n");
+  const ds = diagnoseBuildLog(log);
+  assert.deepEqual(labels(ds), ["avocado.yaml keys ignored"]);
+  assert.equal(ds[0]!.warningOnly, true);
+  const out = renderDiagnoses("deploy", ds, undefined, {
+    targets: [],
+    rawLog: log,
+  });
+  assert.match(out, /## avocado\.yaml keys ignored/);
+  assert.match(out, /repo server did not become reachable on port 8080/);
+  assert.match(out, /Check SSH and the network/);
+
+  // A warning on a run with no errors gets no fallback.
+  const clean = renderDiagnoses("build", ds, undefined, {
+    targets: [],
+    rawLog: log.split("\n")[0]!,
+  });
+  assert.doesNotMatch(clean, /No known failure pattern matched/);
+
+  // A real diagnosis next to the warning is enough. No fallback.
+  const lockLog =
+    log +
+    "\n[WARNING] Lock file was created with distro.release '2024' but config has '2026'.";
+  assert.ok(diagnoseBuildLog(lockLog).every((d) => d.warningOnly));
+  const both = diagnoseBuildLog(
+    log + "\nERROR: No root.json found at /opt/x/root.json",
+  );
+  const rendered = renderDiagnoses("deploy", both, undefined, {
+    targets: [],
+    rawLog: log,
+  });
+  assert.doesNotMatch(rendered, /No known failure pattern matched/);
+});
