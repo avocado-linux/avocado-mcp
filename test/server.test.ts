@@ -420,7 +420,7 @@ test("describe-package surfaces feeds that failed to load", async () => {
   ]);
 });
 
-test("check-package-coverage marks a failed feed's misses not checked and leaves them out of the percentage", async () => {
+test("check-package-coverage marks a failed feed's misses not checked and counts only confirmed rows in the percentage", async () => {
   const pkg = (name: string) => ({
     name,
     summary: "",
@@ -438,7 +438,7 @@ test("check-package-coverage marks a failed feed's misses not checked and leaves
     }
     override async fetchTargetPackages() {
       return {
-        packages: [pkg("curl")],
+        packages: [pkg("curl"), pkg("jq"), pkg("zlib")],
         errors: ["vendor: https://vendor.example returned 500"],
         notChecked: [],
       };
@@ -450,9 +450,11 @@ test("check-package-coverage marks a failed feed's misses not checked and leaves
     arguments: {
       target: "qemuarm64",
       dependencies: [
-        { name: "curl", queries: ["curl"] },
-        { name: "zzz", queries: ["zzz"] },
-      ],
+        "curl",
+        "jq",
+        "zlib",
+        ...[1, 2, 3, 4, 5, 6, 7].map((i) => `zzz${i}`),
+      ].map((name) => ({ name, queries: [name] })),
     },
   });
   const sc = res.structuredContent as {
@@ -466,13 +468,14 @@ test("check-package-coverage marks a failed feed's misses not checked and leaves
   };
   assert.deepEqual(
     sc.results.map((r) => r.status),
-    ["present", "not-checked"],
+    [...Array(3).fill("present"), ...Array(7).fill("not-checked")],
   );
+  assert.equal(sc.summary.present, 3);
   assert.equal(sc.summary.missing, 0);
-  assert.equal(sc.summary.notChecked, 1);
-  assert.equal(sc.summary.coveragePercent, 100);
+  assert.equal(sc.summary.notChecked, 7);
+  assert.equal(sc.summary.coveragePercent, 30);
   assert.match(
     (res.content as { text: string }[])[0].text,
-    /Coverage:\*\* 100% \(1\/1 present\)/,
+    /Coverage:\*\* 30% confirmed \(3\/10 present\), 7 not checked because 1 feed was not read/,
   );
 });
