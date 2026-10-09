@@ -27,6 +27,7 @@ import { registerHardwareTools } from "../src/tools/hardware.js";
 import { registerSkillResources } from "../src/tools/resources.js";
 import { registerPrompts } from "../src/tools/prompts.js";
 import { clearHardwareDataCache } from "../src/lib/hardware-data.js";
+import { clearSelectableCache } from "../src/lib/hardware-support.js";
 import { TARGETS, DEVICES } from "./lib/hardware-fixture.js";
 
 // Validate against the vendored schema: no network in tests.
@@ -364,6 +365,51 @@ test("get-provisioning-steps prints one full command per profile", async () => {
     }
   } finally {
     restore();
+  }
+});
+
+/** A feed with real boards and the architecture entries from targets.json. */
+class SupportedTargetsRepo extends RepoClient {
+  override async getTargetsConfig() {
+    return {
+      armv8a: ["target/armv8a"],
+      noarch: ["target/noarch"],
+      raspberrypi5: ["target/armv8a"],
+      qemuarm64: ["target/armv8a"],
+    };
+  }
+}
+
+test("one init-project or get-provisioning-steps call fetches each docs file once", async () => {
+  const realFetch = globalThis.fetch;
+  const counts: Record<string, number> = {};
+  globalThis.fetch = (async (url: RequestInfo | URL) => {
+    const file = String(url).split("/").pop()!;
+    counts[file] = (counts[file] ?? 0) + 1;
+    const body = file === "targets.json" ? TARGETS : { devices: DEVICES };
+    return new Response(JSON.stringify(body), { status: 200 });
+  }) as typeof fetch;
+  try {
+    const { client } = await connect(new SupportedTargetsRepo());
+    for (const name of ["init-project", "get-provisioning-steps"]) {
+      clearHardwareDataCache();
+      clearSelectableCache();
+      for (const k of Object.keys(counts)) delete counts[k];
+      await client.callTool({ name, arguments: { target: "no-such-board" } });
+      assert.deepEqual(
+        counts,
+        {
+          "targets.json": 1,
+          "supported.json": 1,
+          "virtual-environment.json": 1,
+        },
+        name,
+      );
+    }
+  } finally {
+    globalThis.fetch = realFetch;
+    clearHardwareDataCache();
+    clearSelectableCache();
   }
 });
 
