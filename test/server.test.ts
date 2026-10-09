@@ -384,3 +384,95 @@ test("add-package-to-extension treats a feed that failed to load as unread", asy
   assert.match(found, /Verified `curl`/);
   assert.match(found, /Failed to load[\s\S]*returned 500/);
 });
+
+test("describe-package surfaces feeds that failed to load", async () => {
+  class StubRepo extends RepoClient {
+    override async getTargetsConfig() {
+      return { qemuarm64: ["target/armv8a"] };
+    }
+    override async searchPackages() {
+      return {
+        totalMatches: 0,
+        results: [],
+        errors: [
+          {
+            target: "qemuarm64",
+            messages: ["vendor: https://vendor.example returned 500"],
+          },
+        ],
+        notChecked: [],
+      };
+    }
+  }
+  const { client } = await connect(new StubRepo());
+  const res = await client.callTool({
+    name: "describe-package",
+    arguments: { targets: ["qemuarm64"], name: "curl" },
+  });
+  const text = (res.content as { text: string }[])[0].text;
+  assert.match(text, /No exact match .* in the feeds checked/);
+  assert.match(text, /Failed to load[\s\S]*vendor\.example returned 500/);
+  assert.deepEqual((res.structuredContent as { errors: unknown }).errors, [
+    {
+      target: "qemuarm64",
+      message: "vendor: https://vendor.example returned 500",
+    },
+  ]);
+});
+
+test("check-package-coverage marks a failed feed's misses not checked and leaves them out of the percentage", async () => {
+  const pkg = (name: string) => ({
+    name,
+    summary: "",
+    description: "",
+    version: "1",
+    release: "r0",
+    arch: "armv8a",
+    repo: "target/armv8a",
+    href: "",
+    feed: "avocado",
+  });
+  class StubRepo extends RepoClient {
+    override async getTargetsConfig() {
+      return { qemuarm64: ["target/armv8a"] };
+    }
+    override async fetchTargetPackages() {
+      return {
+        packages: [pkg("curl")],
+        errors: ["vendor: https://vendor.example returned 500"],
+        notChecked: [],
+      };
+    }
+  }
+  const { client } = await connect(new StubRepo());
+  const res = await client.callTool({
+    name: "check-package-coverage",
+    arguments: {
+      target: "qemuarm64",
+      dependencies: [
+        { name: "curl", queries: ["curl"] },
+        { name: "zzz", queries: ["zzz"] },
+      ],
+    },
+  });
+  const sc = res.structuredContent as {
+    summary: {
+      present: number;
+      missing: number;
+      notChecked: number;
+      coveragePercent: number;
+    };
+    results: { status: string }[];
+  };
+  assert.deepEqual(
+    sc.results.map((r) => r.status),
+    ["present", "not-checked"],
+  );
+  assert.equal(sc.summary.missing, 0);
+  assert.equal(sc.summary.notChecked, 1);
+  assert.equal(sc.summary.coveragePercent, 100);
+  assert.match(
+    (res.content as { text: string }[])[0].text,
+    /Coverage:\*\* 100% \(1\/1 present\)/,
+  );
+});

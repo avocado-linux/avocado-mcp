@@ -6,6 +6,7 @@
 
 import { z } from "zod";
 import { FeedContext, type PackageStage } from "../lib/feed-config.js";
+import { NO_TARGET_REPOS } from "../lib/repo-client.js";
 
 export const feedArgsShape = {
   projectDir: z
@@ -132,8 +133,33 @@ export const notCheckedSchema = z
     }),
   )
   .describe(
-    "Enabled feeds the MCP could not read (private `org:` feeds, auth failures, unresolved templates). A package missing from the results may still be in one of these.",
+    "Enabled feeds the MCP could not read (private `org:` feeds, auth failures, unresolved templates, env vars other than `AVOCADO_*`). A package missing from the results may still be in one of these.",
   );
+
+/**
+ * Feed load failures from a lookup. They are unread feeds, like a private
+ * feed. A target missing from a targets.json that loaded is a real absence,
+ * so it is left out.
+ */
+export function feedFailures(
+  errors: { target: string; messages: string[] }[],
+): { target: string; message: string }[] {
+  return errors.flatMap((e) =>
+    e.messages
+      .filter((m) => !m.startsWith(NO_TARGET_REPOS))
+      .map((message) => ({ target: e.target, message })),
+  );
+}
+
+/** Markdown block for feeds that failed to load. Empty when there are none. */
+export function renderFeedFailures(
+  list: { target: string; message: string }[],
+): string {
+  if (list.length === 0) return "";
+  return `\n**Failed to load** (the package can be in one of these):\n${list
+    .map((f) => `- \`${f.target}\`: ${f.message}`)
+    .join("\n")}\n`;
+}
 
 /** Markdown block for feeds the lookup skipped. Empty when there are none. */
 export function renderNotChecked(

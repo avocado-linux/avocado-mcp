@@ -8,12 +8,7 @@ import {
   addPackageToExtension,
   listExtensions,
 } from "../lib/yaml-ops.js";
-import {
-  NO_TARGET_REPOS,
-  RepoClient,
-  isSafeSegment,
-  validateFeed,
-} from "../lib/repo-client.js";
+import { RepoClient, isSafeSegment, validateFeed } from "../lib/repo-client.js";
 import {
   searchReferencesScored,
   type ScoredReference,
@@ -23,6 +18,8 @@ import { qemuArchAdvisory } from "./discovery.js";
 import {
   feedArgsShape,
   feedContextFrom,
+  feedFailures,
+  renderFeedFailures,
   renderNotChecked,
 } from "./feed-args.js";
 
@@ -530,7 +527,7 @@ export function registerProjectTools(
     {
       title: "Add a feed package to an extension",
       description:
-        "Add a single feed package to an existing extension's packages map. **Use this as the default path for adding ANY library or dependency**. Feed packages beat vendored / pip-installed / npm-installed deps on every axis (versioning, security updates, image size, dependency resolution). Verifies the package exists for one of the project's targets before adding. It checks every feed the YAML enables: the distro feed (distro.release, distro.channel, distro.repo, AVOCADO_* env overrides, and the avocado.lock snapshot pin when `projectDir` is given) and `repos:` feeds listed in `distro.feeds`. Rejects unknown packages with a 'did you mean' list. When a feed can't be read (for example a private `org:` feed), it adds the package with a warning instead of rejecting it. If `search-packages` shows the user's library isn't in the feed, THEN consider vendoring (see `avocado://skills/app-development`).",
+        "Add a single feed package to an existing extension's packages map. **Use this as the default path for adding ANY library or dependency**. Feed packages beat vendored / pip-installed / npm-installed deps on every axis (versioning, security updates, image size, dependency resolution). Verifies the package exists for one of the project's targets before adding. It checks every feed the YAML enables: the distro feed (distro.release, distro.channel, distro.repo, AVOCADO_* env overrides, and the avocado.lock snapshot pin when `projectDir` is given) and `repos:` feeds listed in `distro.feeds`. Rejects unknown packages with a 'did you mean' list. When a feed can't be read, it adds the package with a warning instead of rejecting it. This includes a private `org:` feed, a feed that refuses the credentials, and a feed that fails to load, the distro feed too. If `search-packages` shows the user's library isn't in the feed, THEN consider vendoring (see `avocado://skills/app-development`).",
       inputSchema: {
         yaml: z.string().describe("Current avocado.yaml content."),
         extension: z
@@ -577,18 +574,10 @@ export function registerProjectTools(
           5,
           (t) => feed.forTarget(t),
         );
-        // A feed that failed to load is unread, like a private feed. A target
-        // missing from a targets.json that loaded is a real absence.
-        const failed = errors.flatMap((e) =>
-          e.messages
-            .filter((m) => !m.startsWith(NO_TARGET_REPOS))
-            .map((m) => `- \`${e.target}\`: ${m}`),
-        );
+        // A feed that failed to load is unread, like a private feed.
+        const failed = feedFailures(errors);
         const unread =
-          renderNotChecked(notChecked) +
-          (failed.length > 0
-            ? `\n**Failed to load** (the package can be in one of these):\n${failed.join("\n")}\n`
-            : "");
+          renderNotChecked(notChecked) + renderFeedFailures(failed);
         const exactMatch = results.find((r) => r.name === packageName);
         if (!exactMatch && notChecked.length === 0 && failed.length === 0) {
           return {
