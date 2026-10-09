@@ -29,7 +29,7 @@ jobs:
         run: ./scripts/checks.sh
 
   schema-drift:
-    name: Vendored schema matches avocado-cli
+    name: Vendored schema matches the live copy
     runs-on: ubuntu-latest
 
     steps:
@@ -38,5 +38,5 @@ jobs:
         with:
           node-version: '22.x'
 
-      - name: Compare with avocado-cli main
+      - name: Compare with docs.peridio.com and avocado-cli main
         run: node scripts/sync-schema.mjs --check
