@@ -112,6 +112,12 @@ export function registerDiagnosticsTools(
           .describe(
             "Full or partial build, install or deploy log output. Paste verbatim — heuristics scan for known error fingerprints and extract failing package names.",
           ),
+        command: z
+          .enum(["build", "install", "deploy"])
+          .default("build")
+          .describe(
+            "The command that wrote the log. Pass `deploy` for an `avocado deploy` log, so that a log no pattern matches gets deploy next steps (SSH, `avocadoctl`, device logs) and not build ones.",
+          ),
         targets: z
           .array(z.string())
           .optional()
@@ -162,15 +168,16 @@ export function registerDiagnosticsTools(
         openWorldHint: true,
       },
     },
-    async ({ log, targets, ...feedArgs }) => {
+    async ({ log, command, targets, ...feedArgs }) => {
       const diagnoses = diagnoseBuildLog(log);
       const shape = extractLogShape(log);
-      if (!targets || targets.length === 0) {
+      // A deploy log has no failing packages to look up on the feeds.
+      if (!targets || targets.length === 0 || command === "deploy") {
         return {
           content: [
             {
               type: "text",
-              text: renderDiagnoses("build", diagnoses, undefined, {
+              text: renderDiagnoses(command, diagnoses, undefined, {
                 targets: [],
                 rawLog: log,
               }),
@@ -191,7 +198,7 @@ export function registerDiagnosticsTools(
         content: [
           {
             type: "text",
-            text: renderDiagnoses("build", diagnoses, investigations, {
+            text: renderDiagnoses(command, diagnoses, investigations, {
               targets,
               rawLog: log,
               feedDescription: feed.describe(targets),
