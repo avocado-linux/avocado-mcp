@@ -247,11 +247,11 @@ If any of these fail, \`avocado deploy\` errors out clearly and the user falls b
 - **Device is not on the network.** No network = no fast path. Use UART to diagnose why first (\`avocado://skills/device-debugging\`).
 - **A new partition layout.** An update cannot add partitions. Provision again.
 - **New seeded \`/var\` content** (\`var_files\`, \`docker_images\`). Only provision writes it. See \`avocado://skills/filesystem-model\`.
-- **Turning \`var.encrypt\` off** on a device that has already encrypted \`/var\`. That needs a reprovision. Turning it on works through an update.
+- **Turning \`var.encrypt\` off** on a device that has already encrypted \`/var\`. That needs a reprovision. Turning it on works through an update, with an ordering rule. The avocadoctl already on the device applies the update, so ship the current avocadoctl in a plain OS update first. Then turn on \`var.encrypt\` in the next update.
 - **A runtime with extension \`image.verity\`.** Deploy refuses it (see above).
+- **The user explicitly wants a clean wipe.** A provision starts from a known-good image. A deploy layers on top of whatever state the device is in.
 
 Kernel, rootfs, initramfs and BSP package changes do not need a reflash. Deploy ships them as an OS update and the device reboots into the new A/B slot. Bootloader updates over an update are board-specific. See the docs on security and OTA before you rely on one.
-- **The user explicitly wants a clean wipe.** A provision starts from a known-good image; a deploy layers on top of whatever state the device is in.
 
 ## Proactively offering deploy after edits
 
