@@ -215,7 +215,13 @@ dmesg --color=never | tail -30
 # Is networking up?
 ip a
 ip r
+
+# Which runtime and OS build is active, and which extensions are merged?
+avocadoctl status
+avocadoctl ext list
 \`\`\`
+
+If your change does not show up after a deploy, compare \`avocadoctl status\` with the runtime you deployed. \`avocadoctl runtime list\` shows every staged runtime, and the active one first. The runtime state lives in \`/var/lib/avocado/\`. See \`avocado://skills/avocado-runtime-details\` for the layout.
 
 Tailor from there based on what comes back.
 `;

@@ -55,19 +55,32 @@ Avocado uses **systemd**, not BusyBox init. So this is your friend:
 - **\`/var/log/\` is mostly empty** on a stock Avocado image — journald replaces it. Always reach for \`journalctl\` first.
 - Kernel ring buffer: \`dmesg --color=never | tail -<N>\`. Or \`journalctl -k\`.
 
-## Filesystem layout — extensions
+## Filesystem layout: extensions and runtimes
 
-- **Before merging** (the raw extension images on disk):
-  - sysext: \`/usr/lib/extensions/<extension>.raw\` and \`/var/lib/extensions/<extension>.raw\`
-  - confext: \`/etc/extensions/<extension>.raw\` and \`/var/lib/confexts/<extension>.raw\`
-- **After merging** (what running processes see): files appear under normal paths — \`/usr/bin/\`, \`/etc/...\`, etc.
-- \`systemd-sysext list\` / \`systemd-confext list\` — see what's merged.
-- \`systemd-sysext refresh\` / \`systemd-confext refresh\` — re-merge after dropping a new \`.raw\`.
+\`avocadoctl\` manages extensions and runtimes on the device. It keeps its state in \`/var/lib/avocado/\`:
+
+\`\`\`
+/var/lib/avocado/
+├── active              # symlink to runtimes/<active runtime id>
+├── runtimes/<id>/manifest.json
+├── images/<image_id>.raw   # extension images and OS bundles, shared by all runtimes
+├── os-releases/<version_id>/<ext_name>   # symlinks to the enabled extensions
+└── metadata/root.json  # TUF trust anchor
+\`\`\`
+
+- **After merging** (what running processes see): files appear under normal paths, such as \`/usr/bin/\` and \`/etc/...\`.
+- \`avocadoctl status\`: the active runtime (name, version, short ID, rootfs and initramfs build IDs) and the merged extensions. Run this first after a deploy.
+- \`avocadoctl ext list\`: every extension image, with its name, version, path and type (sysext or confext).
+- \`avocadoctl runtime list\` and \`avocadoctl runtime inspect\`: the staged runtimes and the manifest of the active one.
+- \`avocadoctl refresh\`: unmerge and merge the extensions again.
+- \`systemd-sysext status\` / \`systemd-confext status\`: the low-level view of what systemd merged.
+
+For every command, see https://docs.peridio.com/developer-reference/avocadoctl/commands.
 
 ## Network and discovery
 
 - Dev runtime usually has DHCP and Avahi/mDNS.
-- The device often advertises as \`avocado-<target>.local\` or similar. \`ping avocado-raspberrypi5.local\` from the host is worth trying before manually finding the IP.
+- The default hostname is \`avocado-<target>\`, for example \`avocado-raspberrypi5\`. Try both forms from the host before you search for the IP: \`ping avocado-raspberrypi5.local\` (mDNS) and \`ping avocado-raspberrypi5\` (a router or \`/etc/hosts\` entry). If neither resolves, use the IP address.
 
 ## Users and auth
 
@@ -78,7 +91,7 @@ Avocado uses **systemd**, not BusyBox init. So this is your friend:
 
 - No package manager. The device's filesystem is read-only and atomic. **Don't try \`apt\` / \`dnf\` / \`apk\` on the device** — they're not there, and even if they were, the rootfs is sealed. Package management happens at *build time* on the host, against the SDK container.
 - No compiler toolchain by default. Cross-compile on the host, ship binaries in an extension overlay.
-- No docker. Avocado is not a Docker host. Containerized workloads aren't the model — extensions are.
+- No container engine by default. Containers run on the device when the runtime includes \`avocado-ext-docker\` or \`avocado-ext-podman\`. Extensions are still the main model. For the container inner loop, see the container dev mode guide: https://docs.peridio.com/developer-reference/container-dev-mode.
 
 ## Quick on-device diagnostics catalog
 
@@ -102,9 +115,9 @@ ss -tlnp
 df -h
 du -sh /var/* 2>/dev/null | sort -h
 
-# Extensions
-systemd-sysext list
-systemd-confext list
+# Runtime and extensions
+avocadoctl status
+avocadoctl ext list
 
 # Kernel
 uname -a
