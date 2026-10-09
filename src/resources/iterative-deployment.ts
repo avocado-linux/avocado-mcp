@@ -146,7 +146,7 @@ avocado deploy dev -d root@10.0.0.5:2222
 Today the SDK runs inside a Docker container; that may change. Either way, the rule is the same: read what \`avocado\` prints, not what its internals do.
 
 **Do**:
-- Run \`avocado install\` (or \`build\`, or \`deploy\`) as a foreground Bash command.
+- Run \`avocado install\` (or \`build\`, or \`deploy\`) as a Bash command. A run that can pass the foreground time cap goes through a background task with a completion wait (see \`avocado://skills/avocado-cli-execution\`).
 - Wait for it to exit.
 - Read the exit code and the output it printed. That is the result.
 - Pipe failures into \`explain-build-error\` for cross-channel package lookup.
