@@ -98,6 +98,7 @@ When parsing a failed \`avocado build\` log, these patterns indicate install (no
 - \`no package matching\` / \`package X not found\` — a referenced package isn't in the SDK
 - \`unable to find a match: <name>\` — extension or package missing from the current install
 - \`Error: extension <name> not found\` / similar — extension exists in YAML but isn't installed
+- \`Cannot build ... - dependencies not satisfied\`, with a \`Stale steps:\` or \`Missing steps:\` list and a \`To fix:\` line that names \`avocado install\`. Build stamps catch an install that no longer matches \`avocado.yaml\` before any work starts.
 - An explicit message from the CLI like "run avocado install first"
 
 Any of those → run \`avocado install --no-tui\`, then retry \`avocado build --no-tui\`. Other build errors (compile failures, hook script errors, OOM, schema errors) are NOT install-fixable. Pass them to \`explain-build-error\` instead.
@@ -113,10 +114,12 @@ avocado deploy [OPTIONS] --device <DEVICE> [NAME]
 | Arg / option | Purpose | Example |
 |---|---|---|
 | \`[NAME]\` (positional) | Runtime name from \`avocado.yaml\`'s \`runtimes:\` map. Usually \`dev\`. The old \`-r <NAME>\` form is deprecated. | \`dev\` |
-| \`-d, --device <[user@]host[:port]>\` | **Required.** Device address. Defaults: user \`root\`, port \`22\`. | \`-d 192.168.1.42\` or \`-d root@avocado-rpi5.local:22\` |
+| \`-d, --device <[user@]host[:port]>\` | **Required.** Device address. Defaults: user \`root\`, port \`22\`. | \`-d 192.168.1.42\` or \`-d root@avocado-raspberrypi5.local:22\` |
 | \`-t, --target <TARGET>\` | Optional target override. Usually inferred from \`AVOCADO_TARGET\` env or \`default_target\` in YAML. | \`-t raspberrypi5\` |
 | \`-C, --config <PATH>\` | Path to \`avocado.yaml\`. Default is the file in CWD. | \`-C ./avocado.yaml\` |
 | \`--no-tui\` | Disable TUI output. Useful when running under a non-tty harness (CI, embedded shells). | |
+| \`--connect-sign\` | Sign the TUF metadata through Avocado Connect, not locally. Use it when the device has already received a Connect OTA update. It needs a local signing key for the runtime (Level 2: \`signing.key\` and \`avocado connect trust promote-root --key <KEY>\`). Without one, the deploy fails during hash collection. | \`--connect-sign\` |
+| \`--output json\` | Skip the TUI and print NDJSON events. | |
 
 **Common shapes you'll emit:**
 
@@ -124,8 +127,13 @@ avocado deploy [OPTIONS] --device <DEVICE> [NAME]
 # IP-based, dev runtime
 avocado deploy dev -d 192.168.1.42
 
-# Hostname (mDNS), dev runtime
+# Hostname, dev runtime. The default hostname is avocado-<target>.
+# Try the mDNS form first, then the plain hostname (router DNS or /etc/hosts).
 avocado deploy dev -d avocado-raspberrypi4.local
+avocado deploy dev -d avocado-raspberrypi4
+
+# Device that already took a Connect OTA update
+avocado deploy dev -d 192.168.1.42 --connect-sign
 
 # Custom user + port (rare)
 avocado deploy dev -d root@10.0.0.5:2222
@@ -209,10 +217,17 @@ When \`avocado deploy\` runs, the CLI:
 1. **Computes artifact hashes** from the build output and generates signed TUF metadata for the runtime.
 2. **Starts a local HTTP server** on the dev host that serves the update repository.
 3. **SSHes into the device** (passwordless root in the \`dev\` runtime).
-4. **Runs \`avocadoctl runtime add\`** on the device, pointing it at the local HTTP server. The device pulls only the changed extension images, verifies them against the signed metadata, and merges them via systemd-sysext / systemd-confext.
+4. **Runs \`avocadoctl runtime add\`** on the device, pointing it at the local HTTP server. The device pulls only the changed images, verifies them against the signed metadata, and stages the new runtime under \`/var/lib/avocado/\`.
 5. **Tears down** the HTTP server.
 
-End result: the running device now has the updated extensions live, **without a reboot in most cases**. Some extension changes (kernel modules, certain systemd unit additions) may need a restart of the affected service or a reboot — the CLI flags this if so.
+What happens next depends on what changed:
+
+- **Extensions only:** the device switches to the new runtime and merges the extensions live with systemd-sysext / systemd-confext. **No reboot.** A service can need a restart to pick up a new binary or unit.
+- **OS change** (a new \`os_build_id\`, for example after a BSP or kernel update or a rootfs package change): the runtime includes an OS bundle. \`avocadoctl\` writes the new kernel, rootfs and initramfs to the inactive A/B slot, marks it bootable, and **reboots the device** into the new slot. SSH drops during the reboot. Wait for the device to come back before you verify. If the new slot fails to boot, the device rolls back to the old one.
+
+Thus a kernel, rootfs or BSP change does not need a reflash. Deploy sends it as an OS update. See the docs: https://docs.peridio.com/developer-reference/avocadoctl/os-bundles/overview.
+
+On the device, \`avocadoctl status\` shows the active runtime and its rootfs and initramfs build IDs. Use it to confirm which runtime and OS are running after a deploy.
 
 ## Prerequisites
 
@@ -222,6 +237,7 @@ For \`avocado deploy\` to work:
 - **The device must be running the \`dev\` runtime** (or any runtime that includes \`avocado-ext-sshd-dev\`). The runtime ships an sshd with a passwordless root login.
 - **The dev host must be able to bind a local HTTP port** so the device can pull from it. If the user is on a corporate network with host-firewalled inbound, this fails.
 - **The runtime you name (the positional \`[NAME]\`) must be defined in \`avocado.yaml\`** under \`runtimes:\`.
+- **No extension in the runtime may set \`image.verity: true\`.** Deploy does not publish extension dm-verity hash trees yet, so it refuses with \`this runtime has extensions with image.verity: true\`. Provision instead, or build without extension verity. Rootfs verity is not affected.
 
 If any of these fail, \`avocado deploy\` errors out clearly and the user falls back to \`avocado provision\` + re-flash.
 
@@ -229,7 +245,12 @@ If any of these fail, \`avocado deploy\` errors out clearly and the user falls b
 
 - **Device has never been provisioned.** First-time setup needs \`avocado provision\`, not \`deploy\`. There's no OS to update yet.
 - **Device is not on the network.** No network = no fast path. Use UART to diagnose why first (\`avocado://skills/device-debugging\`).
-- **Changes to the bootloader, kernel, or BSP packages.** These require a full re-flash. \`avocado deploy\` is for extension-level changes (your app, configs, services, runtime packages).
+- **A new partition layout.** An update cannot add partitions. Provision again.
+- **New seeded \`/var\` content** (\`var_files\`, \`docker_images\`). Only provision writes it. See \`avocado://skills/filesystem-model\`.
+- **Turning \`var.encrypt\` off** on a device that has already encrypted \`/var\`. That needs a reprovision. Turning it on works through an update.
+- **A runtime with extension \`image.verity\`.** Deploy refuses it (see above).
+
+Kernel, rootfs, initramfs and BSP package changes do not need a reflash. Deploy ships them as an OS update and the device reboots into the new A/B slot. Bootloader updates over an update are board-specific. See the docs on security and OTA before you rely on one.
 - **The user explicitly wants a clean wipe.** A provision starts from a known-good image; a deploy layers on top of whatever state the device is in.
 
 ## Proactively offering deploy after edits
@@ -265,8 +286,8 @@ For new packages: \`rpm -q <name>\` confirms install. For service changes: \`sys
 | Output | Bootable image written to media (SD / USB / NVMe / eMMC) | OTA-style update applied via avocadoctl |
 | Device state required | None (or media inserted) | Running, on network, sshd reachable |
 | Speed | Minutes (full image write) | Seconds (delta push of changed extensions) |
-| Reboot required | Yes (to boot into new image) | Usually no (sysext merges live) |
-| When to use | First boot; bootloader/kernel/BSP changes; clean wipe | Every iteration after first provision |
+| Reboot required | Yes (to boot into new image) | No for extension changes. Yes for an OS change (A/B slot switch). |
+| When to use | First boot, partition-layout change, new seeded \`/var\` content, clean wipe | Every iteration after the first provision, including kernel and rootfs changes |
 
 If the user is doing dev iteration, \`deploy\` is almost always the right call. \`provision\` is the floor; \`deploy\` is the daily driver.
 
