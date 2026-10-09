@@ -179,18 +179,20 @@ const TEMPLATE = readFileSync(
   "utf8",
 );
 
+/** Comment lines with their indentation, in order. */
+const comments = (yaml: string) =>
+  yaml.split("\n").filter((line) => /^\s*#/.test(line));
+
 test("the default starter is the CLI template with the target filled in", () => {
   const out = buildStarterYaml({ target: "raspberrypi5" });
-  assert.deepEqual(
-    parse(out),
-    parse(TEMPLATE.replaceAll("{target}", "raspberrypi5")),
-  );
-  // The editor modeline and the comments survive.
+  // Text, not only data: every comment stays where the template has it.
+  assert.equal(out, TEMPLATE.replaceAll("{target}", "raspberrypi5"));
   assert.match(
     out,
     /^# yaml-language-server: \$schema=https:\/\/docs\.peridio\.com\/schemas\/avocado-config\.json/,
   );
   assert.match(out, /NOT FOR PRODUCTION/);
+  assert.match(out, /\n\n##\n## Images\n##\n\nrootfs:/);
 });
 
 test("starter options land where the CLI reads them", async () => {
@@ -219,6 +221,7 @@ test("starter options land where the CLI reads them", async () => {
     channel: "stable",
     repo: { url: "https://mirror.example/avocado" },
   });
+  assert.deepEqual(comments(out), comments(TEMPLATE));
   const res = await validateAvocadoYaml(out);
   assert.equal(res.ok, true, JSON.stringify(res.errors));
 });

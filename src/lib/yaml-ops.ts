@@ -10,9 +10,9 @@
 import { readFileSync } from "fs";
 import {
   parseDocument,
+  stringify,
   isMap,
   isSeq,
-  Pair,
   YAMLMap,
   YAMLSeq,
   Scalar,
@@ -97,8 +97,10 @@ const DEFAULT_TEMPLATE = readFileSync(
 /**
  * Starter avocado.yaml for when the avocado CLI is not available. It is the
  * CLI's own `configs/default.yaml` (vendored next to the schema), with the
- * caller's values set through the Document API so every value is quoted
- * correctly. When the CLI is available, `avocado init` is the better path.
+ * caller's values written into the template text at the place of each node.
+ * Re-serializing the whole document would move the template's comments, so
+ * only the edited values are written, each quoted by the `yaml` package.
+ * When the CLI is available, `avocado init` is the better path.
  */
 export function buildStarterYaml(opts: {
   target: string;
@@ -111,39 +113,87 @@ export function buildStarterYaml(opts: {
   /** Written as `default_target_board`. */
   board?: string;
 }): string {
-  // `- {target}` would parse as a flow map, so substitute a plain word first
-  // and then set the real value as data.
-  const doc = parseDocument(DEFAULT_TEMPLATE.replaceAll("{target}", "TARGET"));
-  doc.set("default_target", opts.target);
-  doc.setIn(["supported_targets", 0], opts.target);
+  const text = DEFAULT_TEMPLATE;
+  const doc = parseDocument(text);
+  const edits: { at: number; end: number; text: string }[] = [];
+  const range = (path: (string | number)[]) => {
+    const node = doc.getIn(path, true) as { range?: number[] } | undefined;
+    if (!node?.range)
+      throw new Error(`starter template has no ${path.join(".")}`);
+    return node.range;
+  };
+  // Keep the template's quote style, so an unchanged value reads the same.
+  const replace = (path: (string | number)[], value: unknown) => {
+    const [at, end] = range(path);
+    const quoted = (doc.getIn(path, true) as Scalar).type === "QUOTE_DOUBLE";
+    edits.push({ at, end, text: scalar(value, quoted) });
+  };
+  // New lines after the node at `path`, indented like that node's line.
+  const insertAfter = (path: (string | number)[], ...lines: string[]) => {
+    const [start, end] = range(path);
+    const lineStart = text.lastIndexOf("\n", start) + 1;
+    const indent = /^\s*/.exec(text.slice(lineStart, start))![0];
+    const added = lines.map((line) => `\n${indent}${line}`).join("");
+    edits.push({ at: end, end, text: added });
+  };
+
+  replace(["default_target"], opts.target);
+  replace(["supported_targets", 0], opts.target);
   if (opts.board) {
-    const root = doc.contents as YAMLMap;
-    const at = root.items.findIndex(
-      (p) => (p.key as Scalar).value === "default_target",
-    );
-    root.items.splice(
-      at + 1,
-      0,
-      doc.createPair("default_target_board", opts.board) as Pair,
+    insertAfter(
+      ["default_target"],
+      `default_target_board: ${scalar(opts.board)}`,
     );
   }
-
   if (opts.release) {
-    doc.setIn(
+    replace(
       ["distro", "release"],
       /^\d+$/.test(opts.release) ? Number(opts.release) : opts.release,
     );
   }
-  if (opts.channel) doc.setIn(["distro", "channel"], opts.channel);
-  if (opts.repoUrl) doc.setIn(["distro", "repo", "url"], opts.repoUrl);
-
-  const runtime = opts.runtimeName ?? "dev";
-  const runtimes = doc.get("runtimes") as YAMLMap;
-  (runtimes.items[0].key as Scalar).value = runtime;
-  for (const e of opts.extraExtensions ?? []) {
-    doc.addIn(["runtimes", runtime, "extensions"], e);
+  if (opts.channel) replace(["distro", "channel"], opts.channel);
+  if (opts.repoUrl) {
+    insertAfter(
+      ["distro", "channel"],
+      "repo:",
+      `  url: ${scalar(opts.repoUrl)}`,
+    );
   }
-  return doc.toString();
+
+  const runtimes = doc.get("runtimes") as YAMLMap;
+  const runtime = runtimes.items[0];
+  if (opts.runtimeName) {
+    const [at, end] = (runtime.key as Scalar).range!;
+    edits.push({ at, end, text: scalar(opts.runtimeName) });
+  }
+  const name = (runtime.key as Scalar).value as string;
+  const extensions = doc.getIn(["runtimes", name, "extensions"]) as YAMLSeq;
+  for (const e of opts.extraExtensions ?? []) {
+    insertAfter(
+      ["runtimes", name, "extensions", extensions.items.length - 1],
+      `- ${scalar(e)}`,
+    );
+  }
+
+  // Apply from the end, so earlier offsets stay valid. Insertions at one
+  // place keep their order.
+  let out = text;
+  for (const e of edits.reverse().sort((x, y) => y.at - x.at)) {
+    out = out.slice(0, e.at) + e.text + out.slice(e.end);
+  }
+  return out;
+}
+
+/**
+ * One YAML scalar on one line. It is quoted when the value needs it, or
+ * always in double quotes with `quoted`.
+ */
+function scalar(value: unknown, quoted = false): string {
+  return stringify(value, {
+    lineWidth: 0,
+    blockQuote: false,
+    defaultStringType: quoted ? "QUOTE_DOUBLE" : "PLAIN",
+  }).trimEnd();
 }
 
 /**
