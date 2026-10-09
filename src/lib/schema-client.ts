@@ -5,7 +5,8 @@
  * serves the same file at SCHEMA_URL. We fetch it from there, cache it in
  * memory and on disk under getCacheDir()/schema, and fall back to the copy
  * vendored in `src/lib/schema/` when the fetch fails or the fetched schema
- * does not compile. CI fails when the vendored copy drifts from the CLI
+ * does not compile. The fallback is kept in memory for five minutes, then
+ * the live schema is tried again. CI fails when the vendored copy drifts from the CLI
  * (`npm run sync-schema` refreshes it).
  *
  * Set AVOCADO_MCP_SCHEMA_OFFLINE=1 to skip the network and use the vendored
@@ -20,6 +21,7 @@ import { getCacheDir } from "./cache.js";
 export const SCHEMA_URL =
   "https://docs.peridio.com/schemas/avocado-config.json";
 const TTL_MS = 60 * 60 * 1000;
+const FALLBACK_TTL_MS = 5 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 5000;
 const USER_AGENT = "avocado-mcp-server";
 const VENDORED_SOURCE =
@@ -229,12 +231,14 @@ export async function loadSchema(): Promise<LoadedSchema> {
     };
     return memory;
   } catch (error) {
-    // Don't cache the failure; retry on the next call.
+    // Keep the fallback for a short time, so a slow or broken live schema
+    // does not cost every call the full fetch timeout. Retry after that.
     console.error(
       "[schema-client] using the vendored schema:",
       (error as Error).message,
     );
-    return vendoredSchema();
+    memory = { ...vendoredSchema(), expiresAt: Date.now() + FALLBACK_TTL_MS };
+    return memory;
   }
 }
 

@@ -127,6 +127,23 @@ test("a disk entry keeps its age when it is loaded into memory", async () => {
   assert.equal(calls.length, 1);
 });
 
+test("the fallback is kept for five minutes, then the live schema is retried", async () => {
+  const calls = setup(() => new Response("", { status: 503 }));
+  const realNow = Date.now;
+  let now = realNow();
+  Date.now = () => now;
+  try {
+    assert.match((await loadSchema()).source, /vendored/);
+    assert.match((await loadSchema()).source, /vendored/);
+    assert.equal(calls.length, 1, "a fresh fallback must not refetch");
+    now += 5 * 60 * 1000 + 1;
+    await loadSchema();
+    assert.equal(calls.length, 2, "an expired fallback must fetch again");
+  } finally {
+    Date.now = realNow;
+  }
+});
+
 test("AVOCADO_MCP_SCHEMA_OFFLINE=1 never touches the network", async () => {
   const calls = setup(() => {
     throw new Error("network");
