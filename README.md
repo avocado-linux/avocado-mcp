@@ -93,6 +93,7 @@ Background knowledge the LLM reads to ground itself before invoking tools:
 - `avocado://skills/upstream-sources`
 - `avocado://skills/package-coverage`
 - `avocado://skills/container-backend`
+- `avocado://skills/feeds-and-lockfile`
 
 ### Prompts
 
@@ -200,7 +201,7 @@ The server reads from public HTTPS endpoints only:
 
 - **The package feed** — RPM repodata (targets manifest, `repomd.xml`, `primary.xml.gz`). Used by `list-targets`, `search-packages`, `describe-package`, `check-package-coverage`, `add-package-to-extension`, `explain-build-error`, `init-project`, `get-provisioning-steps`, and reported by `environment-check`. Pass `projectDir` and the feed is resolved the same way avocado-cli resolves it (`src/lib/feed-config.ts`):
   - repo URL: `AVOCADO_REPO_URL` > `AVOCADO_SDK_REPO_URL` > `distro.repo.url` > `sdk.repo_url` > `https://repo.avocadolinux.org`
-  - releasever: `AVOCADO_RELEASEVER` > `AVOCADO_SDK_REPO_RELEASE` > `distro.repo.releasever` > `sdk.repo_release` > `{release}/{channel}` from `AVOCADO_DISTRO_RELEASE`/`distro.release` and `AVOCADO_DISTRO_CHANNEL`/`distro.channel`, rewritten to `{release}/{channel}/snapshots/<id>` when `.avocado/lock.json` pins a matching `repo-snapshot` for the target
+  - releasever: `AVOCADO_RELEASEVER` > `AVOCADO_SDK_REPO_RELEASE` > `distro.repo.releasever` > `sdk.repo_release` > `{release}/{channel}` from `AVOCADO_DISTRO_RELEASE`/`distro.release` and `AVOCADO_DISTRO_CHANNEL`/`distro.channel`, rewritten to `{release}/{channel}/snapshots/<id>` when the lock file (`avocado.lock`, or the legacy `.avocado/lock.json`) pins a matching `repo-snapshot` for the target
   - TLS: `AVOCADO_REPO_CA` > `distro.repo.ca`; `AVOCADO_REPO_INSECURE` > `distro.repo.tls_verify: false`
 
   Explicit `release` / `channel` / `repoUrl` tool arguments override all of the above. Without a project the default is `https://repo.avocadolinux.org` `2024/edge`. Multiple releases (`2024`, `2026`) and channels (`next`, `edge`, `stable`) are published and the target set differs per stream, so target validation is done against the feed being queried. Every result states the effective feed, whether the repo URL is overridden, and where each value came from. Env vars are read from the MCP server's own process environment.
