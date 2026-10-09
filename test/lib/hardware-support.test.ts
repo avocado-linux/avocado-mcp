@@ -5,6 +5,8 @@ import {
   getSelectableSlugs,
   clearSelectableCache,
 } from "../../src/lib/hardware-support.js";
+import { squash } from "../../src/lib/target-resolver.js";
+import { DEVICES, FEED_2024_EDGE, FEED_2026_NEXT } from "./hardware-fixture.js";
 
 const realFetch = globalThis.fetch;
 afterEach(() => {
@@ -16,8 +18,8 @@ afterEach(() => {
 const SELECTABLE = new Set([
   "imx93evk",
   "imx93frdm",
-  "jetsonorinnano", // matrix slug — feed has jetson-orin-nano-devkit
-  "jetsonagxorin",
+  "jetsonorinnanodevkit",
+  "jetsonagxorindevkit",
   "qemuarm64",
   "raspberrypi5",
   "fr201",
@@ -43,12 +45,88 @@ test("filterSelectable keeps real boards and drops arch/tune pseudo-targets", ()
   ]);
 });
 
-test("filterSelectable reconciles the feed's -devkit suffix against the matrix slug", () => {
-  const feed = ["jetson-orin-nano-devkit", "jetson-agx-orin-devkit"];
-  assert.deepEqual(filterSelectable(feed, SELECTABLE).sort(), [
+test("filterSelectable accepts the 2026 feed names without the -devkit suffix", () => {
+  const feed = [
+    "jetson-orin-nano-devkit",
     "jetson-agx-orin-devkit",
+    "jetson-orin-nano",
+    "jetson-agx-orin",
+  ];
+  assert.deepEqual(filterSelectable(feed, SELECTABLE).sort(), [
+    "jetson-agx-orin",
+    "jetson-agx-orin-devkit",
+    "jetson-orin-nano",
     "jetson-orin-nano-devkit",
   ]);
+});
+
+// The selectable set exactly as getSelectableSlugs builds it from the real
+// supported.json and virtual-environment.json.
+const REAL_SELECTABLE = new Set(
+  DEVICES.flatMap((d) => [d.target, d.board])
+    .filter((s) => s)
+    .map(squash),
+);
+
+test("filterSelectable on the real docs data and the live 2024/edge feed", () => {
+  // fr202, qcm6490 and imx95-frdm are real feed targets with no docs entry,
+  // so they are hidden. The docs list fr201, which no feed carries.
+  assert.deepEqual(filterSelectable(FEED_2024_EDGE, REAL_SELECTABLE), [
+    "grinn-astra-1680-sbc",
+    "icam-540",
+    "imx8mp-evk",
+    "imx8mp-var-dart",
+    "imx91-frdm",
+    "imx93-evk",
+    "imx93-frdm",
+    "intel-x86-64-v2",
+    "intel-x86-64-v3",
+    "jetson-agx-orin-devkit",
+    "jetson-orin-nano-devkit",
+    "jetson-orin-nx",
+    "qemuarm64",
+    "qemux86-64",
+    "raspberrypi0-2w",
+    "raspberrypi4",
+    "raspberrypi5",
+    "reterminal",
+    "reterminal-dm",
+    "rubikpi3",
+    "rzv2n-sr-som",
+    "ucm-imx8m-plus",
+  ]);
+});
+
+test("filterSelectable on the real docs data and the live 2026/next feed", () => {
+  assert.deepEqual(filterSelectable(FEED_2026_NEXT, REAL_SELECTABLE), [
+    "imx8mp-evk",
+    "imx91-frdm",
+    "imx93-evk",
+    "imx93-frdm",
+    "jetson-agx-orin",
+    "jetson-agx-thor",
+    "jetson-orin-nano",
+    "jetson-orin-nx",
+    "qemuarm64",
+    "qemux86-64",
+    "raspberrypi4",
+    "raspberrypi5",
+    "rb3gen2",
+    "rubikpi3",
+  ]);
+});
+
+test("a docs slug that only shares a prefix with a feed slug does not admit it", () => {
+  // The old prefix rule kept all of these: a docs `reterminal` admitted any
+  // `reterminal*` feed slug, and a short feed slug matched every longer one.
+  const selectable = new Set(["reterminal", "jetsonagxorindevkit", "fr201"]);
+  assert.deepEqual(
+    filterSelectable(
+      ["reterminal-x", "jetson", "jetson-agx", "fr2010"],
+      selectable,
+    ),
+    [],
+  );
 });
 
 function stub(bodies: Record<string, unknown | "500">) {

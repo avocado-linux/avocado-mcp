@@ -34,7 +34,7 @@ const SYNONYMS: Record<string, string[]> = {
     "kit",
   ],
   "imx8mp-evk": ["imx8mp", "imx", "nxp", "8mp", "evk"],
-  "qemux86-64": ["qemu", "x86", "x86-64", "x86_64", "amd64", "intel"],
+  "qemux86-64": ["qemu", "x86", "x86-64", "x86_64", "amd64"],
   qemuarm64: ["qemu", "arm64", "aarch64", "arm"],
   "icam-540": ["icam", "advantech", "camera", "540"],
   fr201: ["fr201", "fr-201"],
