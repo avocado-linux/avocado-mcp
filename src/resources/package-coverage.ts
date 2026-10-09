@@ -114,11 +114,11 @@ Include a keyword form too — the feed search matches summaries, so \`mqtt\` ca
 
 Each dependency comes back with:
 
-- \`status\`: \`present\` (any hit), \`missing\` (no hit across all its queries), or \`not-checked\` (no hit, but the project enables a feed the MCP can't read, such as a private \`org:\` feed). Report \`not-checked\` rows as unknown, not as gaps. Matching is **optimistic**: a summary-only hit still counts as present.
+- \`status\`: \`present\` (any hit), \`missing\` (no hit across all its queries), or \`not-checked\` (no hit, but the project enables a feed the MCP can't read, such as a private \`org:\` feed). Report \`not-checked\` rows as unknown, not as gaps. They are not confirmed, so they lower the coverage percentage. Matching is **optimistic**: a summary-only hit still counts as present.
 - \`confidence\`: \`exact\` (feed name == query), \`strong\` (name prefix/substring match), or \`fuzzy\` (summary-only hit — optimistically counted, but a maintainer should verify). Carry this straight into the report's Match-confidence column.
 - \`match\`: the best feed package (name + version + repo) for PRESENT rows.
 - \`alternatives\`: near-miss package names — useful context for the maintainer and for spotting a better match.
-- \`summary\`: totals + coverage % + the exact/strong/fuzzy breakdown — this feeds the report's headline.
+- \`summary\`: totals, \`coveragePercent\` (present / total, the share confirmed present), \`notChecked\`, and the exact/strong/fuzzy breakdown. This feeds the report's headline.
 
 If \`targetAvailable\` comes back **false**, the target isn't in that stream (the Thor-on-2024 case). Go back to Step 0, pick the release that supports it, and re-run.
 
@@ -165,7 +165,8 @@ Write the report to the current working directory (unless the user names another
 - **Total runtime dependencies analyzed:** N
 - **Present in feed:** X (Y%) — of which E exact, S strong, F fuzzy/unverified
 - **Missing from feed:** Z
-- **Coverage: Y%** (X/N)  ← headline number
+- **Not checked:** U (no match in the feeds read, and K feeds were not read)
+- **Coverage: Y% confirmed** (X/N present, U not checked)  ← headline number
 
 <One short paragraph: overall migration readiness, the biggest gaps, and any
 caveats about fuzzy matches the maintainer should verify. If any 'present'
@@ -201,7 +202,7 @@ For each ❌ row, a subsection the maintainer can turn into a feed request:
 etc. — so the maintainer sees they were considered, not missed.>
 \`\`\`
 
-Compute coverage as \`present / total\` over the **runtime** table, rounded to a whole percent. State the fraction alongside the percent (\`18/22 = 82%\`) so it's auditable.
+Compute coverage as \`present / total\` over the **runtime** table, rounded to a whole percent. State the fraction alongside the percent (\`18/22 = 82%\`) so it's auditable. Not-checked rows stay in the total. When U > 0, the headline must say "confirmed" and show U, so a reader does not take unknown rows as present or as gaps. Name the feeds that were not read and why (the tool's \`notChecked\` list).
 
 ---
 
