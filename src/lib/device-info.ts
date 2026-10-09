@@ -152,7 +152,7 @@ export function getDeviceConnectionInfo(
   // dev kit that shares its target.
   const info = data ? lookupTarget(data, target, board) : null;
   const serial = info?.entries.find((e) => e.serial)?.serial;
-  const virtual = info ? isVirtual(info) : target.startsWith("qemu");
+  const virtual = info ? isVirtual(info) : /^qemu/i.test(target.trim());
   const consoleType: ConsoleType = virtual
     ? "none"
     : serial?.onboard
