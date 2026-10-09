@@ -28,6 +28,10 @@ const BANNED: { re: RegExp; why: string }[] = [
     re: /To fix:[\\`]* (?:line that names [\\`]*)?avocado install/,
     why: "the stamp error lists per-step commands (`avocado sdk install`, `avocado ext install <name>`), never `avocado install`",
   },
+  {
+    re: /(?:run|Run) the commands (?:in (?:its|that) [\\`]*To fix:|the CLI lists under [\\`]*To fix:)|in the order the CLI prints/,
+    why: "the CLI sorts the `To fix:` list by name, so it is not an install order. Run `avocado install`, which runs the steps SDK first",
+  },
 ];
 
 // `install -f` erases every extension's built content. It is allowed only on
