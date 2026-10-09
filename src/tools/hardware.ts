@@ -3,7 +3,8 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import * as path from "path";
-import { existsSync } from "fs";
+import { existsSync, readFileSync } from "fs";
+import { parse as parseYaml } from "yaml";
 import { assertWorkstationChannel } from "../lib/cli-channel.js";
 import {
   getHardwareData,
@@ -95,24 +96,54 @@ export function renderProvisionList(
   return out;
 }
 
+/**
+ * The board the CLI uses for a runtime: `AVOCADO_TARGET_BOARD`, then
+ * `runtimes.<name>.target_board`, then `default_target_board` (avocado-cli
+ * `interpolation/avocado.rs`). Returns undefined when the YAML has none.
+ */
+export function projectBoard(
+  configPath: string,
+  runtime: string,
+): string | undefined {
+  const env = process.env.AVOCADO_TARGET_BOARD?.trim();
+  if (env) return env;
+  try {
+    const doc = parseYaml(readFileSync(configPath, "utf8")) as {
+      runtimes?: Record<string, { target_board?: unknown } | null>;
+      default_target_board?: unknown;
+    } | null;
+    for (const b of [
+      doc?.runtimes?.[runtime]?.target_board,
+      doc?.default_target_board,
+    ]) {
+      if (typeof b === "string" && b.trim()) return b.trim();
+    }
+  } catch {
+    /* unreadable YAML: the fallback lists the target's profiles */
+  }
+  return undefined;
+}
+
 async function docsFallback(
   target: string | undefined,
   runtime: string,
+  board: string | undefined,
 ): Promise<string> {
   if (!target) {
     return `Pass \`target\` to see the docs profiles, or call \`get-target-info\`.\n`;
   }
   const data = await getHardwareData();
   if (!data) return unavailableText(target);
-  const info = lookupTarget(data, target);
+  const info = lookupTarget(data, target, board);
   const all = (info?.entries ?? []).flatMap(
     (e) => e.provisioning?.options ?? [],
   );
   const options = all.filter((o) => isSafeProfile(o.profile));
+  const what = board ? `\`${target}\` board \`${board}\`` : `\`${target}\``;
   if (all.length === 0) {
-    return `The docs data lists no profiles for \`${target}\`. Call \`get-target-info\` for the board page.\n`;
+    return `The docs data lists no profiles for ${what}. Call \`get-target-info\` with the board for the board page.\n`;
   }
-  let out = `Profiles in the docs data for \`${target}\` (call \`get-target-info\` for the full steps):\n\n`;
+  let out = `Profiles in the docs data for ${what} (call \`get-target-info\` for the full steps):\n\n`;
   for (const o of options) {
     out += `- ${o.label ?? o.id}: \`${provisionCommand(runtime, o.profile)}\`\n`;
   }
@@ -185,6 +216,12 @@ export function registerHardwareTools(server: McpServer): void {
           .describe(
             "Runtime used in the printed commands. Defaults to `dev`. The CLI does not take a runtime with `--list`.",
           ),
+        board: z
+          .string()
+          .optional()
+          .describe(
+            "Board (`default_target_board`), e.g. 'mic-733-ao5a1'. Used only when the tool falls back to the docs data. Defaults to the board in avocado.yaml.",
+          ),
       },
       annotations: {
         title: "List the provisioning profiles of an installed project",
@@ -194,7 +231,7 @@ export function registerHardwareTools(server: McpServer): void {
         openWorldHint: true,
       },
     },
-    async ({ projectDir, target, runtime }, extra) => {
+    async ({ projectDir, target, runtime, board }, extra) => {
       await assertWorkstationChannel({
         operation: "Listing provision profiles",
         command: "avocado provision --list --output json",
@@ -271,7 +308,11 @@ export function registerHardwareTools(server: McpServer): void {
       }
       out += `Could not read the profiles from the project: ${failure}\n\n`;
       out += `The profiles come from the installed SDK. Run \`avocado install\` in the project first, then call this tool again.\n\n`;
-      out += await docsFallback(target?.trim() || undefined, rt);
+      out += await docsFallback(
+        target?.trim() || undefined,
+        rt,
+        board?.trim() || projectBoard(configPath, rt),
+      );
       return { content: [{ type: "text", text: out }] };
     },
   );
