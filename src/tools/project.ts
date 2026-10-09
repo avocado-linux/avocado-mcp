@@ -606,7 +606,7 @@ export function registerProjectTools(
                 newYaml,
                 validation,
                 exactMatch
-                  ? `✅ Verified \`${packageName}\` (v${exactMatch.version}) exists in feed \`${exactMatch.feed ?? "avocado"}\`, repo \`${exactMatch.repo}\` for the queried target(s).\n\n${feed.describe(targets)}`
+                  ? `✅ Verified \`${packageName}\` (v${exactMatch.version}) exists in feed \`${exactMatch.feed ?? "avocado"}\`, repo \`${exactMatch.repo}\` for the queried target(s).\n${renderNotChecked(notChecked)}\n${feed.describe(targets)}`
                   : `⚠️ Could not verify \`${packageName}\`. It is not in the feeds the MCP read, and some enabled feeds were not checked. Run \`avocado install\` to confirm the package resolves.\n${renderNotChecked(notChecked)}\n${feed.describe(targets)}`,
               ),
             },

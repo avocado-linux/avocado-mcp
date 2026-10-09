@@ -67,6 +67,13 @@ const STAGE_INSTALLS: Record<PackageStage, string> = {
   runtime: "runtime",
 };
 
+/**
+ * Built-in feed `repos:` may re-scope with `stages` only (avocado-cli
+ * `BUILTIN_EXT_FEED`). It is the distro feed's `target/<arch>-ext` repo, not
+ * a feed of its own, so it never joins `distro.feeds`.
+ */
+const BUILTIN_EXT_FEED = "avocado-ext";
+
 /** dnf priority step between `distro.feeds` entries (avocado-cli). */
 const PRIORITY_STEP = 10;
 
@@ -615,6 +622,12 @@ function resolveNamedFeeds(input: NamedFeedsInput):
         location: "",
         status: "queried",
       });
+      return;
+    }
+    if (name === BUILTIN_EXT_FEED) {
+      notes.push(
+        `\`distro.feeds\` lists the built-in \`${name}\`. The CLI rejects this config. Set \`repos.${name}.stages\` to re-scope it instead.`,
+      );
       return;
     }
     const def = asObj(repos?.[name]);

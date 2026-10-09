@@ -200,9 +200,11 @@ When you change source files, run `npm run build` again and restart the client (
 The server reads from public HTTPS endpoints only:
 
 - **The package feed** — RPM repodata (targets manifest, `repomd.xml`, `primary.xml.gz`). Used by `list-targets`, `search-packages`, `describe-package`, `check-package-coverage`, `add-package-to-extension`, `explain-build-error`, `init-project`, `get-provisioning-steps`, and reported by `environment-check`. Pass `projectDir` and the feed is resolved the same way avocado-cli resolves it (`src/lib/feed-config.ts`):
-  - repo URL: `AVOCADO_REPO_URL` > `AVOCADO_SDK_REPO_URL` > `distro.repo.url` > `sdk.repo_url` > `https://repo.avocadolinux.org`
-  - releasever: `AVOCADO_RELEASEVER` > `AVOCADO_SDK_REPO_RELEASE` > `distro.repo.releasever` > `sdk.repo_release` > `{release}/{channel}` from `AVOCADO_DISTRO_RELEASE`/`distro.release` and `AVOCADO_DISTRO_CHANNEL`/`distro.channel`, rewritten to `{release}/{channel}/snapshots/<id>` when the lock file (`avocado.lock`, or the legacy `.avocado/lock.json`) pins a matching `repo-snapshot` for the target
-  - TLS: `AVOCADO_REPO_CA` > `distro.repo.ca`; `AVOCADO_REPO_INSECURE` > `distro.repo.tls_verify: false`
+  - repo URL: `AVOCADO_REPO_URL` > `AVOCADO_SDK_REPO_URL` > `distro.repo.url` > `repos.<distro>.url` > `sdk.repo_url` > `https://repo.avocadolinux.org`
+  - releasever: `AVOCADO_RELEASEVER` > `AVOCADO_SDK_REPO_RELEASE` > `distro.repo.releasever` > `repos.<distro>.releasever` > `{release}/{channel}` from `repos.<distro>.release` and `repos.<distro>.channel` > `sdk.repo_release` > `{release}/{channel}` from `AVOCADO_DISTRO_RELEASE`/`distro.release` and `AVOCADO_DISTRO_CHANNEL`/`distro.channel`. A derived `{release}/{channel}` is rewritten to `{release}/{channel}/snapshots/<id>` when the lock file (`avocado.lock`, or the legacy `.avocado/lock.json`) pins a matching `repo-snapshot` for the target
+  - TLS: `AVOCADO_REPO_CA` > `distro.repo.ca` > `repos.<distro>.ca`; `AVOCADO_REPO_INSECURE` > `distro.repo.tls_verify: false` > `repos.<distro>.tls_verify: false`
+
+  `repos.<distro>` is the `repos:` entry that a string `distro.repo` refers to (`repos.avocado` when `distro.repo` is not set).
 
   Explicit `release` / `channel` / `repoUrl` tool arguments override all of the above. Without a project the default is `https://repo.avocadolinux.org` `2024/edge`. Multiple releases (`2024`, `2026`) and channels (`next`, `edge`, `stable`) are published and the target set differs per stream, so target validation is done against the feed being queried. Every result states the effective feed, whether the repo URL is overridden, and where each value came from. Env vars are read from the MCP server's own process environment.
 - **`github.com/avocado-linux/references`** — full source of every reference project. Used by `get-reference` and `get-reference-file` (fetched via `raw.githubusercontent.com` + GitHub trees API).

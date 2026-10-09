@@ -191,6 +191,7 @@ export function registerPackageTools(
           }
           out += `\n`;
         }
+        out += renderNotChecked(notChecked);
         return {
           content: [{ type: "text", text: out }],
           structuredContent: {
@@ -205,6 +206,7 @@ export function registerPackageTools(
               summary: p.summary,
               description: p.description,
             })),
+            notChecked,
             feed: feedInfo,
           },
         };
