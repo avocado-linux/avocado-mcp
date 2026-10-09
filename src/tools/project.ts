@@ -418,7 +418,8 @@ export function registerProjectTools(
         const newYaml = addExtension(yaml, {
           name,
           types,
-          version: source ? version : (version ?? "0.1.0"),
+          // A source extension takes its version from the source.
+          version: source ? undefined : (version ?? "0.1.0"),
           packages,
           overlay,
           enableServices,

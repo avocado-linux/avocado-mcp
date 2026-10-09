@@ -244,3 +244,19 @@ test("validate-yaml reports ignored keys as warnings, not errors", async () => {
     "unknown key 'runtimes.dev.extentions' is ignored; did you mean 'extensions'?",
   ]);
 });
+
+test("add-extension does not write version for a source extension", async () => {
+  const { client } = await connect();
+  const res = await client.callTool({
+    name: "add-extension",
+    arguments: {
+      yaml: "extensions:\n  base:\n    types: [sysext]\n",
+      name: "app",
+      version: "1.2.3",
+      source: { type: "git", url: "https://x/y.git" },
+    },
+  });
+  const text = (res.content as { text: string }[])[0].text;
+  assert.match(text, /app:\n {4}source:/);
+  assert.doesNotMatch(text, /1\.2\.3/);
+});
