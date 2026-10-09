@@ -29,7 +29,7 @@ The rootfs image is signed and (optionally) dm-verity'd. You cannot \`echo > /us
 | Binaries, libraries, systemd unit files, kernel modules | A \`sysext\` extension's \`/usr/\` | Built into the extension's overlay or installed via \`packages:\` |
 | Static configuration, user accounts, network settings | A \`confext\` extension's \`/etc/\` | Built into the extension's overlay |
 | Application state (databases, caches, logs) | \`/var/\` on the device | Created by the app at runtime, OR seeded at provision via \`var_files\` |
-| Container image storage (\`/var/lib/docker\`, podman, etc.) | \`/var/\` | Either pulled lazily at runtime, OR seeded at provision via \`docker_images\` + \`var_files\` exclusion |
+| Container image storage (\`/var/lib/docker\`, podman, etc.) | \`/var/\` | Pulled at runtime. For Docker only, you can also seed \`/var/lib/docker\` at provision via \`docker_images\` + \`var_files\` exclusion. Podman needs its own pull or import. |
 | Anything the user-facing app writes at runtime | \`/var/\` | The app's responsibility — it must point its data dir there |
 
 ## The implication for extensions
@@ -97,7 +97,7 @@ extensions:
       - var/lib/docker/**                   # exclude from sysext
 \`\`\`
 
-During \`avocado provision\`, the CLI starts a temporary \`dockerd\` inside the SDK container, pulls each image for the target architecture, and writes the populated \`/var/lib/docker/\` into the var partition image. The device has the images cached on first boot, with no network.
+During \`avocado provision\`, the CLI starts a temporary \`dockerd\` inside the SDK container, pulls each image for the target architecture, and writes the populated \`/var/lib/docker/\` into the var partition image. The device has the images cached on first boot, with no network. This seeds only the Docker store for \`avocado-ext-docker\`. Podman does not read \`/var/lib/docker\`, so a runtime with \`avocado-ext-podman\` needs its own pull or import.
 
 The \`extensions.my-app.var_files: ["var/lib/docker/**"]\` line is mandatory in this pattern. Without it, the SDK tries to bake the Docker storage into the read-only sysext and fails.
 
