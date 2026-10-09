@@ -153,7 +153,11 @@ export function getDeviceConnectionInfo(
   // dev kit that shares its target.
   const info = data ? lookupTarget(data, target, board) : null;
   const serial = info?.entries.find((e) => e.serial)?.serial;
-  const virtual = info ? isVirtual(info) : /^qemu/i.test(target.trim());
+  // Guess from the name only when the board data is unavailable. With data,
+  // an unknown `qemu-typo` gets the "no entry" text.
+  const virtual = info
+    ? isVirtual(info)
+    : !data && /^qemu/i.test(target.trim());
   const consoleType: ConsoleType = virtual
     ? "none"
     : serial?.onboard
