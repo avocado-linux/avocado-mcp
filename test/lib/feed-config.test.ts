@@ -622,12 +622,12 @@ test("an unset env var in a feed url is not checked, unless the lock recorded th
 
 test("a token in a feed url query never reaches the summary, structured output or errors", () => {
   const dir = project(
-    "distro:\n  release: 2026\n  channel: edge\n  feeds: [vendor]\nrepos:\n  vendor:\n    url: 'https://vendor.example/repo?token={{ env.AVOCADO_TOKEN }}'\n",
+    "distro:\n  release: 2026\n  channel: edge\n  feeds: [vendor]\nrepos:\n  vendor:\n    url: 'https://vendor.example/repo?token={{ env.AVOCADO_VENDOR_ID }}'\n",
   );
   const ctx = FeedContext.load({
     projectDir: dir,
     env: {
-      AVOCADO_TOKEN: "s3cr3t-token",
+      AVOCADO_VENDOR_ID: "s3cr3t-token",
       AVOCADO_REPO_URL: "https://mirror.example/r?key=s3cr3t-key",
     },
   });
@@ -708,7 +708,7 @@ repos:
   vendor:
     url: ${base}/vendor/$target
     username: robot
-    password: "{{ env.AVOCADO_VENDOR_TOKEN }}"
+    password: s3cret-token
   denied:
     url: ${base}/denied
   local:
@@ -724,8 +724,7 @@ repos:
       join(dir, "rpms", "repodata", "p-primary.xml.gz"),
       pkg("local-pkg"),
     );
-    const env = { AVOCADO_VENDOR_TOKEN: "s3cret-token" };
-    const ctx = FeedContext.load({ projectDir: dir, env });
+    const ctx = FeedContext.load({ projectDir: dir, env: {} });
     const client = new RepoClient();
     const r = await client.searchPackages(["qemuarm64"], "pkg", 10, (t) =>
       ctx.forTarget(t),
@@ -809,7 +808,12 @@ repos:
     ]);
     for (const n of r.notChecked) {
       assert.match(n.reason, /env\.GITHUB_TOKEN/);
-      assert.match(n.reason, /only `AVOCADO_\*`/);
+      assert.match(
+        n.reason,
+        n.feed === "auth"
+          ? /does not read feed credentials/
+          : /only `AVOCADO_\*`/,
+      );
     }
     assert.equal(await client.getTargetManifest(ctx.base), null);
     assert.deepEqual(requests, []);
@@ -855,14 +859,14 @@ distro:
   feeds: [vendor, broken]
 repos:
   vendor:
-    url: "${base}/vendor/{{ env.AVOCADO_TOKEN }}/$target"
+    url: "${base}/vendor/{{ env.AVOCADO_VENDOR_PATH }}/$target"
   broken:
-    url: "${base}/broken/{{ env.AVOCADO_TOKEN }}"
+    url: "${base}/broken/{{ env.AVOCADO_VENDOR_PATH }}"
 `,
     );
     const ctx = FeedContext.load({
       projectDir: dir,
-      env: { AVOCADO_TOKEN: "tok-123" },
+      env: { AVOCADO_VENDOR_PATH: "tok-123" },
     });
     const r = await new RepoClient().searchPackages(
       ["qemuarm64"],
@@ -894,24 +898,35 @@ repos:
   }
 });
 
-test("a blocked var in a feed url uses the lock-file URL, masked, when it still fits the template", () => {
-  const config = cfg(
-    "distro:\n  release: 2026\n  channel: edge\n  feeds: [m]\nrepos:\n  m:\n    url: 'https://h.example/{{ env.GITHUB_TOKEN }}/$target'\n",
-  );
+test("a blocked var in a feed url is not checked, even when the lock records the url", () => {
   const lock = (url: string) => ({
     targets: { qemuarm64: { feeds: [{ name: "m", position: 20, url }] } },
   });
+  // The lock holds the URL with the var expanded, so it holds the secret.
   const f = resolveFeed({
     env: { GITHUB_TOKEN: "ghp_env" },
     target: "qemuarm64",
-    config,
+    config: cfg(
+      "distro:\n  release: 2026\n  channel: edge\n  feeds: [m]\nrepos:\n  m:\n    url: 'https://h.example/{{ env.GITHUB_TOKEN }}/$target'\n",
+    ),
     lock: lock("https://h.example/ghp_locked/qemuarm64"),
   });
-  assert.equal(
-    f.extraFeeds?.[0]?.url,
-    "https://h.example/ghp_locked/qemuarm64",
+  assert.equal(f.extraFeeds?.length, 0);
+  assert.match(f.notChecked?.[0]?.reason ?? "", /env\.GITHUB_TOKEN/);
+  assert.doesNotMatch(JSON.stringify(f.feeds), /ghp_/);
+
+  // An unset non-secret AVOCADO_* var still uses the lock, masked.
+  const config = cfg(
+    "distro:\n  release: 2026\n  channel: edge\n  feeds: [m]\nrepos:\n  m:\n    url: 'https://h.example/{{ env.AVOCADO_MIRROR }}/$target'\n",
   );
-  assert.equal(f.feeds?.[1]?.location, "https://h.example/***/qemuarm64");
+  const g = resolveFeed({
+    env: {},
+    target: "qemuarm64",
+    config,
+    lock: lock("https://h.example/locked/qemuarm64"),
+  });
+  assert.equal(g.extraFeeds?.[0]?.url, "https://h.example/locked/qemuarm64");
+  assert.equal(g.feeds?.[1]?.location, "https://h.example/***/qemuarm64");
 
   const stale = resolveFeed({
     env: {},
@@ -921,6 +936,103 @@ test("a blocked var in a feed url uses the lock-file URL, masked, when it still 
   });
   assert.equal(stale.extraFeeds?.length, 0);
   assert.match(stale.notChecked?.[0]?.reason ?? "", /avocado install/);
+});
+
+test("secret-looking AVOCADO_* vars and env credentials are never sent, whatever the lock says", async () => {
+  const requests: string[] = [];
+  const server = createServer((req, res) => {
+    requests.push(`${req.url} ${req.headers.authorization ?? ""}`);
+    res.statusCode = 404;
+    res.end();
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  try {
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const env = {
+      AVOCADO_CONNECT_TOKEN: "s3cr3t-connect",
+      AVOCADO_PKCS11_PIN: "s3cr3t-pin",
+      AVOCADO_VENDOR_KEY: "s3cr3t-key",
+      AVOCADO_VENDOR_USER: "s3cr3t-user",
+      AVOCADO_VENDOR_PW: "s3cr3t-pw",
+    };
+    const dir = project(
+      `
+vars:
+  pw: "{{ env.AVOCADO_VENDOR_PW }}"
+distro:
+  release: 2026
+  channel: edge
+  repo:
+    url: "${base}/{{ env.AVOCADO_PKCS11_PIN }}"
+  feeds: [connect, key, user, pw]
+repos:
+  connect:
+    url: "${base}/{{ env.AVOCADO_CONNECT_TOKEN }}/r"
+  key:
+    url: "${base}/{{ env.AVOCADO_VENDOR_KEY }}/$target"
+  user:
+    url: ${base}/user
+    username: "{{ env.AVOCADO_VENDOR_USER }}"
+    password: literal
+  pw:
+    url: ${base}/pw
+    username: robot
+    password: "{{ config.vars.pw }}"
+`,
+      {
+        "avocado.lock": JSON.stringify({
+          targets: {
+            qemuarm64: {
+              feeds: [
+                {
+                  name: "connect",
+                  position: 20,
+                  url: `${base}/s3cr3t-connect/r`,
+                },
+                {
+                  name: "key",
+                  position: 30,
+                  url: `${base}/s3cr3t-key/qemuarm64`,
+                },
+              ],
+            },
+          },
+        }),
+      },
+    );
+    const ctx = FeedContext.load({ projectDir: dir, env });
+    const client = new RepoClient();
+    const r = await client.searchPackages(["qemuarm64"], "pkg", 10, (t) =>
+      ctx.forTarget(t),
+    );
+    assert.deepEqual(requests, [], "nothing was fetched");
+    const reasons = Object.fromEntries(
+      r.notChecked.map((n) => [n.feed, n.reason]),
+    );
+    assert.deepEqual(Object.keys(reasons).sort(), [
+      "avocado",
+      "connect",
+      "key",
+      "pw",
+      "user",
+    ]);
+    assert.match(reasons.avocado, /env\.AVOCADO_PKCS11_PIN.*look like secrets/);
+    assert.match(reasons.connect, /env\.AVOCADO_CONNECT_TOKEN/);
+    assert.match(reasons.key, /env\.AVOCADO_VENDOR_KEY/);
+    assert.match(
+      reasons.user,
+      /env\.AVOCADO_VENDOR_USER.*does not read feed credentials/,
+    );
+    assert.match(reasons.pw, /env\.AVOCADO_VENDOR_PW.*CLI still uses them/);
+    const shown = JSON.stringify([
+      r,
+      ctx.describe(["qemuarm64"]),
+      ctx.structured(["qemuarm64"]),
+    ]);
+    assert.doesNotMatch(shown, /s3cr3t/);
+  } finally {
+    server.close();
+  }
 });
 
 test("a templated distro.repo and distro.feeds entry are interpolated before the lookup", () => {

@@ -133,7 +133,7 @@ export const notCheckedSchema = z
     }),
   )
   .describe(
-    "Enabled feeds the MCP could not read (private `org:` feeds, auth failures, unresolved templates, env vars other than `AVOCADO_*`). A package missing from the results may still be in one of these.",
+    "Enabled feeds the MCP could not read (private `org:` feeds, auth failures, unresolved templates, env vars the MCP does not read: any name without the `AVOCADO_` prefix, secret-looking names, and any var in `username` or `password`). A package missing from the results may still be in one of these.",
   );
 
 /**
