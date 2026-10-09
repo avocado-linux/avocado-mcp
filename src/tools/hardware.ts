@@ -124,6 +124,27 @@ export function projectBoard(
   return undefined;
 }
 
+/**
+ * The target `provision --list` uses when the caller passes none:
+ * `AVOCADO_TARGET`, then `default_target` (avocado-cli `utils/target.rs`,
+ * called from `commands/profiles.rs`). Returns undefined when the YAML has
+ * none.
+ */
+export function projectTarget(configPath: string): string | undefined {
+  const env = process.env.AVOCADO_TARGET?.trim();
+  if (env) return env;
+  try {
+    const doc = parseYaml(readFileSync(configPath, "utf8")) as {
+      default_target?: unknown;
+    } | null;
+    const t = doc?.default_target;
+    if (typeof t === "string" && t.trim()) return t.trim();
+  } catch {
+    /* unreadable YAML: the fallback asks for a target */
+  }
+  return undefined;
+}
+
 async function docsFallback(
   target: string | undefined,
   runtime: string,
@@ -309,7 +330,7 @@ export function registerHardwareTools(server: McpServer): void {
       out += `Could not read the profiles from the project: ${failure}\n\n`;
       out += `The profiles come from the installed SDK. Run \`avocado install\` in the project first, then call this tool again.\n\n`;
       out += await docsFallback(
-        target?.trim() || undefined,
+        target?.trim() || projectTarget(configPath),
         rt,
         board?.trim() || projectBoard(configPath, rt),
       );
