@@ -20,8 +20,11 @@ import {
 import { qemuArchAdvisory } from "./discovery.js";
 import { resolveTargetInput } from "../lib/target-resolver.js";
 import {
+  boardChoiceText,
   getHardwareData,
   lookupTarget,
+  resolvedLine,
+  targetAliases,
   boardDocsUrl,
   isVirtual,
   provisioningText,
@@ -290,13 +293,21 @@ export function registerDiagnosticsTools(
           ],
         };
       }
-      // Accept what a user types ("rpi5"). An ambiguous name lists the
-      // candidates instead of guessing.
-      const match = resolveTargetInput(input, Object.keys(validTargets));
+      // Accept what a user types ("rpi5", "Advantech MIC-712-OX"). An
+      // ambiguous name lists the candidates instead of guessing.
+      const feedTargets = Object.keys(validTargets);
+      const data = await getHardwareData();
+      const match = resolveTargetInput(
+        input,
+        feedTargets,
+        data ? targetAliases(data, feedTargets) : [],
+      );
       if (!match.target) {
-        const near = match.candidates.length
-          ? ` Did you mean ${match.candidates.map((t) => `\`${t}\``).join(", ")}?`
-          : "";
+        const near = match.boards
+          ? ` ${boardChoiceText(input, match.candidates[0], match.boards)}`
+          : match.candidates.length
+            ? ` Did you mean ${match.candidates.map((t) => `\`${t}\``).join(", ")}?`
+            : "";
         return {
           content: [
             {
@@ -307,12 +318,15 @@ export function registerDiagnosticsTools(
         };
       }
       const target = match.target;
+      // A board name ("Advantech MIC-712-OX") gives the board when the
+      // caller passed none.
+      const resolvedBoard = board?.trim() ? undefined : match.board;
+      board = board?.trim() || resolvedBoard;
 
       let out = `# Provisioning \`${target}\`${board ? ` (board \`${board}\`)` : ""}\n\n`;
       if (target !== input.trim()) {
-        out += `_Resolved \`${input}\` to target \`${target}\`._\n\n`;
+        out += `_${resolvedLine(input, target, resolvedBoard)}_\n\n`;
       }
-      const data = await getHardwareData();
       const info = data ? lookupTarget(data, target, board) : null;
       if (!info) {
         out += data ? unknownTargetText(target, data) : unavailableText(target);

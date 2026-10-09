@@ -263,3 +263,35 @@ test("board data lookups accept a user's name for the board", () => {
   assert.equal(lookupTarget(DATA, "jetson"), null);
   assert.match(targetInfoText(DATA, "jetson", undefined), /Did you mean/);
 });
+
+test("board data lookups accept the docs names for a board", () => {
+  // The `advantech` in the name must not pick icam-540.
+  const mic = lookupTarget(DATA, "Advantech MIC-712-OX");
+  assert.equal(mic?.target, "jetson-orin-nx");
+  assert.equal(mic?.board, "mic-712-ox-16gb");
+  assert.equal(mic?.resolvedBoard, "mic-712-ox-16gb");
+  assert.match(
+    targetInfoText(DATA, "Advantech MIC-712-OX", undefined),
+    /Resolved `Advantech MIC-712-OX` to target `jetson-orin-nx` with board `mic-712-ox-16gb`/,
+  );
+  // A board the caller passes wins over the board in the name.
+  assert.equal(
+    lookupTarget(DATA, "Advantech MIC-712-OX", "other")?.board,
+    "other",
+  );
+  assert.equal(
+    lookupTarget(DATA, "Thundercomm Rubik Pi 3")?.target,
+    "rubikpi3",
+  );
+  const vision = lookupTarget(DATA, "RB3 Gen 2 Vision Kit");
+  assert.equal(vision?.target, "rb3gen2");
+  assert.equal(vision?.board, "rb3gen2-vision");
+  // The core kit name gives the target and no board.
+  const core = lookupTarget(DATA, "Qualcomm RB3 Gen 2");
+  assert.equal(core?.target, "rb3gen2");
+  assert.equal(core?.board, undefined);
+  assert.equal(lookupTarget(DATA, "rpi5")?.target, "raspberrypi5");
+  assert.equal(lookupTarget(DATA, "jetson"), null);
+  // Two MIC-733 boards share a target. Do not guess the board.
+  assert.equal(lookupTarget(DATA, "Advantech MIC-733"), null);
+});

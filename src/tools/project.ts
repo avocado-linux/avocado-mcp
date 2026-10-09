@@ -13,7 +13,16 @@ import {
   searchReferencesScored,
   type ScoredReference,
 } from "../lib/references-client.js";
-import { resolveTargetInput } from "../lib/target-resolver.js";
+import {
+  resolveTargetInput,
+  type TargetMatch,
+} from "../lib/target-resolver.js";
+import {
+  boardChoiceText,
+  getHardwareData,
+  resolvedLine,
+  targetAliases,
+} from "../lib/hardware-data.js";
 import { qemuArchAdvisory } from "./discovery.js";
 import {
   feedArgsShape,
@@ -148,16 +157,24 @@ export function registerProjectTools(
           ],
         };
       }
-      // Accept what a user types ("rpi5", "Raspberry Pi 5"). An ambiguous
-      // name fails with the candidates instead of a guess.
-      const match = validTargets
-        ? resolveTargetInput(input, Object.keys(validTargets))
+      // Accept what a user types ("rpi5", "Raspberry Pi 5", "Advantech
+      // MIC-712-OX"). An ambiguous name fails with the candidates instead of
+      // a guess.
+      const data = validTargets ? await getHardwareData() : null;
+      const match: TargetMatch = validTargets
+        ? resolveTargetInput(
+            input,
+            Object.keys(validTargets),
+            data ? targetAliases(data, Object.keys(validTargets)) : [],
+          )
         : { target: input.trim(), candidates: [] };
       if (validTargets && !match.target) {
         const allTargets = Object.keys(validTargets);
         const fuzzy = match.candidates;
         let body = `# init-project failed\n\n❌ \`${input}\` is **not a supported Avocado OS target**, or it matches more than one. The MCP only operates on targets that exist in the feed.\n\n${feed.describe()}\n`;
-        if (fuzzy.length > 0) {
+        if (match.boards) {
+          body += `${boardChoiceText(input, fuzzy[0], match.boards)}\n\n`;
+        } else if (fuzzy.length > 0) {
           body += `**Did you mean:** ${fuzzy.map((t) => `\`${t}\``).join(", ")}?\n\n`;
         }
         body += `**Supported targets (${allTargets.length}):** ${allTargets
@@ -168,9 +185,16 @@ export function registerProjectTools(
         return { content: [{ type: "text", text: body }] };
       }
       const target = match.target ?? input.trim();
+      // A board name ("Advantech MIC-712-OX") gives the board when the
+      // caller passed none. It goes into avocado.yaml, so check it too.
+      const resolvedBoard = board ? undefined : match.board;
+      board = board ?? resolvedBoard;
       // The feed support check is skipped when targets.json is unreachable,
       // so this check must not depend on it.
-      if (!isSafeSegment(target)) {
+      if (
+        !isSafeSegment(target) ||
+        (resolvedBoard && !isSafeSegment(resolvedBoard))
+      ) {
         return {
           content: [
             {
@@ -182,7 +206,7 @@ export function registerProjectTools(
       }
       const resolved =
         target !== input.trim()
-          ? `_Resolved \`${input}\` to target \`${target}\`._\n\n`
+          ? `_${resolvedLine(input, target, resolvedBoard)}_\n\n`
           : "";
 
       // Reference path — try this first unless explicitly skipped. The
