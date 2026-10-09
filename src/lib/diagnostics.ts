@@ -520,7 +520,7 @@ export function renderFallbackDiagnosis(
   if (kind === "deploy") {
     out += `1. **Check SSH and the network to the device.** Run \`ping -c 1 <device-ip>\` and \`ssh -o ConnectTimeout=5 -o BatchMode=yes root@<device-ip> true\`. Both return on their own, so they cannot hang an automated run. Deploy pushes the runtime over SSH and HTTP, so the device must be on and reachable from this host.\n`;
     out += `2. **Check \`avocadoctl\` on the device.** Run \`ssh -o ConnectTimeout=5 -o BatchMode=yes root@<device-ip> avocadoctl status\`. A missing or failing \`avocadoctl\` stops the runtime update on the device.\n`;
-    out += `3. **Compare against the deploy refusals the MCP knows:** extension \`image.verity: true\` (provision instead), no \`root.json\` in the runtime (set \`runtimes.<name>.signing.key\`), and stale or missing build stamps (run \`avocado build\`).\n`;
+    out += `3. **Compare against the deploy refusals the MCP knows:** extension \`image.verity: true\` (provision instead), no \`root.json\` in the runtime (set \`runtimes.<name>.signing.key\`), and stale or missing build stamps (run the commands that the CLI lists under \`To fix:\`, in order).\n`;
     out += `4. **Read the device logs.** Run \`ssh -o ConnectTimeout=5 -o BatchMode=yes root@<device-ip> journalctl -b --no-pager | tail -n 100\`.\n`;
     out += `5. **\`search-docs\`** with a short, distinctive substring of the error line. Then report the error to the user with the extracted lines verbatim. Do not make up a cause.\n`;
     out += `\n**Do not interpret an empty pattern list as "the deploy is fine."** The log has errors. If this failure class is one you see often, file it at \`src/lib/diagnostics.ts\` so future runs get a curated fingerprint.\n`;
@@ -531,7 +531,7 @@ export function renderFallbackDiagnosis(
   out += `3. **\`get-reference-file\`** to compare the failing component against a working reference's analogous file (e.g. \`avocado.yaml\`, a hook script, an overlay file).\n`;
   out += `4. **\`Read\` the file paths** listed above if they look like project / extension / SDK files (NOT host-only paths).\n`;
   out += `5. **Report the error** to the user with the extracted lines verbatim — don't fabricate a cause from training-data priors. Ask the user if they recognize the failure class.\n`;
-  out += `\n**Do not interpret an empty pattern list as "the build is fine."** The log has errors; we just don't have a curated diagnosis for this one yet. If this failure class is one you see often, file it at \`src/lib/diagnostics.ts\` so future runs get a curated fingerprint.\n`;
+  out += `\n**Do not interpret an empty pattern list as "the ${kind} is fine."** The log has errors; we just don't have a curated diagnosis for this one yet. If this failure class is one you see often, file it at \`src/lib/diagnostics.ts\` so future runs get a curated fingerprint.\n`;
   return out;
 }
 

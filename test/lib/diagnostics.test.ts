@@ -636,3 +636,26 @@ test("an invalid cli_requirement is fixed in avocado.yaml, not by an upgrade", (
   ]);
   assert.match(unmet[0]!.suggestion, /avocado upgrade/);
 });
+
+test("the fallback warning names the command that wrote the log", async () => {
+  const { renderDiagnoses } = await import("../../src/lib/diagnostics.js");
+  const out = renderDiagnoses("install", [], undefined, {
+    targets: [],
+    rawLog: "ERROR: something new went wrong",
+  });
+  assert.match(out, /"the install is fine\."/);
+  assert.doesNotMatch(out, /the build is fine/);
+});
+
+test("the deploy fallback sends stale stamps to the CLI's To fix list", async () => {
+  const { renderDiagnoses } = await import("../../src/lib/diagnostics.js");
+  const out = renderDiagnoses("deploy", [], undefined, {
+    targets: [],
+    rawLog: "ERROR: something new went wrong",
+  });
+  assert.match(
+    out,
+    /build stamps \(run the commands that the CLI lists under `To fix:`/,
+  );
+  assert.doesNotMatch(out, /stamps \(run `avocado build`\)/);
+});
