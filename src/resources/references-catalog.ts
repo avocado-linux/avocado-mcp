@@ -42,5 +42,5 @@ The \`overlay/\` tree is the most important thing to understand: anything under 
 
 - **Not every reference works on every target.** Most have target-specific code (e.g. GPU/NPU paths). The catalog's \`hardware\` field lists known-good targets; an empty list means "generic, should work anywhere with the right BSP."
 - **Source of truth is github.com/avocado-linux/references.** This MCP fetches directly from there via raw.githubusercontent.com.
-- **Adapting a reference for a different target is non-trivial.** For Phase 4 we'll have an \`adapt-reference-for-target\` tool; until then, prefer steering the user to a reference whose hardware list already includes their target.
+- **Adapting a reference for a different target is non-trivial.** Prefer a reference whose hardware list already includes the user's target.
 `;
