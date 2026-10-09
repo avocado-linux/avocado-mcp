@@ -33,11 +33,13 @@
  * templates in the fields we read are interpolated; anything else is left
  * as-is and reported in `notes`.
  *
- * `{{ env.X }}` expands only `AVOCADO_*` variables. The agent decides when to
+ * `{{ env.X }}` expands only `AVOCADO_*` variables that do not look like
+ * secrets, and never in `username` or `password`. The agent decides when to
  * pass `projectDir`, so a project must not be able to make the server send
- * its own secrets (for example `GITHUB_TOKEN`) to a host the project names.
- * A feed whose settings read any other variable is not checked. Text that
- * came from an expansion is masked in every URL the tools show.
+ * its own secrets (for example `GITHUB_TOKEN` or `AVOCADO_CONNECT_TOKEN`) to
+ * a host the project names. A feed whose settings read any other variable,
+ * or whose credentials read any variable, is not checked. Text that came from
+ * an expansion is masked in every URL the tools show.
  */
 
 import { existsSync, readFileSync, statSync } from "fs";
@@ -187,8 +189,18 @@ function getPath(root: unknown, path: string[]): unknown {
 const TEMPLATE_RE = /\{\{\s*([^}]+?)\s*\}\}/g;
 const ENV_TEMPLATE_RE = /\{\{\s*env\.([^}\s]+)\s*\}\}/g;
 
-/** The only env vars a feed template may read (see the top of this file). */
-const EXPANDABLE_ENV_RE = /^AVOCADO_/;
+/** `AVOCADO_*` vars avocado-cli reads as secrets (`feeds.rs`, `pkcs11_devices.rs`). */
+const SECRET_ENV = new Set(["AVOCADO_CONNECT_TOKEN", "AVOCADO_PKCS11_PIN"]);
+const SECRET_ENV_RE = /TOKEN|PASSWORD|PASSWD|PIN|SECRET|KEY|CRED/i;
+
+/** Whether a feed template may read this env var (see the top of this file). */
+function expandableEnv(name: string): boolean {
+  return (
+    name.startsWith("AVOCADO_") &&
+    !SECRET_ENV.has(name) &&
+    !SECRET_ENV_RE.test(name.slice("AVOCADO_".length))
+  );
+}
 
 /** What interpolation reads, and where it records notes and masks. */
 interface Interp {
@@ -197,14 +209,17 @@ interface Interp {
   notes: string[];
   /** Every env value an expansion produced. */
   masks: string[];
+  /** Leave every `{{ env.X }}` in place (feed credentials). */
+  noEnv?: boolean;
 }
 
 /**
  * Interpolate the subset of CLI templates we can evaluate outside the CLI.
  * `env.AVOCADO_X` → env value (empty when unset, like the CLI); `config.a.b`
  * → main config value; `avocado.distro.{version,release,channel}` → main
- * config distro value. Any other `env.X` is left in place, and the caller
- * reports it with `blockedEnvVars`. Anything else is left in place and
+ * config distro value. Any other `env.X`, and every `env.X` when `noEnv` is
+ * set, is left in place, and the caller reports it with `blockedEnvVars` or
+ * `envVars`. Anything else is left in place and
  * reported.
  */
 function interpolate(value: string, ctx: Interp, field: string): string {
@@ -216,7 +231,7 @@ function interpolate(value: string, ctx: Interp, field: string): string {
     out = out.replace(TEMPLATE_RE, (whole, expr: string) => {
       const [ns, ...rest] = expr.split(".");
       if (ns === "env" && rest.length === 1) {
-        if (!EXPANDABLE_ENV_RE.test(rest[0])) return whole;
+        if (ctx.noEnv || !expandableEnv(rest[0])) return whole;
         const v = env[rest[0]] ?? "";
         if (v) ctx.masks.push(v);
         return v;
@@ -245,20 +260,28 @@ function interpolate(value: string, ctx: Interp, field: string): string {
   return out;
 }
 
-/** Env vars in `{{ env.X }}` templates left in a value because they are not `AVOCADO_*`. */
+/** Env vars in the `{{ env.X }}` templates left in a value. */
+function envVars(value: string): string[] {
+  return [...new Set([...value.matchAll(ENV_TEMPLATE_RE)].map((m) => m[1]))];
+}
+
+/** Env vars left in a value because a feed template may not read them. */
 function blockedEnvVars(value: string): string[] {
-  return [
-    ...new Set(
-      [...value.matchAll(ENV_TEMPLATE_RE)]
-        .map((m) => m[1])
-        .filter((name) => !EXPANDABLE_ENV_RE.test(name)),
-    ),
-  ];
+  return envVars(value).filter((name) => !expandableEnv(name));
+}
+
+function envList(names: string[]): string {
+  return names.map((n) => `\`env.${n}\``).join(", ");
 }
 
 /** Why a feed that reads a blocked env var is not checked. */
 function blockedReason(what: string, names: string[]): string {
-  return `${what} reads ${names.map((n) => `\`env.${n}\``).join(", ")}. The MCP expands only \`AVOCADO_*\` environment variables in feed settings, so it does not send other variables to a feed host.`;
+  return `${what} reads ${envList(names)}. The MCP expands only \`AVOCADO_*\` environment variables in feed settings, and not ones whose names look like secrets (TOKEN, PASSWORD, PIN, KEY and similar), so it does not send them to a feed host. The CLI still reads them.`;
+}
+
+/** Why a feed whose credentials read an env var is not checked. */
+function credentialReason(what: string, names: string[]): string {
+  return `${what} reads ${envList(names)}. The MCP does not read feed credentials from its environment, so it does not send them to a feed host. The CLI still uses them.`;
 }
 
 function nonEmpty(v: string | undefined): string | undefined {
@@ -638,7 +661,7 @@ function unsetEnvVars(
 ): string[] {
   return [...value.matchAll(ENV_TEMPLATE_RE)]
     .map((m) => m[1])
-    .filter((name) => EXPANDABLE_ENV_RE.test(name) && env[name] === undefined);
+    .filter((name) => expandableEnv(name) && env[name] === undefined);
 }
 
 function escapeRegExp(s: string): string {
@@ -775,12 +798,28 @@ function resolveNamedFeeds(input: NamedFeedsInput):
       return;
     }
     // Fields that read an env var the MCP does not expand, as "`repos.x.k`".
+    // Credentials never read the env, so any env var in them counts.
     const blockedFields: string[] = [];
     const blockedVars: string[] = [];
+    const credFields: string[] = [];
+    const credVars: string[] = [];
     const field = (k: string): string | undefined => {
       const v = def[k];
       if (typeof v !== "string" && typeof v !== "number") return undefined;
-      const out = interpolate(String(v), interp, `repos.${name}.${k}`);
+      const cred = k === "username" || k === "password";
+      const out = interpolate(
+        String(v),
+        cred ? { ...interp, noEnv: true } : interp,
+        `repos.${name}.${k}`,
+      );
+      if (cred) {
+        const c = envVars(out);
+        if (c.length > 0) {
+          credFields.push(`\`repos.${name}.${k}\``);
+          credVars.push(...c);
+        }
+        return out;
+      }
       const b = blockedEnvVars(out);
       if (b.length > 0 && k !== "url") {
         blockedFields.push(`\`repos.${name}.${k}\``);
@@ -861,7 +900,15 @@ function resolveNamedFeeds(input: NamedFeedsInput):
     let url = field("url") ?? "";
     const unset = unsetEnvVars(rawUrl, env);
     const urlBlocked = blockedEnvVars(url);
-    if (unset.length > 0 || urlBlocked.length > 0) {
+    // The lock records the URL with every template expanded, so with a
+    // blocked var it holds that var's value. Never fetch it.
+    if (urlBlocked.length > 0) {
+      return skip(
+        "not-checked",
+        blockedReason(`\`repos.${name}.url\``, urlBlocked),
+      );
+    }
+    if (unset.length > 0) {
       // The lock records the URL the CLI expanded at install time, with the
       // configured stream's releasever, so another stream cannot use it.
       const locked = input.streamOnly
@@ -876,9 +923,7 @@ function resolveNamedFeeds(input: NamedFeedsInput):
       if (typeof locked !== "string") {
         return skip(
           "not-checked",
-          urlBlocked.length > 0
-            ? blockedReason(`\`repos.${name}.url\``, urlBlocked)
-            : `\`url\` reads \`${unset.map((v) => `env.${v}`).join("`, `")}\`, which is not set in the MCP server's environment.`,
+          `\`url\` reads \`${unset.map((v) => `env.${v}`).join("`, `")}\`, which is not set in the MCP server's environment.`,
         );
       }
       const lockMasks = lockedUrlMasks(rawUrl, locked, target);
@@ -917,6 +962,12 @@ function resolveNamedFeeds(input: NamedFeedsInput):
     const username = field("username");
     const password = field("password");
     const ca = field("ca");
+    if (credFields.length > 0) {
+      return skip(
+        "not-checked",
+        credentialReason(credFields.join(", "), [...new Set(credVars)]),
+      );
+    }
     if (blockedFields.length > 0) return blockedSkip();
     if (username && !password) {
       return skip(
