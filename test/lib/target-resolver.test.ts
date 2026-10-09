@@ -148,3 +148,13 @@ test("punctuation-only query does not return the full catalog", () => {
 test("results are deterministic across calls", () => {
   assert.deepEqual(resolveTarget("pi", TARGETS), resolveTarget("pi", TARGETS));
 });
+
+test("an Intel query does not return the QEMU x86 target", () => {
+  // `intel` was a synonym of qemux86-64, so "intel" matched the VM target.
+  const hits = resolveTarget("intel", [
+    ...TARGETS,
+    "intel-x86-64-v2",
+    "intel-x86-64-v3",
+  ]);
+  assert.deepEqual(hits, ["intel-x86-64-v2", "intel-x86-64-v3"]);
+});

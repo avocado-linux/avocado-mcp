@@ -17,10 +17,10 @@
  */
 import { squash } from "./target-resolver.js";
 
-const RAW_BASE =
+export const RAW_BASE =
   "https://raw.githubusercontent.com/peridio/docs/main/src/src/data/hardware";
 const DATA_FILES = ["supported.json", "virtual-environment.json"];
-const CACHE_TTL_MS = 30 * 60 * 1000;
+export const CACHE_TTL_MS = 30 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 5000;
 const USER_AGENT = "avocado-mcp-server";
 
@@ -32,7 +32,8 @@ interface HardwareDevice {
 
 let cache: { data: Set<string>; expiresAt: number } | null = null;
 
-async function fetchDevices(file: string): Promise<HardwareDevice[]> {
+/** Fetch one file from the docs hardware data. Throws on any failure. */
+export async function fetchHardwareFile(file: string): Promise<unknown> {
   // Bound the request — a stalled connection must degrade to null (→ caller
   // falls back to the full feed) quickly, not hang a target-suggestion call.
   const res = await fetch(`${RAW_BASE}/${file}`, {
@@ -40,7 +41,11 @@ async function fetchDevices(file: string): Promise<HardwareDevice[]> {
     signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   });
   if (!res.ok) throw new Error(`${file} returned ${res.status}`);
-  const json: unknown = await res.json();
+  return res.json();
+}
+
+async function fetchDevices(file: string): Promise<HardwareDevice[]> {
+  const json = await fetchHardwareFile(file);
   const devices =
     json && typeof json === "object" && "devices" in json
       ? (json as { devices: unknown }).devices
@@ -76,20 +81,30 @@ export async function getSelectableSlugs(): Promise<Set<string> | null> {
 }
 
 /**
- * Narrow the feed's target slugs to the user-selectable set. Reconciles the
- * small slug differences between the feed and the support matrix (e.g. the feed
- * has `jetson-orin-nano-devkit` while the matrix lists `jetson-orin-nano`) via a
- * squash prefix match in either direction. A pure function — the caller fetches
- * `selectable` and decides the fallback.
+ * True when a feed slug names the same target as a docs slug. The docs data
+ * has no feed-to-docs mapping, so this allows exactly one known difference:
+ * the 2026 feed drops the `-devkit` suffix the docs use (feed
+ * `jetson-orin-nano`, docs `jetson-orin-nano-devkit`). Any other mismatch is
+ * a different board.
+ */
+export function sameTarget(feedSlug: string, docsSlug: string): boolean {
+  const f = squash(feedSlug);
+  const d = squash(docsSlug);
+  return f === d || d === `${f}devkit`;
+}
+
+/**
+ * Narrow the feed's target slugs to the user-selectable set (squashed docs
+ * slugs). A pure function: the caller fetches `selectable` and decides the
+ * fallback.
  */
 export function filterSelectable(
   feedTargets: string[],
   selectable: Set<string>,
 ): string[] {
   return feedTargets.filter((t) => {
-    const q = squash(t);
     for (const s of selectable) {
-      if (q === s || q.startsWith(s) || s.startsWith(q)) return true;
+      if (sameTarget(t, s)) return true;
     }
     return false;
   });
