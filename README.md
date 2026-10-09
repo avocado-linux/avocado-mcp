@@ -63,6 +63,8 @@ Requires Node ≥20. `npx` will clone the repo on first run, install dependencie
 | `diagnose-provision-log`     | Analyze `avocado provision` output for known failure patterns                        |
 | `explain-build-error`        | Analyze `avocado build` output for known failure patterns                            |
 | `get-provisioning-steps`     | Per-target provisioning steps (profile, media, commands, caveats)                    |
+| `get-target-info`            | Board facts from the docs data: profiles, recovery steps, serial console, streams    |
+| `list-provision-profiles`    | Runs `avocado provision --list` in an installed project                              |
 | `search-docs`                | Browse or BM25-search the Peridio + Avocado docs at `docs.peridio.com` (omit `query` to browse)|
 | `get-doc`                    | Fetch a full documentation page by slug, URL, or repo path                           |
 | `detect-serial-ports`        | List USB serial adapters on the host (macOS / Linux) for UART debugging              |
@@ -103,7 +105,7 @@ Pre-built workflows the user can invoke by name:
 - `debug-device` — walks through attaching to a device over UART/tmux and capturing logs (the default debug channel).
 - `debug-device-ssh` — peer to `debug-device` for the case when the device is already known healthy and on the network. Passwordless root in the dev runtime.
 - `debug-build-failure`: recovers from a failed `avocado install` or `avocado build`. Covers log-pattern analysis, cross-channel package lookup, hook-script triage, and host/arch checks.
-- `provision-device` — fully automated first-time flash: env check → target validation → per-target caveats → build → provision → physical handoff → first-boot UART verification.
+- `provision-device` — fully automated first-time flash: env check → target validation → per-target caveats → build → provision → physical handoff → first-boot check.
 - `build-and-deploy` — fully automated `avocado build && avocado deploy` (with conditional `install` on missing-package errors) to a running device, with verification. The canonical iteration loop after first provision.
 - `package-coverage` — for users moving off Docker: ingests a Dockerfile or SBOM (CycloneDX / SPDX) plus a target, extracts runtime dependencies, checks each against the live package feed, researches gaps on the web, and writes a shareable `package-coverage.md` (present/missing table + upstream links + headline coverage %) for an Avocado OS feed maintainer.
 - `setup-connect`: links a project to Avocado Connect for fleet OTA updates. It checks auth, picks the org, project, and cohort, runs `avocado connect init`, then gives the user the rebuild steps.

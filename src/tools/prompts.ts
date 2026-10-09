@@ -270,7 +270,7 @@ export function registerPrompts(server: McpServer): void {
 
   server.prompt(
     "provision-device",
-    "First-time flash of an Avocado OS device — fully automated except for the physical handoff. Verifies host environment, validates target, looks up the per-target provisioning profile + caveats, runs `avocado build`, runs `avocado provision`, and walks the user through power-on + initial UART verification. Use this BEFORE `/build-and-deploy` (which assumes the device is already running). After first provision, switch to `/build-and-deploy` for the iteration loop.",
+    "First-time flash of an Avocado OS device — fully automated except for the physical handoff. Verifies host environment, validates target, looks up the per-target provisioning profile + caveats, runs `avocado build`, runs `avocado provision`, and walks the user through power-on and a first-boot check over the serial console or SSH. Use this BEFORE `/build-and-deploy` (which assumes the device is already running). After first provision, switch to `/build-and-deploy` for the iteration loop.",
     {
       target: z
         .string()

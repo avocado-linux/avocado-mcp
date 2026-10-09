@@ -58,7 +58,7 @@ const server = new McpServer(
       "    on the network), I can sideload an iterative update via `/build-and-deploy`.",
       "    If it's never been provisioned, we need to do the first-time flash via",
       "    `/provision-device` — that's the one-time setup with media (SD / USB / NVMe)",
-      '    and UART verification."',
+      '    and a first-boot check."',
       "",
       "Route based on the answer:",
       "  - First-time / never provisioned → `/provision-device`.",

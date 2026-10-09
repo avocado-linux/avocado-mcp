@@ -11,7 +11,7 @@ export const CONTENT = `# Iterative deployment — push edits to a running devic
 
 **Before recommending or running \`avocado deploy\` (or the \`/build-and-deploy\` prompt), confirm with the user:**
 
-> "Has this device already been provisioned with Avocado OS, or is this its first time? If it's been provisioned and you have its IP, I can sideload an iterative update. If it's never been provisioned, we need to do the first-time flash via \`/provision-device\` — that's the one-time setup with media (SD / USB / NVMe) and UART verification."
+> "Has this device already been provisioned with Avocado OS, or is this its first time? If it's been provisioned and you have its IP, I can sideload an iterative update. If it's never been provisioned, we need to do the first-time flash via \`/provision-device\` — that's the one-time setup with media (SD / USB / NVMe) and a first-boot check."
 
 Route based on the answer:
 
