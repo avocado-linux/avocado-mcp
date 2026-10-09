@@ -21,16 +21,14 @@ Avocado OS is a Yocto-based embedded Linux distribution. A working project consi
   - **Linux:** the native Docker Engine on the host, not Docker Desktop. Make sure that the daemon runs with \`sudo systemctl start docker\`.
   - For the full model and debugging, see \`avocado://skills/container-backend\`.
 - **The avocado CLI** installed AND on PATH (\`curl -fsSL https://connect.peridio.com/install.sh | sh\` on macOS or Linux). If the user has a local build of the CLI but it isn't on PATH, symlink it: \`mkdir -p ~/.local/bin && ln -s /path/to/avocado ~/.local/bin/avocado\` (then verify \`~/.local/bin\` is on PATH).
-- **~8 GB free disk space** for the SDK container, builds, and image artifacts.
+- **~8 GB free disk space** for the SDK container, builds, and image artifacts. Some targets need more (Jetson: 16 GB). Pass \`target\` to \`environment-check\` to check the number the docs give.
 
-**Required for QEMU targets only** (\`qemuarm64\`, \`qemux86-64\`):
+**QEMU targets** (\`qemuarm64\`, \`qemux86-64\`) need nothing more. QEMU runs inside the SDK container, so do not install it on the host. \`avocado provision dev\` writes a disk image, then \`avocado sdk run -iE vm dev\` boots it.
 
-- **QEMU** installed on the host. macOS: \`brew install qemu\`. Debian/Ubuntu: \`sudo apt install qemu-system\`. Without this, \`avocado sdk run\` fails. \`get-provisioning-steps\` validates this when the resolved target is QEMU.
+**Physical-hardware targets:**
 
-**Required for physical-hardware targets only** (non-QEMU):
-
-- **A USB-to-UART adapter** wired into the device's debug UART. **HARD REQUIREMENT** — provisioning and debugging both go through the serial console. Without it, the user can't see boot output, can't recover from failures, and can't diagnose anything on the device. If the user doesn't have an adapter, recommend starting with QEMU first.
-- **A microSD card / USB drive / NVMe** appropriate to the target's provisioning profile (most targets use SD).
+- **The media or cable for the provisioning profile** (microSD card, USB drive, or a USB-C cable for boards that flash onboard storage). \`get-target-info\` lists what each target needs.
+- **A serial console is recommended, not required.** It shows boot output and helps recover a device that is not on the network. Some boards have an onboard USB console, so no adapter is needed. Others need a USB-to-UART adapter. \`get-target-info\` says which. Without a console, use SSH once the device is on the network. Do not move a user to QEMU only because they have no adapter.
 
 Run \`environment-check\` to verify all of these at once before starting work.
 
@@ -43,7 +41,7 @@ Run \`environment-check\` to verify all of these at once before starting work.
    - **An \`avocado init --target\` command and the edits to make after it** when no reference fits (or when called with \`forceFromScratch: true\`). With \`cliAvailable: false\`, it returns a starter YAML copied from the CLI template instead. Use \`add-extension\` / \`add-package-to-extension\` to extend the project. Schema-first, package-verified.
 4. **Install packages.** The user runs \`avocado install\` to resolve and stage all packages declared in \`avocado.yaml\` into the SDK. This is a separate step from build.
 5. **Build.** The user runs \`avocado build\` locally. The CLI pulls the SDK container, compiles, and produces a system image from the already-staged packages.
-6. **Provision (first time only).** The user runs \`avocado provision dev\` (with the right \`--profile\` for the target, usually \`sd\` for an SD card). This flashes the image to media. **If YOU (the LLM) are running this via Bash**, no wrapper is needed. Set \`AVOCADO_NONINTERACTIVE=1\` and pass \`--no-tui\`. See \`avocado://skills/iterative-deployment\` for the full rule.
+6. **Provision (first time only).** The user runs \`avocado provision dev\` with the \`--profile\` that \`get-provisioning-steps\` gives for the target. This flashes the image to media. **If YOU (the LLM) are running this via Bash**, no wrapper is needed. Set \`AVOCADO_NONINTERACTIVE=1\` and pass \`--no-tui\`. See \`avocado://skills/iterative-deployment\` for the full rule.
 7. **Boot the device** with the provisioned media. Default root password is empty in the \`dev\` runtime.
 8. **Iterate with \`avocado deploy\`.** After the device is up and on the network, subsequent edits don't need a reflash. Run \`avocado build && avocado deploy dev -d <device-ip>\` to OTA changes in seconds. **\`deploy\` is sideloading. It requires the device to have been provisioned at least once.** See \`avocado://skills/iterative-deployment\` for the full flow.
 

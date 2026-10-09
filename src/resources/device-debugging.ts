@@ -9,7 +9,7 @@ Avocado OS gives you two channels into a running device. **UART comes first. Alw
 
 ## The non-negotiable default: UART
 
-The Avocado getting-started flow requires every user to have a USB-to-UART adapter (3.3V TTL). The serial console is:
+A serial console is recommended, not required. Some boards have an onboard USB console. Others need a USB-to-UART adapter. \`get-device-connection-info\` says which. When the user has a console, it is:
 
 - **The only channel that works when the device isn't on the network** (no IP yet, broken DHCP, bad WiFi config, sshd didn't start).
 - **The only channel that shows the boot sequence** — bootloader, kernel boot messages, systemd's startup, every service coming up.
@@ -24,7 +24,7 @@ This is the most common mistake to make:
 
 **Don't.** An IP only tells you the kernel + early userspace got far enough to bring up networking. It doesn't tell you whether the service the user actually cares about started, whether \`/var\` mounted, whether disks are healthy, or whether sshd will *keep* working under the load you're about to put on it. UART is the only channel that survives all of those failures.
 
-**Rule:** start every debug session on UART. Only move to SSH after UART confirms the device is healthy enough that SSH is reliable, OR if the user explicitly opts out of UART.
+**Rule:** start every debug session on UART when the user has a serial console. Only move to SSH after UART confirms the device is healthy enough that SSH is reliable, if the user explicitly opts out of UART, or if the user has no serial console.
 
 ### Connection parameters — canonical
 

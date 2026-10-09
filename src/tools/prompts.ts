@@ -323,17 +323,17 @@ export function registerPrompts(server: McpServer): void {
                 "",
                 "Please follow this flow:",
                 "",
-                "1. Read `avocado://skills/getting-started` if you haven't already, then `avocado://skills/device-debugging` (for the UART-USB requirement) and `avocado://skills/filesystem-model` (so I understand what gets flashed vs what's runtime-writable).",
+                "1. Read `avocado://skills/getting-started` if you haven't already, then `avocado://skills/device-debugging` (serial console and SSH) and `avocado://skills/filesystem-model` (so I understand what gets flashed vs what's runtime-writable).",
                 "2. Call `environment-check` to make sure that I have the `avocado` CLI, a working container engine, and ≥8 GB free disk. On macOS, the container engine is the avocado-vm and Docker Desktop is not required. On Linux, it is the native Docker Engine. For more information, see `avocado://skills/container-backend`. If something is missing, show the fix and STOP.",
                 target
                   ? `3. Confirm \`${target}\` is a supported target via \`list-targets({ query: "${target}" })\`. If it doesn't appear, STOP — don't try to substitute.`
                   : `3. Ask me what target I'm provisioning. Use \`list-targets({ query: "..." })\` to confirm the slug is canonical. Only proceed once we agree on a supported target.`,
-                `4. Call \`get-provisioning-steps\` with the chosen target. This returns the provisioning profile (\`sd\` / \`usb\` / \`tegraflash\` / \`default\`), the media required, the host-OS constraints (Jetson needs Linux), and per-target caveats (Linux auto-mount, Jetson recovery mode, x86 RS-232 voltage levels, etc.). **Read every caveat aloud to me before going further** — these are the gotchas that brick boards.`,
+                `4. Call \`get-provisioning-steps\` with the chosen target. Pass the board too if the target has several. It returns the profile, the media, host OS support, recovery mode steps and boot steps from the docs board data. **Read every caveat aloud to me before going further**. These are the gotchas that brick boards.`,
                 "5. **Pre-flight check — STOP and ask me to confirm each of these before any flashing:**",
-                "   - **UART-USB adapter wired into the device's debug UART** (3.3V TTL for most; x86 may need RS-232; QEMU exempt). Without it I can't see boot output or recover from failures.",
+                "   - **Serial console (recommended, not required).** Some boards have an onboard USB console. Others need a USB-to-UART adapter. `get-target-info` says which. Without a console, verify first boot over SSH once the device is on the network.",
                 "   - **Media on hand** if the profile needs it (microSD / USB / NVMe — `get-provisioning-steps` tells you which).",
-                "   - **Host OS compatible** with the profile (tegraflash → Linux only; auto-mount disabled on Linux desktops; macOS works for SD/USB but never for tegraflash).",
-                "   - **Device in the right state** for the profile (Jetson: recovery mode with FC REC shorted to GND, USB-C connected; x86: BIOS set to boot from the chosen media; SD-card targets: card NOT yet inserted into target).",
+                "   - **Host OS supported** by the target (from `get-provisioning-steps`). On macOS, the docs recommend Avocado Desktop for hardware provisioning. On Linux desktops, turn off auto-mount for SD and USB profiles.",
+                "   - **Device in the right state** for the profile: the recovery mode steps from `get-provisioning-steps` (for example EDL on Qualcomm boards, Force Recovery on Jetson), or the SD card NOT yet in the target.",
                 "   - For QEMU targets: none of the above — the VM runs on this host.",
                 `6. Verify the project's \`avocado.yaml\` exists in CWD and that the \`${r}\` runtime is declared. If not, ask me which runtime to use.`,
                 `7. Build. On the \`bash\` channel, run \`avocado build --no-tui\` with the redirect-to-file pattern above. On the \`host-tool\` channel, call \`run_avocado_cli\` with \`[\"build\"]\` (no shell syntax, no \`--no-tui\`) and read \`outputTail\`. Status: \`✅ build succeeded\` or \`❌ build failed (exit N)\`. **If build failed because of a missing-package / unresolved-extension / stale-install signal** (\`nothing provides\`, \`no package matching\`, \`unable to find a match\`, or the build-stamp error \`dependencies not satisfied\` followed by a \`To fix:\` list of \`avocado ... install\` commands), tell me \`🔄 build failed because of a missing dependency. Running install and retrying\`, then run \`avocado install\` on the same channel and retry build. \`avocado install\` also fixes the build-stamp error, because it runs the \`To fix:\` steps in dependency order, SDK first. The CLI sorts the \`To fix:\` list by name, so it is not an install order: do not run it line by line. **If real build error** (compile / hook / OOM / schema), pass log to \`explain-build-error\` and STOP. Don't proceed to provision if build failed.`,
@@ -341,9 +341,9 @@ export function registerPrompts(server: McpServer): void {
                 "9. **Physical handoff.** Tell me the exact action(s) to take to boot the device, target-specific:",
                 "   - SD-card targets: eject the SD card from the host, insert it into the target, apply power. Note any LED behaviour to watch for.",
                 "   - USB targets: same pattern with the USB drive; mention BIOS boot-from-USB if needed.",
-                "   - Tegraflash (Jetson): the device is already connected via USB recovery; remove the FC REC short, power-cycle, the device should now boot from internal media.",
-                "   - QEMU: launch the VM with `avocado sdk run -iE vm dev` (the console will come to the launching terminal — no UART needed).",
-                "10. **First-boot verification.** Once I confirm I've taken the physical action, set up a UART tmux bridge per `avocado://skills/tmux-uart-bridge` (`detect-serial-ports` → `get-device-connection-info` → `get-tmux-uart-snippet`) and capture the boot. Look for: kernel boot messages, systemd reaching `default.target`, the login prompt. Status: `✅ device booted to login prompt` / `❌ boot stalled at <stage>`. For QEMU: skip the UART setup; the boot logs are already in the launching terminal.",
+                "   - Recovery-mode targets (Jetson, Qualcomm EDL, i.MX UUU): follow the boot steps from `get-provisioning-steps`. Only the Jetson Orin Nano uses the FC REC jumper.",
+                `   - QEMU: provision wrote a disk image on this machine. Boot it with \`avocado sdk run -iE vm ${r}\`, which uses the QEMU in the SDK container. The console is the terminal that runs it. It is interactive, so ask me to run it in a terminal.`,
+                "10. **First-boot verification.** Once I confirm I've taken the physical action, and if I have a serial console, set up a UART tmux bridge per `avocado://skills/tmux-uart-bridge` (`detect-serial-ports` → `get-device-connection-info` → `get-tmux-uart-snippet`) and capture the boot. Look for: kernel boot messages, systemd reaching `default.target`, the login prompt. Status: `✅ device booted to login prompt` / `❌ boot stalled at <stage>`. With no serial console, wait for the device on the network and check it over SSH. For QEMU: skip the UART setup. The boot logs are already in the launching terminal.",
                 "11. **Final summary**: confirm build ✅/❌, provision ✅/❌, first-boot ✅/❌. Tell me what to do next (typically: `/build-and-deploy` for the iteration loop, now that the device is running).",
                 "",
                 "**Failure handling:** stop at the first failed step. Don't paper over a failed build by trying to provision; don't paper over a failed provision by claiming the device will boot. If something breaks, surface the actual error and name the diagnostic tool to use next.",
@@ -380,7 +380,7 @@ export function registerPrompts(server: McpServer): void {
               "1. Read the `avocado://skills/getting-started` resource to ground yourself in the workflow.",
               "2. Call `environment-check`. It confirms prerequisites AND sets the avocado-cli execution channel for this session (see its **Execution channel** section + `avocado://skills/avocado-cli-execution`). If anything's missing, surface the fix and stop — don't proceed until the user confirms it's resolved.",
               "3. Run `list-targets({ query: \"...\" })` with my hardware in my own words (e.g. 'rpi4', 'jetson orin nano'). Only pick a target from the supported list — if my hardware isn't on the list, **tell me it's not currently supported** and don't try to substitute a 'close enough' target without my explicit confirmation. If I haven't named hardware, summarise the options and ask.",
-              "4. **If the chosen target is NOT a QEMU target,** ask me whether I have a USB-to-UART adapter wired into the device's debug UART. This is a hard prerequisite for provisioning and debugging — without it I can't see boot output or recover from failures. If I don't have one, suggest starting with a QEMU target instead (`qemuarm64` / `qemux86-64`) until I get the adapter.",
+              "4. **If the chosen target is NOT a QEMU target,** call `get-target-info` for it. Tell me what provisioning needs (media, cables, recovery mode) and whether the board has an onboard USB console or needs a USB-to-UART adapter. A serial console is recommended, not required. Without one, I can use SSH once the device is on the network. Do not move me to QEMU only because I have no adapter.",
               "5. Call `init-project` with the chosen `target` AND `task` (my task in my own words). The tool will search the reference catalog first and prefer a matching reference — that's almost always faster than from-scratch. If a reference is shown with ⚠️ unlisted compatibility for my target, surface that warning to me; references not tested on my hardware may need extra debugging. If `init-project` returns a reference scaffold command, also call `get-reference` for that slug so you understand what it sets up before suggesting edits.",
               "6. Call `get-provisioning-steps` so I know exactly which `avocado provision` invocation to run for my target.",
               "",
@@ -458,13 +458,13 @@ export function registerPrompts(server: McpServer): void {
         .string()
         .optional()
         .describe(
-          "Avocado target slug (e.g. 'jetson-orin-nano-devkit'). If omitted or given as prose hardware, resolve it in Step 0 (from avocado.yaml if present, else interactively via `list-targets` + the docs support matrix).",
+          "Avocado target slug (e.g. 'jetson-orin-nano-devkit'). If omitted or given as prose hardware, resolve it in Step 0 (from avocado.yaml if present, else interactively via `list-targets` + `get-target-info`).",
         ),
       release: z
         .string()
         .optional()
         .describe(
-          "Feed release (e.g. '2024' or '2026'). If omitted, resolve in Step 0 — read it from avocado.yaml's `distro.release`, or pick per the support matrix (default to the newest release the target supports).",
+          "Feed release (e.g. '2024' or '2026'). If omitted, resolve in Step 0: read it from avocado.yaml's `distro.release`, or pick from the stream status in `get-target-info` (default to the newest release the target supports).",
         ),
       channel: z
         .string()
@@ -499,7 +499,7 @@ export function registerPrompts(server: McpServer): void {
                 "- **If I have an `avocado.yaml`,** read it — take the target from `default_target`/`supported_targets` and the stream from `distro.release`/`distro.channel`. Confirm the resolved `(target, release, channel)` back to me in one line.",
                 streamGiven
                   ? "- I've given you stream values above — confirm they're consistent with my project (if any) and use them."
-                  : "- **If I have NO project,** resolve interactively: (a) resolve my hardware to a canonical slug with `list-targets` and confirm; (b) check which release supports it via the docs support matrix (https://docs.peridio.com/hardware/support-matrix#supported — use `search-docs`/`get-doc` or `WebFetch`), corroborating with `list-targets({ query, release })` per stream — if supported on both 2024 and 2026, ask me but **default to / recommend the newest (2026)**; (c) **recommend the `edge` channel** but ask if I'd prefer `next`, `edge`, or `stable` (next = nightly, may break / packages go missing; edge = RC, good for dev; stable = pre-prod/prod, normally behind edge). Confirm the final `(target, release, channel)` before running lookups.",
+                  : "- **If I have NO project,** resolve interactively: (a) resolve my hardware to a canonical slug with `list-targets` and confirm. (b) Check which release supports it with `get-target-info` (stream status per LTS release from the docs data), corroborating with `list-targets({ query, release })` per stream. If it is supported on both 2024 and 2026, ask me but **default to / recommend the newest (2026)**. (c) **Recommend the `edge` channel** but ask if I'd prefer `next`, `edge`, or `stable` (`next` is nightly and can break or lose packages. `edge` is the RC, good for dev. `stable` is pre-prod and prod, normally behind `edge`.). Confirm the final `(target, release, channel)` before running lookups.",
                 "",
                 "Then execute the method from the skill:",
                 "",

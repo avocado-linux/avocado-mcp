@@ -75,7 +75,7 @@ async function validateTargets(
         .map((t) => `\`${t}\``)
         .join(", ")}`,
       ``,
-      `Only these are valid for this stream. A target missing here may exist in another release — some hardware ships only on newer releases (e.g. NVIDIA Thor on 2026, not 2024). Use \`list-targets({ query: "...", release, channel })\` to check other streams, or the docs support matrix at https://docs.peridio.com/hardware/support-matrix#supported.`,
+      `Only these are valid for this stream. A target missing here may exist in another release. Some hardware ships only on newer releases (e.g. NVIDIA Thor on 2026, not 2024). Use \`list-targets({ query: "...", release, channel })\` to check other streams, or \`get-target-info\` for the stream status per LTS release.`,
       ``,
       feed.describe(),
     ].join("\n"),
@@ -576,7 +576,7 @@ export function registerPackageTools(
                     : ""
                 }`,
                 ``,
-                `Some hardware ships only on newer releases (e.g. NVIDIA Thor on 2026, not 2024). Check the docs support matrix (https://docs.peridio.com/hardware/support-matrix#supported) or \`list-targets({ query: "${target}", release, channel })\` against another stream, then re-run with the release/channel that supports this target.`,
+                `Some hardware ships only on newer releases (e.g. NVIDIA Thor on 2026, not 2024). Check the stream status with \`get-target-info({ target: "${target}" })\` or \`list-targets({ query: "${target}", release, channel })\` against another stream, then re-run with the release/channel that supports this target.`,
                 ``,
                 feed.describe([target]),
               ].join("\n"),
