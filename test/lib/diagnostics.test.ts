@@ -446,6 +446,10 @@ const BUILD_CASES: { label: string; log: string }[] = [
     log: "Error: repos.acme: feed-token request returned 401 Unauthorized — the stored credential was rejected. Run `avocado login` to refresh it.",
   },
   {
+    label: "Connect login missing or expired",
+    log: "Error: repos.acme: no Connect profile for org 'acme'.\nRun `avocado login --org acme`.",
+  },
+  {
     label: "Connect signing needs a saved login",
     log: "Error: --connect-sign requires an active Connect session. Run `avocado connect auth login` first.",
   },
@@ -490,6 +494,10 @@ const BUILD_CASES: { label: string; log: string }[] = [
     log: "Error: avocado.lock is out of date; --locked forbids updating it:\n  app: 1.0.0 -> 1.1.0\nRe-run without --locked to update the lock.",
   },
   {
+    label: "avocado.lock drift under --locked",
+    log: "Error: avocado.lock pins dependency versions that cannot satisfy the current requirements.\nRe-run without --locked to update the lock, or align the declared versions.",
+  },
+  {
     label: "Lockfile from another distro release",
     log: "[WARNING] Lock file was created with distro.release '2024' but config has '2026'. This may indicate an incompatible feed year change. Run 'avocado unlock' and reinstall to update.",
   },
@@ -502,8 +510,28 @@ const BUILD_CASES: { label: string; log: string }[] = [
     log: "[WARNING] avocado.yaml: 'ext' is an old name for 'extensions' and is no longer read; rename it to 'extensions'",
   },
   {
+    label: "avocado.yaml keys ignored",
+    log: "[WARNING] avocado.yaml: 'runtime' is an old spelling of 'runtimes', and most commands only read 'runtimes'; rename it to 'runtimes'",
+  },
+  {
+    label: "avocado.yaml keys ignored",
+    log: "[WARNING] avocado.yaml: 'extensions.app.sysext' is no longer read; list the image types under 'types', e.g. 'types: [sysext]'",
+  },
+  {
+    label: "avocado.yaml keys ignored",
+    log: "[WARNING] avocado.yaml: 'sdk.host_uid' has no effect; set AVOCADO_HOST_UID instead",
+  },
+  {
+    label: "avocado.yaml keys ignored",
+    log: "[WARNING] avocado.yaml: 'rootfs.pakages' sets no rootfs fields, so it is read as a named rootfs entry; did you mean the field 'packages'?",
+  },
+  {
     label: "CLI version does not meet cli_requirement",
     log: "Error: This project requires avocado CLI version '>=2.0.0', but you are running version 1.0.0-rc.5.\n\nPlease update your avocado CLI.",
+  },
+  {
+    label: "Invalid cli_requirement",
+    log: "Error: Invalid cli_requirement 'latest'. Expected a semver requirement (e.g., '>=0.25.0', '^0.25')",
   },
   {
     label: "Encrypted /var config error",
@@ -514,8 +542,28 @@ const BUILD_CASES: { label: string; log: string }[] = [
     log: "Error: runtimes.dev.var.recovery is set but var.encrypt is not true - there is no encrypted /var to enrol a recovery key on",
   },
   {
+    label: "Encrypted /var config error",
+    log: "Error: runtimes.dev.var.hardware: 'tmp2' is not one of auto, caam, tpm2, none",
+  },
+  {
+    label: "Encrypted /var config error",
+    log: "Error: Runtime 'dev' sets var.encrypt but is scoped to [\"imx93-frdm\"], and is being built for 'qemux86-64'. No encrypt marker is written outside that scope, so /var would come up plaintext despite the opt-in.",
+  },
+  {
+    label: "Encrypted /var config error",
+    log: "Error: Runtime 'dev' opts in to var.encrypt for 'qemux86-64' (a `target-qemux86-64:` override), but the runtime is scoped to [\"imx93-frdm\"], which does not include it.",
+  },
+  {
+    label: "Encrypted /var config error",
+    log: "Error: runtimes.dev.targets is empty - that scopes the runtime to no target at all, so anything scoped to it (var.encrypt) would be silently skipped. Omit `targets:` to mean every target, or list the targets it is for",
+  },
+  {
     label: "Stale build volume",
     log: "ERROR: rootfs staging at /opt/_avocado/qemux86-64/rootfs-work is missing /etc/passwd. The build volume looks half-populated or stale.",
+  },
+  {
+    label: "Stale build volume",
+    log: "grep: /opt/_avocado/qemux86-64/runtimes/dev/rootfs-work/etc/passwd: No such file or directory",
   },
 ];
 
