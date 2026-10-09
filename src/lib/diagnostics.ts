@@ -578,6 +578,9 @@ function renderInvestigation(
   const configured = inv.streams.find((s) => s.configured);
   if (configured && configured.hits.length > 0) {
     out += `The package is on your configured stream \`${configured.release}/${configured.channel}\`, so it is not a missing top-level package — a "not found" build error here usually means a broken transitive dependency or arch-specific metadata.\n`;
+  } else if (configured?.notChecked && !configured.error) {
+    out += `The checked feeds of your configured stream \`${configured.release}/${configured.channel}\` do not have it. Its availability there is unknown, because the MCP could not read some of your feeds. It is present on ${streamsList}. Check the unread feeds before you change \`distro.release\` / \`distro.channel\`.\n\n`;
+    out += renderStreamNotChecked(inv);
   } else if (configured && !configured.error) {
     out += `Not on your configured stream \`${configured.release}/${configured.channel}\`, but present on ${streamsList}. Set \`distro.release\` / \`distro.channel\` in \`avocado.yaml\` to one of those and re-run \`avocado install\` — switch deliberately, since it changes every package, and prefer the release that matches your hardware (\`2026\` for newer boards, \`2024\` otherwise).\n`;
   } else if (configured?.error) {

@@ -16,9 +16,12 @@ You can add more feeds:
 - \`repos:\` **defines** feeds by name. A definition alone enables nothing.
 - \`distro.feeds:\` **enables and orders** them. The order is the dnf
   priority: the first feed that has a package wins. The distro feed is first
-  unless you put its name (\`avocado\`) somewhere in the list.
+  unless you put its name somewhere in the list.
 - \`distro.repo\` can be an inline block (\`url\`, \`releasever\`, \`ca\`,
   \`tls_verify\`) or the name of a \`repos:\` entry to use as the distro feed.
+- The distro feed name is \`avocado\` by default. When \`distro.repo\` is a
+  string, the distro feed name is that \`repos:\` key. Use that name in
+  \`distro.feeds\`.
 
 Each \`repos:\` entry has exactly one locator:
 

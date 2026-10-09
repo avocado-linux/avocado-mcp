@@ -195,3 +195,26 @@ test("credentials never appear in feed errors or redacted URLs", () => {
     (e: Error) => !e.message.includes("s3cr3t"),
   );
 });
+
+test("extra feeds cache per credential, and the key holds no raw password", async () => {
+  const calls = stubFeed({ primaryXml: PRIMARY });
+  const client = new RepoClient();
+  const feed = (password: string) => ({
+    name: "vendor",
+    priority: 20,
+    url: "https://vendor.example/r",
+    auth: { username: "robot", password },
+  });
+  await client.fetchExtraFeed(feed("one"));
+  await client.fetchExtraFeed(feed("one"));
+  assert.equal(calls.length, 2, "same credential reuses the cache");
+  await client.fetchExtraFeed(feed("two"));
+  assert.equal(calls.length, 4, "a different password fetches again");
+  const keys = [
+    ...(
+      client as unknown as { packagesCache: Map<string, unknown> }
+    ).packagesCache.keys(),
+  ];
+  assert.equal(keys.length, 2);
+  assert.ok(keys.every((k) => !k.includes("one") && !k.includes("two")));
+});
