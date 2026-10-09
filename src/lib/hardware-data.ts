@@ -445,6 +445,10 @@ function boardPageNotes(info: TargetInfo, runtime: string): string[] {
 
 function qemuSection(info: TargetInfo, runtime: string): string {
   let out = `## QEMU flow\n\n`;
+  const hostOs = [
+    ...new Set(info.entries.flatMap((e) => e.provisioning?.hostOs ?? [])),
+  ];
+  if (hostOs.length > 0) out += `**Host OS:** ${hostOs.join(", ")}\n\n`;
   out += `\`avocado provision ${runtime}\` writes a disk image on this machine. Nothing is flashed. \`avocado sdk run -iE vm ${runtime}\` then boots that image with the QEMU in the SDK container. You do not install QEMU on the host.\n\n`;
   out += "```bash\n";
   out += `avocado build\n`;
@@ -452,7 +456,7 @@ function qemuSection(info: TargetInfo, runtime: string): string {
   out += `avocado sdk run -iE vm ${runtime}\n`;
   out += "```\n\n";
   out += `The VM console is the terminal that runs \`avocado sdk run\`, so no serial adapter is used. The command is interactive: ask the user to run it in a terminal, or start it in a detached tmux session. Log in as \`root\` with an empty password. Type \`poweroff\` to stop the VM.\n\n`;
-  out += `**SSH (Linux hosts only):** the docs support \`--host-fwd\` on Linux only.\n\n`;
+  out += `**SSH into the VM:** \`--host-fwd\` forwards a host port to the VM. The docs support \`--host-fwd\` on Linux hosts only. The VM itself runs on each host OS above.\n\n`;
   out += "```bash\n";
   out += `avocado sdk run -iE vm ${runtime} --host-fwd "2222-:22"\n`;
   out += `ssh -o StrictHostKeyChecking=no -p 2222 root@localhost\n`;
