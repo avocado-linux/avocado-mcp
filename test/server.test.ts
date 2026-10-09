@@ -74,6 +74,15 @@ test("tool contract: every tool has description + object schema", async () => {
   }
 });
 
+test("connect-init is marked destructive", async () => {
+  // It overwrites the device config and mints a new claim token, so hosts
+  // that gate on annotations must ask before they run it.
+  const { client } = await connect();
+  const { tools } = await client.listTools();
+  const init = tools.find((t) => t.name === "connect-init");
+  assert.equal(init?.annotations?.destructiveHint, true);
+});
+
 test("offline tool round-trips through the protocol", async () => {
   const { client } = await connect();
   // A schema-VALID fixture, so this exercises the happy path it's named for.

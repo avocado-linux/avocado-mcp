@@ -97,7 +97,7 @@ avocado connect claim-tokens list --org <id>     # no --output json
 
 ## Claim tokens (device enrollment)
 
-Devices enroll at first boot using a claim token. The token is baked into the device image via the connect-config extension. List the tokens in an org with:
+Devices enroll at first boot using a claim token. The token is baked into the device image via the \`avocado-ext-connect-config\` extension. List the tokens in an org with:
 
 \`\`\`bash
 avocado connect claim-tokens list --org <id>
@@ -105,7 +105,7 @@ avocado connect claim-tokens list --org <id>
 
 ## Undoing Connect (clean)
 
-\`avocado connect clean\` removes the \`connect:\` block, the connect-config extension, and the device config overlay from your \`avocado.yaml\`. Use before re-initializing with different settings.
+\`avocado connect clean\` removes the \`connect:\` block, the \`avocado-ext-connect-config\` extension, and the device config overlay from your \`avocado.yaml\`. Use before re-initializing with different settings.
 
 \`\`\`bash
 avocado connect clean -r dev -C avocado.yaml --output json
