@@ -14,7 +14,7 @@ export interface Diagnosis {
   excerpt: string;
   cause: string;
   suggestion: string;
-  /** A warning the CLI prints on runs that go on; not why a run failed. */
+  /** A CLI warning on a run that goes on. It does not explain a failure. */
   warningOnly?: boolean;
 }
 
