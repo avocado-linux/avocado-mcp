@@ -31,9 +31,29 @@ interface HardwareDevice {
 }
 
 let cache: { data: Set<string>; expiresAt: number } | null = null;
+const fileCache = new Map<
+  string,
+  { data: Promise<unknown>; expiresAt: number }
+>();
 
-/** Fetch one file from the docs hardware data. Throws on any failure. */
-export async function fetchHardwareFile(file: string): Promise<unknown> {
+/**
+ * Fetch one file from the docs hardware data. Throws on any failure.
+ * Cached for 30 min per file, so `getHardwareData` and `getSelectableSlugs`
+ * share one fetch in a tool call. A failed fetch is not cached.
+ */
+export function fetchHardwareFile(file: string): Promise<unknown> {
+  const now = Date.now();
+  const hit = fileCache.get(file);
+  if (hit && now < hit.expiresAt) return hit.data;
+  const data = fetchHardwareFileOnce(file);
+  fileCache.set(file, { data, expiresAt: now + CACHE_TTL_MS });
+  data.catch(() => {
+    if (fileCache.get(file)?.data === data) fileCache.delete(file);
+  });
+  return data;
+}
+
+async function fetchHardwareFileOnce(file: string): Promise<unknown> {
   // Bound the request — a stalled connection must degrade to null (→ caller
   // falls back to the full feed) quickly, not hang a target-suggestion call.
   const res = await fetch(`${RAW_BASE}/${file}`, {
@@ -75,7 +95,9 @@ export async function getSelectableSlugs(): Promise<Set<string> | null> {
     return set;
   } catch (error) {
     // Don't cache the failure — retry on the next call. Callers degrade to the
-    // full feed, so this is unfiltered rather than broken.
+    // full feed, so this is unfiltered rather than broken. A file that
+    // fetched but parsed empty must be fetched again too.
+    clearHardwareFileCache();
     console.error("[hardware-support] could not fetch support matrix:", error);
     return null;
   }
@@ -146,7 +168,13 @@ export async function resolveFeedTarget(
   return { ...match, supported, fromMatrix };
 }
 
-/** Test seam: reset the in-memory cache. */
+/** Drop every cached docs file, so the next call fetches them again. */
+export function clearHardwareFileCache(): void {
+  fileCache.clear();
+}
+
+/** Test seam: reset the in-memory cache, including the cached files. */
 export function clearSelectableCache(): void {
   cache = null;
+  clearHardwareFileCache();
 }

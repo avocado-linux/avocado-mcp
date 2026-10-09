@@ -19,6 +19,7 @@
  */
 import {
   CACHE_TTL_MS,
+  clearHardwareFileCache,
   fetchHardwareFile,
   sameTarget,
 } from "./hardware-support.js";
@@ -140,15 +141,18 @@ export async function getHardwareData(): Promise<HardwareData | null> {
     cache = { data, expiresAt: now + CACHE_TTL_MS };
     return data;
   } catch (error) {
-    // Don't cache the failure. Retry on the next call.
+    // Don't cache the failure. Retry on the next call, and fetch the files
+    // again in case one fetched but parsed empty.
+    clearHardwareFileCache();
     console.error("[hardware-data] could not fetch board data:", error);
     return null;
   }
 }
 
-/** Test seam: reset the in-memory cache. */
+/** Test seam: reset the in-memory cache, including the cached files. */
 export function clearHardwareDataCache(): void {
   cache = null;
+  clearHardwareFileCache();
 }
 
 /** The docs data for one target, narrowed to a board when one is given. */

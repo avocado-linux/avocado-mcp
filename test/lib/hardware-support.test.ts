@@ -239,3 +239,22 @@ test("supported targets fall back to the whole feed when the matrix is down", as
     fromMatrix: false,
   });
 });
+
+test("a failed or empty docs file is fetched again on the next call", async () => {
+  // The files are cached per file. A call that fails must not leave a bad
+  // file in that cache.
+  const ok = {
+    sup: { devices: [{ name: "Raspberry Pi 5", target: "raspberrypi5" }] },
+    ve: { devices: [] },
+  };
+  stub({ sup: { devices: [] }, ve: { devices: [] } });
+  assert.equal(await getSelectableSlugs(), null);
+  stub(ok);
+  assert.ok((await getSelectableSlugs())?.has("raspberrypi5"));
+
+  clearSelectableCache();
+  stub({ sup: "500", ve: { devices: [] } });
+  assert.equal(await getSelectableSlugs(), null);
+  stub(ok);
+  assert.ok((await getSelectableSlugs())?.has("raspberrypi5"));
+});
