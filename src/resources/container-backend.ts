@@ -24,12 +24,15 @@ includes a helper VM (\`avocado-vm\`). This is a QEMU virtual machine that runs
   (\`~/.avocado/vm/docker.sock\`) with SSH. Then it sets \`DOCKER_HOST\` for its own
   subprocesses. Each \`docker\` command from the CLI works. You do not need Docker
   Desktop or a manual \`docker context\`.
+- If the VM runs, the CLI uses it. VM routing is on by default.
 - If the VM is not running when a build starts, the CLI auto-starts it only
-  when \`AVOCADO_VM_DIR\` points at the install. A plain \`avocado vm update\` does
-  not set that variable. Thus the build does not auto-start the VM — run
-  \`avocado vm start\` first. But \`avocado vm update\` can restart a VM that is
-  already running. In that case, do not run \`avocado vm start\` again, because
-  it errors on a running VM.
+  when \`AVOCADO_VM_DIR\` points at the VM install. A plain \`avocado vm update\`
+  does not set that variable. Without it, the CLI prints \`avocado-vm not
+  running and AVOCADO_VM_DIR is unset; falling back to local docker\` and the
+  build fails if there is no local daemon. Thus run \`avocado vm start\` before
+  the first build. But \`avocado vm update\` can restart a VM that is already
+  running. In that case, do not run \`avocado vm start\` again, because it
+  errors on a running VM.
 
 The CLI sets \`DOCKER_HOST\` only in its own process. A \`docker info\` command that
 you run does not see the daemon in the VM. Thus a Docker failure on the host is
@@ -101,10 +104,30 @@ The CLI controls the build. Its stdout and stderr are the contract. Do not use
 is unreliable, and the container backend changes. Read the output from
 \`avocado\`, not its internal state.
 
-## On the device — there is no Docker
+## Provision from macOS
 
-This page is about the development host. The device is not a Docker host. The
-Avocado model uses extensions, not containers. To put container images on a
-device, pull them at build time with \`extensions.<name>.docker_images\`. For
-more information, see \`avocado://skills/filesystem-model\`.
+Builds on macOS use the avocado-vm. To provision real hardware from a Mac, the
+docs recommend Avocado Desktop, because it bundles a build VM with USB
+passthrough. The other path is a native Linux host. Do not suggest Docker
+Desktop for this: device enumeration and vendor flash tools are less reliable
+through its VM layers. For more information, see
+https://docs.peridio.com/developer-reference/provisioning.
+
+## On the device: containers come from an extension
+
+This page is about the development host. The device has no container engine
+by default. Add \`avocado-ext-docker\` or \`avocado-ext-podman\` to a runtime
+to run containers on the device. Extensions are still the main Avocado model.
+
+- To pre-load images so that a device starts containers offline, use
+  \`extensions.<name>.docker_images\`. The images land in \`/var\` at
+  provision. For more information, see \`avocado://skills/filesystem-model\`.
+- For a fast inner loop on a containerized app, use container dev mode. It
+  pushes only the changed layer to a running device:
+  https://docs.peridio.com/developer-reference/container-dev-mode
+- Two working references show the delivery patterns: \`docker-registry\`
+  (https://docs.peridio.com/developer-reference/references/docker-registry) and
+  \`docker-save\`
+  (https://docs.peridio.com/developer-reference/references/docker-save). Read
+  them with \`get-reference\`.
 `;
