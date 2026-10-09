@@ -128,9 +128,9 @@ test("missing channel falls back to default with a note (CLI defers to SDK image
 
 test("interpolates env and config templates; flags unknown ones", () => {
   const f = resolveFeed({
-    env: { FEED_HOST: "https://t.example.com" },
+    env: { AVOCADO_FEED_HOST: "https://t.example.com" },
     config: cfg(
-      'vars:\n  ch: apollo\ndistro:\n  release: 2026\n  channel: "{{ config.vars.ch }}"\n  repo:\n    url: "{{ env.FEED_HOST }}"\n',
+      'vars:\n  ch: apollo\ndistro:\n  release: 2026\n  channel: "{{ config.vars.ch }}"\n  repo:\n    url: "{{ env.AVOCADO_FEED_HOST }}"\n',
     ),
   });
   assert.equal(f.baseUrl, "https://t.example.com");
@@ -595,10 +595,10 @@ test("an org: feed is reported as not checked, never fetched", () => {
 
 test("an unset env var in a feed url is not checked, unless the lock recorded the url", () => {
   const config = cfg(
-    "distro:\n  release: 2026\n  channel: edge\n  feeds: [m]\nrepos:\n  m:\n    url: '{{ env.MIRROR }}/r'\n",
+    "distro:\n  release: 2026\n  channel: edge\n  feeds: [m]\nrepos:\n  m:\n    url: '{{ env.AVOCADO_MIRROR }}/r'\n",
   );
   const f = resolveFeed({ env: {}, target: "qemuarm64", config });
-  assert.match(f.notChecked?.[0]?.reason ?? "", /env\.MIRROR/);
+  assert.match(f.notChecked?.[0]?.reason ?? "", /env\.AVOCADO_MIRROR/);
   const g = resolveFeed({
     env: {},
     target: "qemuarm64",
@@ -613,7 +613,7 @@ test("an unset env var in a feed url is not checked, unless the lock recorded th
   });
   assert.equal(g.extraFeeds?.[0]?.url, "https://locked.example/r");
   const h = resolveFeed({
-    env: { MIRROR: "https://env.example" },
+    env: { AVOCADO_MIRROR: "https://env.example" },
     target: "qemuarm64",
     config,
   });
@@ -622,12 +622,12 @@ test("an unset env var in a feed url is not checked, unless the lock recorded th
 
 test("a token in a feed url query never reaches the summary, structured output or errors", () => {
   const dir = project(
-    "distro:\n  release: 2026\n  channel: edge\n  feeds: [vendor]\nrepos:\n  vendor:\n    url: 'https://vendor.example/repo?token={{ env.TOKEN }}'\n",
+    "distro:\n  release: 2026\n  channel: edge\n  feeds: [vendor]\nrepos:\n  vendor:\n    url: 'https://vendor.example/repo?token={{ env.AVOCADO_TOKEN }}'\n",
   );
   const ctx = FeedContext.load({
     projectDir: dir,
     env: {
-      TOKEN: "s3cr3t-token",
+      AVOCADO_TOKEN: "s3cr3t-token",
       AVOCADO_REPO_URL: "https://mirror.example/r?key=s3cr3t-key",
     },
   });
@@ -649,15 +649,20 @@ test("a token in a feed url query never reaches the summary, structured output o
   );
 });
 
-test("withStream drops the named feeds (they don't follow the stream)", () => {
+test("withStream keeps only the named feeds that take the distro $releasever", () => {
   const dir = project(
-    "distro:\n  release: 2026\n  channel: edge\n  feeds: [x]\nrepos:\n  x:\n    url: https://x.example/r\n",
+    "distro:\n  release: 2026\n  channel: edge\n  feeds: [x, v, own]\nrepos:\n  x:\n    url: https://x.example/r\n  v:\n    url: https://v.example/$releasever/$target\n  own:\n    url: https://o.example/$releasever\n    releasever: 2026/next\n",
   );
   const ctx = FeedContext.load({ projectDir: dir, env: {} });
-  assert.equal(ctx.forTarget("qemuarm64").extraFeeds?.length, 1);
-  assert.equal(
-    ctx.withStream("2024", "edge").forTarget("qemuarm64").extraFeeds,
-    undefined,
+  assert.equal(ctx.forTarget("qemuarm64").extraFeeds?.length, 3);
+  // avocado-cli substitutes the distro releasever into `v` (feeds.rs), so it
+  // moves with the stream. `x` has no $releasever and `own` sets its own.
+  assert.deepEqual(
+    ctx
+      .withStream("2024", "edge")
+      .forTarget("qemuarm64")
+      .extraFeeds?.map((f) => f.url),
+    ["https://v.example/2024/edge/qemuarm64"],
   );
 });
 
@@ -703,7 +708,7 @@ repos:
   vendor:
     url: ${base}/vendor/$target
     username: robot
-    password: "{{ env.VENDOR_TOKEN }}"
+    password: "{{ env.AVOCADO_VENDOR_TOKEN }}"
   denied:
     url: ${base}/denied
   local:
@@ -719,7 +724,7 @@ repos:
       join(dir, "rpms", "repodata", "p-primary.xml.gz"),
       pkg("local-pkg"),
     );
-    const env = { VENDOR_TOKEN: "s3cret-token" };
+    const env = { AVOCADO_VENDOR_TOKEN: "s3cret-token" };
     const ctx = FeedContext.load({ projectDir: dir, env });
     const client = new RepoClient();
     const r = await client.searchPackages(["qemuarm64"], "pkg", 10, (t) =>
@@ -761,4 +766,197 @@ test("a stage-specific lookup skips the target-ext repo, a stageless one keeps i
   assert.equal(resolveFeed({ env: {}, stage: "ext" }).skipExtRepo, true);
   assert.equal(resolveFeed({ env: {}, stage: "runtime" }).skipExtRepo, true);
   assert.equal(resolveFeed({ env: {} }).skipExtRepo, undefined);
+});
+
+test("a project cannot make the server send a non-AVOCADO env var to a feed host", async () => {
+  const requests: string[] = [];
+  const server = createServer((req, res) => {
+    requests.push(`${req.url} ${req.headers.authorization ?? ""}`);
+    res.statusCode = 404;
+    res.end();
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  try {
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const env = { GITHUB_TOKEN: "ghp_s3cr3t" };
+    const dir = project(
+      `
+distro:
+  release: 2026
+  channel: edge
+  repo:
+    url: "${base}/{{ env.GITHUB_TOKEN }}"
+  feeds: [evil, auth]
+repos:
+  evil:
+    url: "${base}/{{ env.GITHUB_TOKEN }}/r"
+  auth:
+    url: ${base}/auth
+    username: robot
+    password: "{{ env.GITHUB_TOKEN }}"
+`,
+    );
+    const ctx = FeedContext.load({ projectDir: dir, env });
+    const client = new RepoClient();
+    const r = await client.searchPackages(["qemuarm64"], "pkg", 10, (t) =>
+      ctx.forTarget(t),
+    );
+    assert.deepEqual(requests, [], "nothing was fetched");
+    assert.deepEqual(r.notChecked.map((n) => n.feed).sort(), [
+      "auth",
+      "avocado",
+      "evil",
+    ]);
+    for (const n of r.notChecked) {
+      assert.match(n.reason, /env\.GITHUB_TOKEN/);
+      assert.match(n.reason, /only `AVOCADO_\*`/);
+    }
+    assert.equal(await client.getTargetManifest(ctx.base), null);
+    assert.deepEqual(requests, []);
+    const shown = JSON.stringify([
+      r,
+      ctx.describe(["qemuarm64"]),
+      ctx.structured(["qemuarm64"]),
+    ]);
+    assert.doesNotMatch(shown, /ghp_s3cr3t/);
+  } finally {
+    server.close();
+  }
+});
+
+test("an AVOCADO_* path segment is fetched and masked in every output", async () => {
+  const repomd = `<repomd><data type="primary"><location href="repodata/p-primary.xml.gz"/></data></repomd>`;
+  const primary = gzipSync(
+    `<metadata><package type="rpm"><name>vendor-pkg</name><arch>aarch64</arch><version epoch="0" ver="1.0" rel="r0"/><summary>s</summary><description>d</description><location href="v.rpm"/></package></metadata>`,
+  );
+  const requests: string[] = [];
+  const server = createServer((req, res) => {
+    const u = req.url ?? "";
+    requests.push(u);
+    if (u === "/distro/2026/edge/targets.json") {
+      return res.end(JSON.stringify({ qemuarm64: [] }));
+    }
+    if (u.startsWith("/vendor/tok-123/qemuarm64/repodata/")) {
+      return res.end(u.endsWith("repomd.xml") ? repomd : primary);
+    }
+    res.statusCode = 500;
+    res.end();
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  try {
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const dir = project(
+      `
+distro:
+  release: 2026
+  channel: edge
+  repo:
+    url: ${base}/distro
+  feeds: [vendor, broken]
+repos:
+  vendor:
+    url: "${base}/vendor/{{ env.AVOCADO_TOKEN }}/$target"
+  broken:
+    url: "${base}/broken/{{ env.AVOCADO_TOKEN }}"
+`,
+    );
+    const ctx = FeedContext.load({
+      projectDir: dir,
+      env: { AVOCADO_TOKEN: "tok-123" },
+    });
+    const r = await new RepoClient().searchPackages(
+      ["qemuarm64"],
+      "vendor-pkg",
+      10,
+      (t) => ctx.forTarget(t),
+    );
+    assert.ok(
+      requests.includes("/vendor/tok-123/qemuarm64/repodata/repomd.xml"),
+    );
+    assert.equal(r.results[0]?.feed, "vendor");
+    assert.equal(
+      ctx.forTarget("qemuarm64").feeds?.find((f) => f.name === "vendor")
+        ?.location,
+      `${base}/vendor/***/qemuarm64`,
+    );
+    assert.match(
+      r.errors[0]?.messages.join() ?? "",
+      /broken: .*\/broken\/\*\*\*\/repodata\/repomd\.xml returned 500/,
+    );
+    const shown = JSON.stringify([
+      r,
+      ctx.describe(["qemuarm64"]),
+      ctx.structured(["qemuarm64"]),
+    ]);
+    assert.doesNotMatch(shown, /tok-123/);
+  } finally {
+    server.close();
+  }
+});
+
+test("a blocked var in a feed url uses the lock-file URL, masked, when it still fits the template", () => {
+  const config = cfg(
+    "distro:\n  release: 2026\n  channel: edge\n  feeds: [m]\nrepos:\n  m:\n    url: 'https://h.example/{{ env.GITHUB_TOKEN }}/$target'\n",
+  );
+  const lock = (url: string) => ({
+    targets: { qemuarm64: { feeds: [{ name: "m", position: 20, url }] } },
+  });
+  const f = resolveFeed({
+    env: { GITHUB_TOKEN: "ghp_env" },
+    target: "qemuarm64",
+    config,
+    lock: lock("https://h.example/ghp_locked/qemuarm64"),
+  });
+  assert.equal(
+    f.extraFeeds?.[0]?.url,
+    "https://h.example/ghp_locked/qemuarm64",
+  );
+  assert.equal(f.feeds?.[1]?.location, "https://h.example/***/qemuarm64");
+
+  const stale = resolveFeed({
+    env: {},
+    target: "qemuarm64",
+    config,
+    lock: lock("https://other.example/x"),
+  });
+  assert.equal(stale.extraFeeds?.length, 0);
+  assert.match(stale.notChecked?.[0]?.reason ?? "", /avocado install/);
+});
+
+test("a templated distro.repo and distro.feeds entry are interpolated before the lookup", () => {
+  const config = cfg(`
+distro:
+  release: 2026
+  channel: edge
+  repo: "{{ env.AVOCADO_DISTRO_FEED }}"
+  feeds: ["{{ env.AVOCADO_EXTRA_FEED }}"]
+repos:
+  mirror:
+    url: https://mirror.example
+  vendor:
+    url: https://vendor.example/r
+`);
+  const f = resolveFeed({
+    env: { AVOCADO_DISTRO_FEED: "mirror", AVOCADO_EXTRA_FEED: "vendor" },
+    target: "qemuarm64",
+    config,
+  });
+  assert.equal(f.baseUrl, "https://mirror.example");
+  assert.equal(f.name, "mirror");
+  assert.deepEqual(
+    f.extraFeeds?.map((x) => x.url),
+    ["https://vendor.example/r"],
+  );
+  assert.equal(f.blocked, undefined);
+
+  // The same rule as feed URLs: a non-AVOCADO var is not read.
+  const g = resolveFeed({
+    env: { DISTRO_FEED: "mirror" },
+    target: "qemuarm64",
+    config: cfg(
+      'distro:\n  release: 2026\n  channel: edge\n  repo: "{{ env.DISTRO_FEED }}"\nrepos:\n  mirror:\n    url: https://mirror.example\n',
+    ),
+  });
+  assert.match(g.blocked ?? "", /env\.DISTRO_FEED/);
+  assert.throws(() => validateFeed(g), /env\.DISTRO_FEED/);
 });

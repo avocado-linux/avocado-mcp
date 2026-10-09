@@ -70,6 +70,13 @@ export interface FeedSpec {
    * run dnf with `--disablerepo=${AVOCADO_TARGET}-target-ext` (avocado-cli).
    */
   skipExtRepo?: boolean;
+  /**
+   * Set when the feed's settings read an env var the MCP does not expand.
+   * The feed is then never fetched, and this is the reason shown.
+   */
+  blocked?: string;
+  /** Text that came from an env expansion. Masked in every displayed URL. */
+  masks?: string[];
 }
 
 /**
@@ -84,6 +91,8 @@ export interface ExtraFeed {
   tls?: { ca?: string; insecure?: boolean };
   /** Basic auth from `username`/`password`. Never shown in output. */
   auth?: { username: string; password: string };
+  /** Text that came from an env expansion. Masked in every displayed URL. */
+  masks?: string[];
 }
 
 export interface NotChecked {
@@ -96,8 +105,9 @@ export class FeedHttpError extends Error {
   constructor(
     url: string,
     readonly status: number,
+    masks?: string[],
   ) {
-    super(`${redactUrl(url)} returned ${status}`);
+    super(`${shownUrl(url, masks)} returned ${status}`);
   }
 }
 
@@ -135,6 +145,8 @@ const MAX_SEGMENT_LEN = 64;
 const MAX_PATH_LEN = 128;
 
 const TARGETS_CACHE_TTL_MS = 10 * 60 * 1000;
+/** Deadline for one feed request, headers and body included. */
+const FEED_TIMEOUT_MS = 2 * 60 * 1000;
 const USER_AGENT = "avocado-mcp-server";
 
 export function isSafeSegment(s: unknown): s is string {
@@ -167,10 +179,14 @@ function isSafeReleasever(p: unknown): p is string {
  * Mask `user:password@`, query values and the fragment in a URL so
  * credentials never reach tool output. Query parameter names stay visible.
  * Works on the raw string, so it is safe to call before validation.
+ *
+ * The userinfo runs to the last `@` before the query, so a password with
+ * `/` or `#` in it is masked too. A URL with `@` in its path loses its host
+ * from the display, which is the safe way to be wrong.
  */
 export function redactUrl(url: string): string {
   return url
-    .replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/?#]*@/i, "$1***@")
+    .replace(/^([a-z][a-z0-9+.-]*:\/\/)[^?]*@/i, "$1***@")
     .replace(/\?[^#]*/, (q) =>
       q.replace(/([?&])([^=&]*)(=?)[^&]*/g, (_, sep, key, eq) =>
         eq ? `${sep}${key}=***` : key ? `${sep}***` : sep,
@@ -179,9 +195,28 @@ export function redactUrl(url: string): string {
     .replace(/#.*$/s, "#***");
 }
 
+/**
+ * Replace each mask (text that came from an env expansion) with `***`. The
+ * URL-encoded forms are masked too, because `new URL()` encodes some
+ * characters.
+ */
+export function maskText(text: string, masks: string[] = []): string {
+  const forms = masks
+    .flatMap((m) => [m, encodeURI(m), encodeURIComponent(m)])
+    .filter((m) => m.length > 0)
+    .sort((a, b) => b.length - a.length);
+  for (const m of new Set(forms)) text = text.replaceAll(m, "***");
+  return text;
+}
+
+/** A URL as tool output may show it: env-expanded text and credentials masked. */
+export function shownUrl(url: string, masks?: string[]): string {
+  return redactUrl(maskText(url, masks));
+}
+
 /** Validate a repo URL and return it normalised. Throws on anything unsafe. */
-export function validateRepoUrl(url: string): string {
-  const shown = redactUrl(url);
+export function validateRepoUrl(url: string, masks?: string[]): string {
+  const shown = shownUrl(url, masks);
   // `new URL()` silently strips tabs/newlines, so check the raw string. C1
   // controls are included because YAML 1.1 (avocado-cli's parser) treats
   // U+0085 as a line break.
@@ -211,12 +246,17 @@ export function validateRepoUrl(url: string): string {
 
 /** Validate a feed and return its normalised base URL. Throws on anything unsafe. */
 export function validateFeed(feed: FeedSpec): string {
-  const base = validateRepoUrl(feed.baseUrl);
+  if (feed.blocked) throw new Error(feed.blocked);
+  const base = validateRepoUrl(feed.baseUrl, feed.masks);
   if (!isSafeReleasever(feed.releasever)) {
-    throw new Error(`Invalid releasever: ${feed.releasever}`);
+    throw new Error(
+      `Invalid releasever: ${maskText(feed.releasever, feed.masks)}`,
+    );
   }
   if (!isSafeReleasever(feed.manifestPath)) {
-    throw new Error(`Invalid manifest path: ${feed.manifestPath}`);
+    throw new Error(
+      `Invalid manifest path: ${maskText(feed.manifestPath, feed.masks)}`,
+    );
   }
   return base;
 }
@@ -231,8 +271,8 @@ function repoUrl(feed: FeedSpec, path: string): string {
   return `${base}/${feed.releasever}/${path}`;
 }
 
-/** How to reach a feed: TLS posture and optional basic auth. */
-type FeedConn = Pick<ExtraFeed, "tls" | "auth">;
+/** How to reach a feed: TLS posture, optional basic auth, and output masks. */
+type FeedConn = Pick<ExtraFeed, "tls" | "auth" | "masks">;
 
 /**
  * GET with the feed's TLS posture. Plain `fetch` unless a custom CA or
@@ -243,14 +283,18 @@ type FeedConn = Pick<ExtraFeed, "tls" | "auth">;
  * header on a cross-origin redirect, and the node:https path below does the
  * same.
  */
-async function feedFetch(url: string, conn: FeedConn): Promise<Response> {
+async function feedFetch(
+  url: string,
+  conn: FeedConn,
+  signal: AbortSignal,
+): Promise<Response> {
   const tls = conn.tls;
   const headers: Record<string, string> = { "User-Agent": USER_AGENT };
   if (conn.auth) {
     headers.Authorization = `Basic ${Buffer.from(`${conn.auth.username}:${conn.auth.password}`).toString("base64")}`;
   }
   if (!tls || (!tls.ca && !tls.insecure) || !url.startsWith("https:")) {
-    return fetch(url, { headers });
+    return fetch(url, { headers, signal });
   }
   const { request } = await import("https");
   const { readFileSync } = await import("fs");
@@ -275,6 +319,7 @@ async function feedFetch(url: string, conn: FeedConn): Promise<Response> {
             headers,
             ca,
             rejectUnauthorized: !tls.insecure,
+            signal,
           },
           resolvePromise,
         );
@@ -288,7 +333,7 @@ async function feedFetch(url: string, conn: FeedConn): Promise<Response> {
       const next = new URL(res.headers.location, current);
       if (next.protocol !== "https:") {
         throw new Error(
-          `Refusing non-https redirect to ${redactUrl(next.href)}`,
+          `Refusing non-https redirect to ${shownUrl(next.href, conn.masks)}`,
         );
       }
       if (next.origin !== new URL(current).origin) delete headers.Authorization;
@@ -298,19 +343,48 @@ async function feedFetch(url: string, conn: FeedConn): Promise<Response> {
     const body = Readable.toWeb(res) as unknown as ReadableStream<Uint8Array>;
     return new Response(body, { status });
   }
-  throw new Error(`Too many redirects fetching ${redactUrl(url)}`);
+  throw new Error(`Too many redirects fetching ${shownUrl(url, conn.masks)}`);
+}
+
+/**
+ * Run one feed request under a deadline that covers the headers and the
+ * body. A feed that holds the connection open fails instead of hanging the
+ * whole lookup.
+ */
+async function withDeadline<T>(
+  url: string,
+  conn: FeedConn,
+  timeoutMs: number,
+  run: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  const signal = AbortSignal.timeout(timeoutMs);
+  try {
+    return await run(signal);
+  } catch (e) {
+    if (signal.aborted) {
+      throw new Error(
+        `${shownUrl(url, conn.masks)} did not finish within ${timeoutMs / 1000} s`,
+      );
+    }
+    throw e;
+  }
 }
 
 async function readBounded(
   body: ReadableStream<Uint8Array>,
   maxBytes: number,
   label: string,
+  signal?: AbortSignal,
 ): Promise<Uint8Array> {
   const reader = body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
+  // Not every body stream errors on abort, so cancel the read here too.
+  const stop = () => void reader.cancel().catch(() => {});
+  signal?.addEventListener("abort", stop, { once: true });
   try {
     while (true) {
+      signal?.throwIfAborted();
       const { done, value } = await reader.read();
       if (done) break;
       if (!value) continue;
@@ -320,7 +394,9 @@ async function readBounded(
       }
       chunks.push(value);
     }
+    signal?.throwIfAborted();
   } finally {
+    signal?.removeEventListener("abort", stop);
     reader.releaseLock();
   }
   const out = new Uint8Array(total);
@@ -332,29 +408,45 @@ async function readBounded(
   return out;
 }
 
+/** GET a feed file and return its body as text, or gunzipped text. */
 async function fetchBoundedText(
   url: string,
   conn: FeedConn,
   maxBytes: number,
   label: string,
+  timeoutMs: number,
+  gzip = false,
 ): Promise<string> {
-  const res = await feedFetch(url, conn);
-  if (!res.ok) throw new FeedHttpError(url, res.status);
-  if (!res.body) throw new Error(`${redactUrl(url)} returned no body`);
-  const bytes = await readBounded(res.body, maxBytes, label);
-  return new TextDecoder("utf-8").decode(bytes);
+  return withDeadline(url, conn, timeoutMs, async (signal) => {
+    const res = await feedFetch(url, conn, signal);
+    if (!res.ok) throw new FeedHttpError(url, res.status, conn.masks);
+    if (!res.body) {
+      throw new Error(`${shownUrl(url, conn.masks)} returned no body`);
+    }
+    return gzip
+      ? gunzipBoundedText(res.body, maxBytes, label, signal)
+      : new TextDecoder("utf-8").decode(
+          await readBounded(res.body, maxBytes, label, signal),
+        );
+  });
 }
 
 async function gunzipBoundedText(
   body: ReadableStream<Uint8Array>,
   maxBytes: number,
   label: string,
+  signal?: AbortSignal,
 ): Promise<string> {
   const ds = new DecompressionStream("gzip") as unknown as ReadableWritablePair<
     Uint8Array,
     Uint8Array
   >;
-  const bytes = await readBounded(body.pipeThrough(ds), maxBytes, label);
+  const bytes = await readBounded(
+    body.pipeThrough(ds),
+    maxBytes,
+    label,
+    signal,
+  );
   return new TextDecoder("utf-8").decode(bytes);
 }
 
@@ -454,6 +546,9 @@ function feedFor(sel: FeedSelector | undefined, target: string): FeedSpec {
 }
 
 export class RepoClient {
+  /** @param timeoutMs Deadline for one feed request, headers and body included. */
+  constructor(private readonly timeoutMs = FEED_TIMEOUT_MS) {}
+
   /**
    * Both caches hold the promise, so concurrent callers share one download.
    * A failed fetch is removed so the next call retries.
@@ -514,6 +609,7 @@ export class RepoClient {
         feed,
         MAX_MANIFEST_BYTES,
         "targets.json",
+        this.timeoutMs,
       );
       let parsed: unknown;
       try {
@@ -570,7 +666,7 @@ export class RepoClient {
   async fetchExtraFeed(extra: ExtraFeed): Promise<FeedPackage[]> {
     if (extra.path) return readLocalRepo(extra.path, extra.name);
     if (!extra.url) throw new Error(`Feed ${extra.name} has no url or path`);
-    const base = validateRepoUrl(extra.url);
+    const base = validateRepoUrl(extra.url, extra.masks);
     // Keyed per feed, including TLS and a SHA-256 digest of the full
     // credential. The raw password never goes into the key.
     const authKey = extra.auth
@@ -612,18 +708,16 @@ export class RepoClient {
       conn,
       MAX_REPOMD_BYTES,
       `repomd.xml (${repo})`,
+      this.timeoutMs,
     );
     const href = primaryHref(repomdText, repo);
-
-    const url = `${base}/${href}`;
-    const res = await feedFetch(url, conn);
-    if (!res.ok) throw new FeedHttpError(url, res.status);
-    if (!res.body)
-      throw new Error(`primary.xml.gz returned no body for ${repo}`);
-    const xml = await gunzipBoundedText(
-      res.body,
+    const xml = await fetchBoundedText(
+      `${base}/${href}`,
+      conn,
       MAX_PRIMARY_DECOMPRESSED_BYTES,
       `primary.xml (${repo})`,
+      this.timeoutMs,
+      true,
     );
 
     return parsePrimaryXml(xml, repo, feedName);
@@ -649,16 +743,26 @@ export class RepoClient {
     const notChecked: NotChecked[] = [...(feed.notChecked ?? [])];
     const groups: { priority: number; packages: FeedPackage[] }[] = [];
 
-    const manifest = await this.getTargetManifest(feed);
+    // A blocked distro feed is never fetched. It is unread, not missing.
+    const manifest = feed.blocked ? null : await this.getTargetManifest(feed);
     let repos = manifest?.[target] ?? [];
     if (feed.skipExtRepo) repos = repos.filter((r) => !isExtRepo(r));
-    if (!manifest) {
+    const manifestUrl = shownUrl(
+      `${feed.baseUrl}/${feed.manifestPath}`,
+      feed.masks,
+    );
+    if (feed.blocked) {
+      notChecked.unshift({
+        feed: feed.name ?? DISTRO_FEED_NAME,
+        reason: feed.blocked,
+      });
+    } else if (!manifest) {
       errors.push(
-        `Could not read targets.json from ${redactUrl(feed.baseUrl)}/${feed.manifestPath}. Check the feed URL and the network.`,
+        `Could not read targets.json from ${manifestUrl}. Check the feed URL and the network.`,
       );
     } else if (!manifest[target]) {
       errors.push(
-        `${NO_TARGET_REPOS} "${target}" in ${redactUrl(feed.baseUrl)}/${feed.manifestPath}. Verify the target name and the configured feed. list-targets shows the canonical list.`,
+        `${NO_TARGET_REPOS} "${target}" in ${manifestUrl}. Verify the target name and the configured feed. list-targets shows the canonical list.`,
       );
     }
     const extras = feed.extraFeeds ?? [];
@@ -669,7 +773,10 @@ export class RepoClient {
     const distroPackages: FeedPackage[] = [];
     distro.forEach((r, i) => {
       if (r.status === "fulfilled") distroPackages.push(...r.value);
-      else errors.push(`${repos[i]}: ${r.reason?.message ?? r.reason}`);
+      else
+        errors.push(
+          `${repos[i]}: ${maskText(String(r.reason?.message ?? r.reason), feed.masks)}`,
+        );
     });
     groups.push({ priority: feed.priority ?? 0, packages: distroPackages });
     named.forEach((r, i) => {
@@ -685,7 +792,9 @@ export class RepoClient {
           reason: `the feed answered ${r.reason.status}, so its credentials are missing or rejected. Check \`username\`/\`password\` in \`repos.${x.name}\` and the env vars they read.`,
         });
       } else {
-        errors.push(`${x.name}: ${r.reason?.message ?? r.reason}`);
+        errors.push(
+          `${x.name}: ${maskText(String(r.reason?.message ?? r.reason), x.masks)}`,
+        );
       }
     });
     groups.sort((a, b) => a.priority - b.priority);
