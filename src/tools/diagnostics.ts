@@ -155,7 +155,7 @@ export function registerDiagnosticsTools(
         feed: feedSummarySchema.optional(),
       },
       annotations: {
-        title: "Diagnose an avocado build/install log",
+        title: "Diagnose an avocado build, install or deploy log",
         readOnlyHint: true,
         destructiveHint: false,
         idempotentHint: true,
