@@ -23,6 +23,7 @@ import {
   sameTarget,
 } from "./hardware-support.js";
 import { isSafeSegment } from "./repo-client.js";
+import { resolveTargetInput } from "./target-resolver.js";
 
 export const DOCS_SITE = "https://docs.peridio.com";
 export const HARDWARE_DOCS_URL = `${DOCS_SITE}/hardware/support-matrix`;
@@ -151,6 +152,8 @@ export interface TargetInfo {
   entries: TargetEntry[];
   /** `supported.json` rows for the target, one per board. */
   devices: SupportedDevice[];
+  /** What the caller passed, when it was resolved to another slug ("rpi5"). */
+  requested?: string;
 }
 
 /**
@@ -172,11 +175,19 @@ export function lookupTarget(
   target: string,
   board?: string,
 ): TargetInfo | null {
+  const names = targetNames(data);
+  // Users type "rpi5" or "Raspberry Pi 5". Resolve that to one slug here, so
+  // every tool that reads the board data accepts it. The slug compare below
+  // stays exact.
+  const slug = names.some((n) => sameTarget(target, n))
+    ? target
+    : resolveTargetInput(target, names).target;
+  if (!slug) return null;
   const entries = Object.values(data.targets).filter(
-    (e) => e?.target && sameTarget(target, e.target),
+    (e) => e?.target && sameTarget(slug, e.target),
   );
   const devices = data.devices.filter(
-    (d) => d?.target && sameTarget(target, d.target),
+    (d) => d?.target && sameTarget(slug, d.target),
   );
   if (entries.length === 0 && devices.length === 0) return null;
   const b = board?.trim() || undefined;
@@ -192,6 +203,7 @@ export function lookupTarget(
     // the dev kit's steps, so a board narrows to the entries for that board.
     entries: b ? (known ? entries.filter((e) => covers(e, b)) : []) : entries,
     devices,
+    requested: slug === target ? undefined : target,
   };
 }
 
@@ -526,8 +538,30 @@ export function unavailableText(target: string): string {
   return `Board data unavailable: the docs hardware data for \`${target}\` could not be fetched. Do not guess board facts. Read the board page from ${HARDWARE_DOCS_URL}, or try again later.\n`;
 }
 
-export function unknownTargetText(target: string): string {
-  return `The docs hardware data has no entry for \`${target}\`. Use \`list-targets\` to check the slug. The supported boards are at ${HARDWARE_DOCS_URL}.\n`;
+/** Every target slug in the docs data. */
+function targetNames(data: HardwareData): string[] {
+  const names = new Set<string>();
+  for (const e of Object.values(data.targets))
+    if (e?.target) names.add(e.target);
+  for (const d of data.devices) if (d?.target) names.add(d.target);
+  return [...names];
+}
+
+export function unknownTargetText(target: string, data?: HardwareData): string {
+  const near = data
+    ? resolveTargetInput(target, targetNames(data)).candidates
+    : [];
+  if (near.length === 0) {
+    return `The docs hardware data has no entry for \`${target}\`. Use \`list-targets\` to check the slug. The supported boards are at ${HARDWARE_DOCS_URL}.\n`;
+  }
+  return `\`${target}\` matches more than one target in the docs hardware data. Did you mean ${near.map((t) => `\`${t}\``).join(", ")}? The supported boards are at ${HARDWARE_DOCS_URL}.\n`;
+}
+
+/** One line that says which slug a user's name resolved to. */
+export function resolvedText(info: TargetInfo): string {
+  return info.requested
+    ? `_Resolved \`${info.requested}\` to target \`${info.target}\`._\n\n`
+    : "";
 }
 
 /** The full `get-target-info` report. Pure, so tests need no network. */
@@ -540,7 +574,8 @@ export function targetInfoText(
   let out = `# get-target-info: \`${target}\`${board ? ` (board \`${board}\`)` : ""}\n\n`;
   if (!data) return out + unavailableText(target);
   const info = lookupTarget(data, target, board);
-  if (!info) return out + unknownTargetText(target);
+  if (!info) return out + unknownTargetText(target, data);
+  out += resolvedText(info);
 
   const entry = info.entries[0];
   const device = info.board

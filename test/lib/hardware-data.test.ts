@@ -249,3 +249,17 @@ test("diskRequirement says when it falls back to the generic 8 GB", () => {
   assert.equal(offline.minGB, 8);
   assert.match(offline.note ?? "", /Board data unavailable.*generic 8 GB/);
 });
+
+test("board data lookups accept a user's name for the board", () => {
+  const info = lookupTarget(DATA, "rpi5");
+  assert.equal(info?.target, "raspberrypi5");
+  assert.equal(info?.requested, "rpi5");
+  const text = targetInfoText(DATA, "Raspberry Pi 5", undefined);
+  assert.match(text, /Resolved `Raspberry Pi 5` to target `raspberrypi5`/);
+  assert.match(text, /raspberry-pi-5/);
+  // An exact slug is not marked as resolved.
+  assert.equal(lookupTarget(DATA, "raspberrypi5")?.requested, undefined);
+  // Ambiguous: no entry, and a "did you mean" list.
+  assert.equal(lookupTarget(DATA, "jetson"), null);
+  assert.match(targetInfoText(DATA, "jetson", undefined), /Did you mean/);
+});

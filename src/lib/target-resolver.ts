@@ -74,8 +74,44 @@ function haystackFor(slug: string): string[] {
  * alone. Returns matches sorted by score desc, then alphabetical.
  */
 export function resolveTarget(query: string, allTargets: string[]): string[] {
+  if (query.trim().length === 0) return allTargets;
+  return scoreTargets(query, allTargets).map((s) => s.target);
+}
+
+export interface TargetMatch {
+  /** The one slug the input names, when it is not ambiguous. */
+  target?: string;
+  /** The best matches, for a "did you mean" list. */
+  candidates: string[];
+}
+
+/**
+ * Resolve what a user typed ("rpi5", "Raspberry Pi 5") to one slug. An exact
+ * slug wins. Otherwise the top match wins when it matched a whole word and
+ * is the only match or scores higher than the next one. A tie ("jetson",
+ * "pi") is ambiguous and returns only the candidates.
+ */
+export function resolveTargetInput(
+  query: string,
+  allTargets: string[],
+): TargetMatch {
   const q = query.trim();
-  if (q.length === 0) return allTargets;
+  if (allTargets.includes(q)) return { target: q, candidates: [q] };
+  if (q.length === 0) return { candidates: [] };
+  const ranked = scoreTargets(q, allTargets);
+  const candidates = ranked.slice(0, 5).map((s) => s.target);
+  const [top, next] = ranked;
+  if (top && top.score >= 3 && (!next || top.score > next.score)) {
+    return { target: top.target, candidates };
+  }
+  return { candidates };
+}
+
+function scoreTargets(
+  query: string,
+  allTargets: string[],
+): { target: string; score: number }[] {
+  const q = query.trim();
   const qLower = q.toLowerCase();
 
   // Exact-slug fast path.
@@ -83,7 +119,7 @@ export function resolveTarget(query: string, allTargets: string[]): string[] {
 
   const qTokens = tokenize(q);
   const qSquash = squash(q);
-  if (qTokens.length === 0) return exact ? [exact] : [];
+  if (qTokens.length === 0) return exact ? [{ target: exact, score: 100 }] : [];
 
   type Scored = { target: string; score: number };
   const scored: Scored[] = [];
@@ -117,7 +153,7 @@ export function resolveTarget(query: string, allTargets: string[]): string[] {
     if (score > 0) scored.push({ target: t, score });
   }
 
-  return scored
-    .sort((a, b) => b.score - a.score || a.target.localeCompare(b.target))
-    .map((s) => s.target);
+  return scored.sort(
+    (a, b) => b.score - a.score || a.target.localeCompare(b.target),
+  );
 }
