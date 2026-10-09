@@ -17,7 +17,7 @@ Avocado OS is a Yocto-based embedded Linux distribution. A working project consi
 **Always required:**
 
 - **A container engine** — the CLI runs all builds inside the SDK container. The source depends on the platform. Docker Desktop is not required. The supported platforms are macOS and Linux. Windows support is highly experimental and not suggested.
-  - **macOS:** the \`avocado\` CLI includes the **avocado-vm**, a QEMU VM that runs \`dockerd\`. The CLI routes to it while it runs. For first-time setup, run \`avocado vm update -y && avocado vm start\`. Start the VM before you build, because a build does not reliably auto-start a stopped VM. Do not tell the user to install Docker Desktop.
+  - **macOS:** the \`avocado\` CLI includes the **avocado-vm**, a QEMU VM that runs \`dockerd\`. VM routing is on by default: the CLI uses the VM when it runs. For first-time setup, run \`avocado vm update -y && avocado vm start\`. A build auto-starts a stopped VM only when \`AVOCADO_VM_DIR\` is set. Otherwise it falls back to local Docker with a warning, so start the VM before you build. Do not tell the user to install Docker Desktop. To provision real hardware from a Mac, the docs recommend Avocado Desktop (USB passthrough) or a native Linux host.
   - **Linux:** the native Docker Engine on the host, not Docker Desktop. Make sure that the daemon runs with \`sudo systemctl start docker\`.
   - For the full model and debugging, see \`avocado://skills/container-backend\`.
 - **The avocado CLI** installed AND on PATH (\`curl -fsSL https://connect.peridio.com/install.sh | sh\` on macOS or Linux). If the user has a local build of the CLI but it isn't on PATH, symlink it: \`mkdir -p ~/.local/bin && ln -s /path/to/avocado ~/.local/bin/avocado\` (then verify \`~/.local/bin\` is on PATH).
@@ -70,7 +70,7 @@ These are NOT interchangeable. Get this wrong and the user wastes 5+ minutes fla
 - bump a package version pin in \`avocado.yaml\`
 - change \`distro.release\` or \`distro.channel\`
 
-If you skip this, \`avocado build\` will produce an image with stale package contents and no error message saying so. After any YAML mutation tool the canonical next command is: \`avocado install && avocado build\`.
+If you skip this, \`avocado build\` stops before it does any work. Build stamps detect that the install no longer matches \`avocado.yaml\`, and the CLI prints \`dependencies not satisfied\` with the stale steps and a \`To fix:\` line. After any YAML mutation tool, the usual next command is still \`avocado install && avocado build\`. It skips the failed build.
 
 ## Where things live
 
