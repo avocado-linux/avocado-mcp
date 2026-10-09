@@ -32,5 +32,5 @@ The Avocado package feed has separate repodata directories per target *and* per 
 - \`target/<target>/\` — target-specific RPMs (BSP, HITL tooling, board firmware)
 - \`target/<cpu_arch>/\` — generic Linux packages for that CPU (e.g. \`cortexa76\` for rpi5)
 
-The CLI handles this transparently via DNF inside the SDK container. The MCP queries the same data over HTTP — from the same feed, provided you pass \`projectDir\` (it mirrors the CLI's feed precedence, including the lock file's \`repo-snapshot\` pin at \`.avocado/lock.json\`, which rewrites the path to \`{release}/{channel}/snapshots/<id>\`). Every feed tool prints the effective feed and where each value came from; if it doesn't match what the user expects, fix the config rather than overriding per call.
+The CLI handles this transparently via DNF inside the SDK container. The MCP queries the same data over HTTP — from the same feed, provided you pass \`projectDir\` (it mirrors the CLI's feed precedence, including the lock file's \`repo-snapshot\` pin in the lock file (\`avocado.lock\`, or the legacy \`.avocado/lock.json\`), which rewrites the path to \`{release}/{channel}/snapshots/<id>\`). Every feed tool prints the effective feed and where each value came from; if it doesn't match what the user expects, fix the config rather than overriding per call.
 `;
