@@ -66,14 +66,22 @@ test("a response that is not a schema falls back to the vendored schema", async 
   assert.match((await loadSchema()).source, /vendored/);
 });
 
-test("a fetched schema that does not compile falls back", async () => {
-  setup(
+test("a fetched schema that does not compile falls back and is not cached", async () => {
+  const calls = setup(
     () =>
       new Response(
         JSON.stringify({ properties: { a: { $ref: "#/nowhere" } } }),
       ),
   );
   assert.match((await loadSchema()).source, /vendored/);
+  assert.ok(
+    !existsSync(
+      join(process.env.AVOCADO_MCP_CACHE_DIR!, "schema", "avocado-config.json"),
+    ),
+  );
+  clearSchemaCache();
+  await loadSchema();
+  assert.equal(calls.length, 2, "the next call must fetch again");
 });
 
 test("AVOCADO_MCP_SCHEMA_OFFLINE=1 never touches the network", async () => {

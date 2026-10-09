@@ -102,7 +102,12 @@ export function registerProjectTools(
             throw new Error(`Invalid release/channel: ${JSON.stringify(v)}`);
           }
         }
-        // These land in avocado.yaml and in shell commands we print.
+        // These land in avocado.yaml and in shell commands we print. The
+        // feed support check cannot stand in for this: it is skipped when
+        // targets.json is unreachable.
+        if (!isSafeSegment(target)) {
+          throw new Error(`Invalid target: ${JSON.stringify(target)}`);
+        }
         if (runtimeName !== undefined && !isSafeSegment(runtimeName)) {
           throw new Error(
             `Invalid runtimeName: ${JSON.stringify(runtimeName)}`,

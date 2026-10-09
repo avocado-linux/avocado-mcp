@@ -123,9 +123,12 @@ export async function loadSchema(): Promise<LoadedSchema> {
   if (process.env.AVOCADO_MCP_SCHEMA_OFFLINE === "1") return vendoredSchema();
   if (memory && Date.now() < memory.expiresAt) return memory;
   try {
-    let schema = await readDisk();
-    if (!schema) {
-      schema = await fetchRemote();
+    const cached = await readDisk();
+    const schema = cached ?? (await fetchRemote());
+    // Compile before caching, so a schema that does not compile never
+    // reaches the disk cache and the next call fetches again.
+    const validate = compile(schema);
+    if (!cached) {
       await fs.mkdir(path.dirname(diskPath()), { recursive: true });
       await fs.writeFile(
         diskPath(),
@@ -136,7 +139,7 @@ export async function loadSchema(): Promise<LoadedSchema> {
     memory = {
       schema,
       source: SCHEMA_URL,
-      validate: compile(schema),
+      validate,
       expiresAt: Date.now() + TTL_MS,
     };
     return memory;
