@@ -93,7 +93,7 @@ app-compile.sh: line 3: syntax error: unexpected "("
 
 ## Read \`avocado build\`'s output directly — not its internals
 
-The hook script's stdout/stderr is captured by the \`avocado\` CLI and surfaced through its own output. Run \`avocado build\` (or \`avocado install\`) as a foreground Bash command, wait for it to finish, and read the printed log. Do NOT inspect the SDK container directly (no \`docker logs\`, no \`docker ps\`, no backgrounding the build). The CLI is the orchestrator and its stdout/stderr is the contract. The SDK container is an implementation detail that may change. Pipe the captured output into \`explain-build-error\` if the diagnosis isn't obvious.
+The hook script's stdout/stderr is captured by the \`avocado\` CLI and surfaced through its own output. Run \`avocado build\` (or \`avocado install\`) through Bash, wait for it to exit, and read the printed log. For a run that can pass the foreground time cap, follow the background-task rule in \`avocado://skills/avocado-cli-execution\`. Do NOT inspect the SDK container directly (no \`docker logs\`, no \`docker ps\`, no peeking at a build before it exits). The CLI is the orchestrator and its stdout/stderr is the contract. The SDK container is an implementation detail that may change. Pipe the captured output into \`explain-build-error\` if the diagnosis isn't obvious.
 
 ### For a human running these in their own terminal
 
