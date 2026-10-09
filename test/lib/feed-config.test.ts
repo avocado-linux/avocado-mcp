@@ -727,3 +727,9 @@ repos:
     server.close();
   }
 });
+
+test("a stage-specific lookup skips the target-ext repo, a stageless one keeps it", () => {
+  assert.equal(resolveFeed({ env: {}, stage: "ext" }).skipExtRepo, true);
+  assert.equal(resolveFeed({ env: {}, stage: "runtime" }).skipExtRepo, true);
+  assert.equal(resolveFeed({ env: {} }).skipExtRepo, undefined);
+});

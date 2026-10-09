@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { gzipSync } from "node:zlib";
 import {
   DEFAULT_FEED,
+  NO_TARGET_REPOS,
   RepoClient,
   redactUrl,
   validateFeed,
@@ -217,4 +218,62 @@ test("extra feeds cache per credential, and the key holds no raw password", asyn
   ];
   assert.equal(keys.length, 2);
   assert.ok(keys.every((k) => !k.includes("one") && !k.includes("two")));
+});
+
+test("concurrent lookups share one targets.json and one primary.xml.gz download", async () => {
+  const calls = stubFeed({
+    targets: { t: ["repo/aarch64"] },
+    primaryXml: PRIMARY,
+  });
+  const rc = new RepoClient();
+  await Promise.all(
+    ["curl", "libcurl", "zlib", "jq", "git"].map((q) =>
+      rc.searchPackages(["t"], q),
+    ),
+  );
+  assert.equal(calls.filter((u) => u.endsWith("targets.json")).length, 1);
+  assert.equal(calls.filter((u) => u.endsWith(".xml.gz")).length, 1);
+});
+
+test("a failed fetch is not cached, so the next call retries", async () => {
+  stubFeed({ status: 500 });
+  const rc = new RepoClient();
+  assert.equal(await rc.getTargetManifest(), null);
+  await assert.rejects(() =>
+    rc.fetchRepoPackages(DEFAULT_FEED, "repo/aarch64"),
+  );
+  stubFeed({ targets: { t: ["repo/aarch64"] }, primaryXml: PRIMARY });
+  assert.deepEqual(Object.keys((await rc.getTargetManifest())!), ["t"]);
+  assert.equal(
+    (await rc.fetchRepoPackages(DEFAULT_FEED, "repo/aarch64")).length,
+    2,
+  );
+});
+
+test("an unreadable targets.json is not reported as a missing target", async () => {
+  stubFeed({ status: 500 });
+  const down = await new RepoClient().fetchTargetPackages("t");
+  assert.equal(down.errors.length, 1);
+  assert.ok(!down.errors[0]!.startsWith(NO_TARGET_REPOS), down.errors[0]);
+  assert.match(down.errors[0]!, /Could not read targets\.json/);
+
+  stubFeed({ targets: { other: ["repo/aarch64"] } });
+  const absent = await new RepoClient().fetchTargetPackages("t");
+  assert.equal(absent.errors.length, 1);
+  assert.ok(absent.errors[0]!.startsWith(NO_TARGET_REPOS), absent.errors[0]);
+});
+
+test("skipExtRepo leaves out the target-ext repo, and only that repo", async () => {
+  const targets = { t: ["sdk/all", "target/t", "target/t-ext"] };
+  let calls = stubFeed({ targets, primaryXml: PRIMARY });
+  await new RepoClient().fetchTargetPackages("t", {
+    ...DEFAULT_FEED,
+    skipExtRepo: true,
+  });
+  assert.ok(calls.some((u) => u.includes("/target/t/repodata/")));
+  assert.ok(!calls.some((u) => u.includes("/target/t-ext/")));
+
+  calls = stubFeed({ targets, primaryXml: PRIMARY });
+  await new RepoClient().fetchTargetPackages("t");
+  assert.ok(calls.some((u) => u.includes("/target/t-ext/repodata/")));
 });

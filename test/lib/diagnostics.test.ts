@@ -311,3 +311,31 @@ test("an unread configured feed makes the package's availability there unknown",
   assert.doesNotMatch(out, /Not on your configured stream/);
   assert.doesNotMatch(out, /Set `distro.release`/);
 });
+
+test("investigatePackages keeps an alternate stream whose targets.json failed to load", async () => {
+  const { investigatePackages } = await import("../../src/lib/diagnostics.js");
+  const { DEFAULT_FEED, RepoClient } =
+    await import("../../src/lib/repo-client.js");
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response("down", { status: 503 })) as typeof fetch;
+  try {
+    const [inv] = await investigatePackages(
+      new RepoClient(),
+      ["pkg"],
+      ["x"],
+      [
+        {
+          release: "2026",
+          channel: "next",
+          configured: false,
+          feed: DEFAULT_FEED,
+        },
+      ],
+    );
+    assert.equal(inv.streams.length, 1);
+    assert.match(inv.streams[0].error ?? "", /Could not read targets\.json/);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});

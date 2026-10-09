@@ -324,3 +324,63 @@ test("add-extension does not write version for a source extension", async () => 
   assert.match(text, /app:\n {4}source:/);
   assert.doesNotMatch(text, /1\.2\.3/);
 });
+
+test("add-package-to-extension treats a feed that failed to load as unread", async () => {
+  let hit = false;
+  class StubRepo extends RepoClient {
+    override async searchPackages() {
+      return {
+        totalMatches: hit ? 1 : 0,
+        results: hit
+          ? [
+              {
+                name: "curl",
+                summary: "",
+                description: "",
+                version: "8.0",
+                release: "r0",
+                arch: "armv8a",
+                repo: "target/armv8a",
+                href: "",
+                feed: "avocado",
+                score: 100,
+              },
+            ]
+          : [],
+        errors: [
+          {
+            target: "qemuarm64",
+            messages: ["vendor: https://vendor.example returned 500"],
+          },
+        ],
+        notChecked: [],
+      };
+    }
+  }
+  const { client } = await connect(new StubRepo());
+  const add = async () => {
+    const res = await client.callTool({
+      name: "add-package-to-extension",
+      arguments: {
+        yaml: "extensions:\n  app:\n    types: [sysext]\n",
+        extension: "app",
+        packageName: "curl",
+        targets: ["qemuarm64"],
+      },
+    });
+    return (res.content as { text: string }[])[0].text;
+  };
+
+  const missing = await add();
+  assert.doesNotMatch(missing, /add-package-to-extension failed/);
+  assert.match(missing, /Could not verify `curl`/);
+  assert.match(
+    missing,
+    /Failed to load[\s\S]*vendor: https:\/\/vendor\.example returned 500/,
+  );
+
+  hit = true;
+  const found = await add();
+  assert.match(found, /Verified `curl`/);
+  assert.match(found, /Failed to load[\s\S]*returned 500/);
+});
