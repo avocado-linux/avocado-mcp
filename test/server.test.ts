@@ -186,6 +186,30 @@ test("get-tmux-uart-snippet sends a QEMU board name to the VM console", async ()
   }
 });
 
+test("serial tools name the resolved target for a docs name", async () => {
+  const restore = serveHardwareFixture();
+  try {
+    const { client } = await connect();
+    const call = async (name: string, args: Record<string, string>) => {
+      const res = await client.callTool({ name, arguments: args });
+      return (res.content as { text: string }[])[0].text;
+    };
+    const info = await call("get-device-connection-info", {
+      target: "Raspberry Pi 5",
+    });
+    assert.match(info, /^# get-device-connection-info: `raspberrypi5`\n/);
+    assert.match(info, /Resolved `Raspberry Pi 5` to target `raspberrypi5`/);
+    const snippet = await call("get-tmux-uart-snippet", {
+      portPath: "/dev/ttyUSB0",
+      target: "Raspberry Pi 5",
+    });
+    assert.match(snippet, /^# get-tmux-uart-snippet: `raspberrypi5` on /);
+    assert.match(snippet, /Resolved `Raspberry Pi 5` to target `raspberrypi5`/);
+  } finally {
+    restore();
+  }
+});
+
 test("a QEMU target with a board stays virtual", async () => {
   const restore = serveHardwareFixture();
   class StubRepo extends RepoClient {

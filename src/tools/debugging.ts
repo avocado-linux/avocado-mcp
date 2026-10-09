@@ -178,7 +178,8 @@ export function registerDebuggingTools(server: McpServer): void {
         await getHardwareData(),
         board,
       );
-      let out = `# get-device-connection-info — \`${target}\`\n\n`;
+      // The resolver note ("Resolved `Raspberry Pi 5` to ...") is in caveats.
+      let out = `# get-device-connection-info: \`${info.target}\`\n\n`;
       out += `## Serial parameters\n\n`;
       out += `- **Console:** ${CONSOLE_TEXT[info.consoleType]}\n`;
       out += `- **Baud:** ${info.serial.baud}\n`;
@@ -289,7 +290,9 @@ export function registerDebuggingTools(server: McpServer): void {
         };
       }
 
-      let out = `# get-tmux-uart-snippet — \`${target}\` on \`${portPath}\` (via \`${chosen}\`)\n\n`;
+      let out = `# get-tmux-uart-snippet: \`${info.target}\` on \`${portPath}\` (via \`${chosen}\`)\n\n`;
+      const resolved = info.caveats.find((c) => c.startsWith("Resolved `"));
+      if (resolved) out += `_${resolved}_\n\n`;
       out += `## Prerequisites — BOTH required\n\n`;
       out += `Driving a UART through tmux needs two pieces. \`tmux\` is a session multiplexer; it does NOT speak to serial devices. The emulator (\`${chosen}\` here) is what actually opens the port. Confirm both are installed:\n\n`;
       out += "```bash\n";
