@@ -121,7 +121,7 @@ export interface ResolvedFeed extends FeedSpec {
 export interface ResolveInput {
   /** Parsed avocado.yaml (main config). */
   config?: unknown;
-  /** Parsed `.avocado/lock.json`. */
+  /** Parsed lock file: `avocado.lock`, or the legacy `.avocado/lock.json`. */
   lock?: unknown;
   env?: Record<string, string | undefined>;
   overrides?: FeedOverrides;
