@@ -316,8 +316,10 @@ const BUILD_PATTERNS: Pattern[] = [
   // `src/utils/ext_deps.rs` and `src/commands/ext/fetch.rs`.
   {
     label: "Unresolved depends_on closure",
+    // Not the "unresolved dependency closure" wrapper from `ext/install.rs`:
+    // it also wraps dependency cycles and version conflicts.
     match:
-      /unresolved dependency closure|is not defined in `extensions:` and could not be resolved from the target's feed|configuration has not been merged, so its dependencies are unknown/,
+      /is not defined in `extensions:` and could not be resolved from the target's feed|configuration has not been merged, so its dependencies are unknown/,
     cause:
       "An extension lists another extension in `depends_on` that the CLI cannot find. Either the name is not under `extensions:` and not in the feed of the target, or it is a `git` or `package` source that was not fetched yet.",
     suggestion:

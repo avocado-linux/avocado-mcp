@@ -715,3 +715,16 @@ test("warning-only matches still show the error that failed the run", async () =
   });
   assert.doesNotMatch(rendered, /No known failure pattern matched/);
 });
+
+test("a closure error from a cycle or a version conflict is not a missing extension", () => {
+  // avocado-cli ext/install.rs wraps these from src/utils/ext_deps.rs.
+  for (const log of [
+    "Error: Cannot install with an unresolved dependency closure: Dependency cycle between extensions: app -> base -> app.\nExtensions cannot depend on each other in a loop — factor the shared part into a separate `class: platform` extension.\nFix the depends_on declaration (or fetch the missing extension) and re-run.",
+    "Error: Cannot install with an unresolved dependency closure: Extension 'app' requires 'base' ^2.0, but 'base' declares version 1.0.0.\nRelax the `depends_on` constraint or update the dependency.\nFix the depends_on declaration (or fetch the missing extension) and re-run.",
+  ]) {
+    assert.ok(
+      !labels(diagnoseBuildLog(log)).includes("Unresolved depends_on closure"),
+      log,
+    );
+  }
+});
