@@ -247,3 +247,55 @@ test("resolveTargetInput uses docs names as aliases", async () => {
     undefined,
   );
 });
+
+test("resolveTargetInput does not resolve on one shared word", async () => {
+  const { resolveTargetInput } =
+    await import("../../src/lib/target-resolver.js");
+  const slugs = [
+    "raspberrypi5",
+    "rubikpi3",
+    "fr201",
+    "jetson-orin-nano-devkit",
+    "jetson-orin-nx",
+    "jetson-agx-orin-devkit",
+    "ucm-imx8m-plus",
+  ];
+  const aliases = [
+    { name: "Thundercomm Rubik Pi 3", target: "rubikpi3" },
+    { name: "OnLogic FR201", target: "fr201" },
+    {
+      name: "Advantech MIC-712-OX",
+      target: "jetson-orin-nx",
+      board: "mic-712-ox-16gb",
+    },
+    { name: "CompuLab IOT-GATE-iMX8PLUS", target: "ucm-imx8m-plus" },
+  ];
+  // Hardware with no target shares only the vendor word: candidates only.
+  for (const input of ["Thundercomm DragonBoard 410c", "OnLogic FR999"]) {
+    const m = resolveTargetInput(input, slugs, aliases);
+    assert.equal(m.target, undefined, input);
+    assert.ok(m.candidates.length > 0, input);
+  }
+  for (const [input, target] of [
+    ["rpi5", "raspberrypi5"],
+    ["RaspberryPi5", "raspberrypi5"],
+    ["Raspberry Pi 5", "raspberrypi5"],
+    ["pi 5", "raspberrypi5"],
+    ["Advantech MIC-712-OX", "jetson-orin-nx"],
+    ["Thundercomm Rubik Pi 3", "rubikpi3"],
+    ["CompuLab IOT-GATE-iMX8PLUS", "ucm-imx8m-plus"],
+    ["OnLogic FR201", "fr201"],
+    ["jetson orin nano", "jetson-orin-nano-devkit"],
+  ] as const) {
+    assert.equal(
+      resolveTargetInput(input, slugs, aliases).target,
+      target,
+      input,
+    );
+  }
+  assert.equal(
+    resolveTargetInput("Advantech MIC-712-OX", slugs, aliases).board,
+    "mic-712-ox-16gb",
+  );
+  assert.equal(resolveTargetInput("jetson", slugs, aliases).target, undefined);
+});
