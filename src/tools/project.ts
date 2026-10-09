@@ -13,7 +13,7 @@ import {
   searchReferencesScored,
   type ScoredReference,
 } from "../lib/references-client.js";
-import { resolveTarget } from "../lib/target-resolver.js";
+import { resolveTargetInput } from "../lib/target-resolver.js";
 import { qemuArchAdvisory } from "./discovery.js";
 import {
   feedArgsShape,
@@ -88,7 +88,7 @@ export function registerProjectTools(
       },
     },
     async ({
-      target,
+      target: input,
       task,
       forceFromScratch,
       runtimeName,
@@ -109,11 +109,7 @@ export function registerProjectTools(
           }
         }
         // These land in avocado.yaml and in shell commands we print. The
-        // feed support check cannot stand in for this: it is skipped when
-        // targets.json is unreachable.
-        if (!isSafeSegment(target)) {
-          throw new Error(`Invalid target: ${JSON.stringify(target)}`);
-        }
+        // target is checked after it is resolved against the feed, below.
         if (runtimeName !== undefined && !isSafeSegment(runtimeName)) {
           throw new Error(
             `Invalid runtimeName: ${JSON.stringify(runtimeName)}`,
@@ -152,10 +148,15 @@ export function registerProjectTools(
           ],
         };
       }
-      if (validTargets && !validTargets[target]) {
+      // Accept what a user types ("rpi5", "Raspberry Pi 5"). An ambiguous
+      // name fails with the candidates instead of a guess.
+      const match = validTargets
+        ? resolveTargetInput(input, Object.keys(validTargets))
+        : { target: input.trim(), candidates: [] };
+      if (validTargets && !match.target) {
         const allTargets = Object.keys(validTargets);
-        const fuzzy = resolveTarget(target, allTargets).slice(0, 5);
-        let body = `# init-project failed\n\n❌ \`${target}\` is **not a supported Avocado OS target**. The MCP only operates on targets that exist in the feed.\n\n${feed.describe()}\n`;
+        const fuzzy = match.candidates;
+        let body = `# init-project failed\n\n❌ \`${input}\` is **not a supported Avocado OS target**, or it matches more than one. The MCP only operates on targets that exist in the feed.\n\n${feed.describe()}\n`;
         if (fuzzy.length > 0) {
           body += `**Did you mean:** ${fuzzy.map((t) => `\`${t}\``).join(", ")}?\n\n`;
         }
@@ -166,6 +167,23 @@ export function registerProjectTools(
         body += `If the user's hardware isn't on this list, **tell them it's not currently supported** — don't try to substitute a "close enough" target without their explicit confirmation. Use \`list-targets({ query: "..." })\` to search by user-supplied hardware names.`;
         return { content: [{ type: "text", text: body }] };
       }
+      const target = match.target ?? input.trim();
+      // The feed support check is skipped when targets.json is unreachable,
+      // so this check must not depend on it.
+      if (!isSafeSegment(target)) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `# init-project failed\n\n❌ Invalid target: ${JSON.stringify(input)}\n\n${feed.describe()}`,
+            },
+          ],
+        };
+      }
+      const resolved =
+        target !== input.trim()
+          ? `_Resolved \`${input}\` to target \`${target}\`._\n\n`
+          : "";
 
       // Reference path — try this first unless explicitly skipped. The
       // reference catalog is read live from GitHub; if that's unreachable,
@@ -179,7 +197,7 @@ export function registerProjectTools(
             content: [
               {
                 type: "text",
-                text: `${renderReferenceMatch(target, task, matches)}${board ? `\nAfter the scaffold, add \`default_target_board: ${board}\` below \`default_target\` in \`avocado.yaml\`.\n` : ""}\n\n${feed.describe()}`,
+                text: `${resolved}${renderReferenceMatch(target, task, matches)}${board ? `\nAfter the scaffold, add \`default_target_board: ${board}\` below \`default_target\` in \`avocado.yaml\`.\n` : ""}\n\n${feed.describe()}`,
               },
             ],
           };
@@ -190,7 +208,7 @@ export function registerProjectTools(
       // it always matches the installed CLI. The vendored copy of that
       // template is only for a host without the CLI.
       const repoUrl = feedArgs.repoUrl?.trim() ? repoHref : undefined;
-      let out = `# init-project — \`${target}\` (from scratch)\n\n`;
+      let out = `# init-project — \`${target}\` (from scratch)\n\n${resolved}`;
       if (forceFromScratch) {
         out += `_From-scratch path requested explicitly._\n\n`;
       } else {

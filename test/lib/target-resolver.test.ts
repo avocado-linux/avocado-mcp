@@ -158,3 +158,39 @@ test("an Intel query does not return the QEMU x86 target", () => {
   ]);
   assert.deepEqual(hits, ["intel-x86-64-v2", "intel-x86-64-v3"]);
 });
+
+test("resolveTargetInput turns what users type into one slug", async () => {
+  const { resolveTargetInput } =
+    await import("../../src/lib/target-resolver.js");
+  const slugs = [
+    "raspberrypi4",
+    "raspberrypi5",
+    "jetson-orin-nano-devkit",
+    "jetson-agx-orin-devkit",
+    "qemux86-64",
+    "imx93-evk",
+    "imx93-frdm",
+  ];
+  for (const input of ["rpi5", "Raspberry Pi 5", "RaspberryPi5", "pi 5"]) {
+    assert.equal(
+      resolveTargetInput(input, slugs).target,
+      "raspberrypi5",
+      input,
+    );
+  }
+  assert.equal(
+    resolveTargetInput("raspberrypi4", slugs).target,
+    "raspberrypi4",
+  );
+  assert.equal(
+    resolveTargetInput("jetson orin nano", slugs).target,
+    "jetson-orin-nano-devkit",
+  );
+  // Ties are ambiguous: no guess, only candidates.
+  for (const input of ["jetson", "pi", "imx93"]) {
+    const m = resolveTargetInput(input, slugs);
+    assert.equal(m.target, undefined, input);
+    assert.ok(m.candidates.length >= 2, input);
+  }
+  assert.deepEqual(resolveTargetInput("toaster", slugs), { candidates: [] });
+});

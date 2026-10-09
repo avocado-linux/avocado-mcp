@@ -18,6 +18,7 @@ import {
   feedSummarySchema,
 } from "./feed-args.js";
 import { qemuArchAdvisory } from "./discovery.js";
+import { resolveTargetInput } from "../lib/target-resolver.js";
 import {
   getHardwareData,
   lookupTarget,
@@ -263,7 +264,7 @@ export function registerDiagnosticsTools(
         openWorldHint: true,
       },
     },
-    async ({ target, board, runtime, ...feedArgs }) => {
+    async ({ target: input, board, runtime, ...feedArgs }) => {
       const feed = feedContextFrom(feedArgs);
       const rt = runtime?.trim() || "dev";
       // The runtime goes into the shell commands this tool prints.
@@ -289,22 +290,32 @@ export function registerDiagnosticsTools(
           ],
         };
       }
-      if (!validTargets[target]) {
+      // Accept what a user types ("rpi5"). An ambiguous name lists the
+      // candidates instead of guessing.
+      const match = resolveTargetInput(input, Object.keys(validTargets));
+      if (!match.target) {
+        const near = match.candidates.length
+          ? ` Did you mean ${match.candidates.map((t) => `\`${t}\``).join(", ")}?`
+          : "";
         return {
           content: [
             {
               type: "text",
-              text: `# get-provisioning-steps failed\n\nUnknown target \`${target}\` in this feed. Use \`list-targets\` (same \`projectDir\`) to see valid options.\n\n${feed.describe()}`,
+              text: `# get-provisioning-steps failed\n\nUnknown target \`${input}\` in this feed.${near} Use \`list-targets\` (same \`projectDir\`) to see valid options.\n\n${feed.describe()}`,
             },
           ],
         };
       }
+      const target = match.target;
 
       let out = `# Provisioning \`${target}\`${board ? ` (board \`${board}\`)` : ""}\n\n`;
+      if (target !== input.trim()) {
+        out += `_Resolved \`${input}\` to target \`${target}\`._\n\n`;
+      }
       const data = await getHardwareData();
       const info = data ? lookupTarget(data, target, board) : null;
       if (!info) {
-        out += data ? unknownTargetText(target) : unavailableText(target);
+        out += data ? unknownTargetText(target, data) : unavailableText(target);
         out += `\n${genericSteps(rt)}`;
       } else {
         const page = boardDocsUrl(info);

@@ -10,6 +10,7 @@
 import { readdir } from "fs/promises";
 import * as path from "path";
 import {
+  unknownTargetText,
   boardDocsUrl,
   isVirtual,
   lookupTarget,
@@ -160,7 +161,7 @@ export function getDeviceConnectionInfo(
         ? "adapter"
         : "unknown";
   const base: DeviceConnectionInfo = {
-    target,
+    target: info?.target ?? target,
     serial: {
       baud: serial?.baud ?? COMMON_BAUD,
       voltage:
@@ -177,7 +178,12 @@ export function getDeviceConnectionInfo(
     defaultUser: "root",
     defaultPasswordNote:
       "Empty root password, set by the `dev` profile in the top-level `permissions` section of the starter `avocado.yaml` (`rootfs` and `initramfs` use it). NOT FOR PRODUCTION.",
-    caveats: [SERIAL_OPTIONAL],
+    caveats: info?.requested
+      ? [
+          `Resolved \`${info.requested}\` to target \`${info.target}\`.`,
+          SERIAL_OPTIONAL,
+        ]
+      : [SERIAL_OPTIONAL],
     docsUrl: info ? boardDocsUrl(info) : undefined,
   };
 
@@ -195,7 +201,7 @@ export function getDeviceConnectionInfo(
   }
   if (!info) {
     base.caveats.push(
-      `The docs data has no entry for \`${target}\`. These are the common defaults. Check ${HARDWARE_DOCS_URL}.`,
+      `${unknownTargetText(target, data).trim()} These are the common defaults.`,
     );
     return base;
   }
