@@ -8,6 +8,7 @@ import {
   provisionCommand,
   boardDocsUrl,
   runProvisionCommands,
+  provisioningText,
   getHardwareData,
   clearHardwareDataCache,
   type HardwareData,
@@ -432,4 +433,42 @@ test("a runtime other than dev is named before the docs text for dev", () => {
     targetInfoText(DATA, "rubikpi3", undefined),
     /written for the `dev` runtime/,
   );
+});
+
+test("provisionCommand names an explicit target and refuses an unsafe one", () => {
+  assert.equal(
+    provisionCommand("dev", "ufs", "rubikpi3"),
+    "avocado provision dev --target rubikpi3 --profile ufs",
+  );
+  assert.equal(
+    provisionCommand("dev", "ufs"),
+    "avocado provision dev --profile ufs",
+  );
+  assert.throws(() => provisionCommand("dev", null, "x; reboot"));
+  assert.throws(() => provisionCommand("dev", null, "--evil"));
+});
+
+test("an explicit target reaches every printed command, QEMU too", () => {
+  const rb3 = lookupTarget(DATA, "rb3gen2")!;
+  assert.deepEqual(runProvisionCommands(rb3, "dev", "rb3gen2"), [
+    "avocado provision dev --target rb3gen2 --profile ufs",
+  ]);
+  const text = provisioningText(rb3, "dev", "rb3gen2");
+  assert.match(
+    text,
+    /```bash\navocado provision dev --target rb3gen2 --profile ufs\n```/,
+  );
+  assert.match(
+    text,
+    /avocado provision dev --target rb3gen2 --profile ufs --env AVOCADO_HYPERVISOR=kvm/,
+  );
+  const qemu = provisioningText(
+    lookupTarget(DATA, "qemux86-64")!,
+    "dev",
+    "qemux86-64",
+  );
+  assert.match(qemu, /avocado build --target qemux86-64\n/);
+  assert.match(qemu, /avocado provision dev --target qemux86-64\n/);
+  assert.match(qemu, /avocado sdk run --target qemux86-64 -iE vm dev\n/);
+  assert.doesNotMatch(provisioningText(rb3, "dev"), /--target/);
 });

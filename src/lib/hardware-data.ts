@@ -323,6 +323,7 @@ export function skippedProfileText(profile: string): string {
 export function runProvisionCommands(
   info: TargetInfo,
   runtime: string,
+  target?: string,
 ): string[] {
   const profiles = new Set(
     info.entries
@@ -330,25 +331,40 @@ export function runProvisionCommands(
       .filter((o) => isSafeProfile(o.profile))
       .map((o) => o.profile ?? null),
   );
-  if (profiles.size === 0) return [provisionCommand(runtime)];
-  return [...profiles].map((p) => provisionCommand(runtime, p));
+  if (profiles.size === 0) return [provisionCommand(runtime, null, target)];
+  return [...profiles].map((p) => provisionCommand(runtime, p, target));
+}
+
+/**
+ * ` --target <target>` for a target the caller gave explicitly, else "". The
+ * CLI otherwise uses AVOCADO_TARGET, then `default_target` (avocado-cli
+ * `utils/target.rs`), which can be another target. Throws on an unsafe value.
+ */
+export function targetFlag(target?: string): string {
+  if (!target) return "";
+  if (!isSafeSegment(target)) {
+    throw new Error(`Unsafe target: ${JSON.stringify(target)}`);
+  }
+  return ` --target ${target}`;
 }
 
 /**
  * The `avocado provision` command. Callers check the runtime and filter the
  * profiles first. This throws as a last guard so an unsafe value never
- * reaches a shell snippet.
+ * reaches a shell snippet. Pass `target` only when the caller gave one
+ * explicitly.
  */
 export function provisionCommand(
   runtime: string,
   profile?: string | null,
+  target?: string,
 ): string {
   if (!isSafeSegment(runtime) || !isSafeProfile(profile)) {
     throw new Error(
       `Unsafe runtime or profile: ${JSON.stringify(runtime)} ${JSON.stringify(profile)}`,
     );
   }
-  return `avocado provision ${runtime}${profile ? ` --profile ${profile}` : ""}`;
+  return `avocado provision ${runtime}${targetFlag(target)}${profile ? ` --profile ${profile}` : ""}`;
 }
 
 const ONBOARD_PORT_HINT =
@@ -457,7 +473,11 @@ function stepText(s: RecoveryStep): string {
   return typeof s === "string" ? s : s.text;
 }
 
-function optionSection(o: ProvisionOption, runtime: string): string {
+function optionSection(
+  o: ProvisionOption,
+  runtime: string,
+  target?: string,
+): string {
   const profile = o.profile
     ? `\`--profile ${o.profile}\``
     : "the CLI default profile";
@@ -479,7 +499,7 @@ function optionSection(o: ProvisionOption, runtime: string): string {
       out += `\nReference: ${rec.reference.label ?? rec.reference.url} (${rec.reference.url})\n`;
     }
   }
-  out += `\n\`\`\`bash\n${provisionCommand(runtime, o.profile)}\n\`\`\`\n`;
+  out += `\n\`\`\`bash\n${provisionCommand(runtime, o.profile, target)}\n\`\`\`\n`;
   for (const st of o.steps ?? []) {
     out +=
       st.type === "code"
@@ -500,11 +520,15 @@ function optionSection(o: ProvisionOption, runtime: string): string {
 // hardware/qualcomm/rb3-gen-2 and hardware/qualcomm/rubik-pi-3.
 const QCS6490_TARGETS = new Set(["rb3gen2", "rubikpi3"]);
 
-function boardPageNotes(info: TargetInfo, runtime: string): string[] {
+function boardPageNotes(
+  info: TargetInfo,
+  runtime: string,
+  target?: string,
+): string[] {
   const notes: string[] = [];
   if (QCS6490_TARGETS.has(info.target)) {
     notes.push(
-      `**Hypervisor (set at provision time):** \`AVOCADO_HYPERVISOR=gunyah\` is the default and keeps the GPU and NPU. \`AVOCADO_HYPERVISOR=kvm\` gives \`/dev/kvm\` for guest VMs, but the GPU and NPU stay offline. To select KVM: \`${provisionCommand(runtime, "ufs")} --env AVOCADO_HYPERVISOR=kvm\`. The choice changes only on a new provision.`,
+      `**Hypervisor (set at provision time):** \`AVOCADO_HYPERVISOR=gunyah\` is the default and keeps the GPU and NPU. \`AVOCADO_HYPERVISOR=kvm\` gives \`/dev/kvm\` for guest VMs, but the GPU and NPU stay offline. To select KVM: \`${provisionCommand(runtime, "ufs", target)} --env AVOCADO_HYPERVISOR=kvm\`. The choice changes only on a new provision.`,
     );
   }
   if (info.target === "rb3gen2") {
@@ -515,7 +539,12 @@ function boardPageNotes(info: TargetInfo, runtime: string): string[] {
   return notes;
 }
 
-function qemuSection(info: TargetInfo, runtime: string): string {
+function qemuSection(
+  info: TargetInfo,
+  runtime: string,
+  target?: string,
+): string {
+  const t = targetFlag(target);
   let out = `## QEMU flow\n\n`;
   const hostOs = [
     ...new Set(info.entries.flatMap((e) => e.provisioning?.hostOs ?? [])),
@@ -523,14 +552,14 @@ function qemuSection(info: TargetInfo, runtime: string): string {
   if (hostOs.length > 0) out += `**Host OS:** ${hostOs.join(", ")}\n\n`;
   out += `\`avocado provision ${runtime}\` writes a disk image on this machine. Nothing is flashed. \`avocado sdk run -iE vm ${runtime}\` then boots that image with the QEMU in the SDK container. You do not install QEMU on the host.\n\n`;
   out += "```bash\n";
-  out += `avocado build\n`;
-  out += `${provisionCommand(runtime)}\n`;
-  out += `avocado sdk run -iE vm ${runtime}\n`;
+  out += `avocado build${t}\n`;
+  out += `${provisionCommand(runtime, null, target)}\n`;
+  out += `avocado sdk run${t} -iE vm ${runtime}\n`;
   out += "```\n\n";
   out += `The VM console is the terminal that runs \`avocado sdk run\`, so no serial adapter is used. The command is interactive: ask the user to run it in a terminal, or start it in a detached tmux session. Log in as \`root\` with an empty password. Type \`poweroff\` to stop the VM.\n\n`;
   out += `**SSH into the VM:** \`--host-fwd\` forwards a host port to the VM. The docs support \`--host-fwd\` on Linux hosts only. The VM itself runs on each host OS above.\n\n`;
   out += "```bash\n";
-  out += `avocado sdk run -iE vm ${runtime} --host-fwd "2222-:22"\n`;
+  out += `avocado sdk run${t} -iE vm ${runtime} --host-fwd "2222-:22"\n`;
   out += `ssh -o StrictHostKeyChecking=no -p 2222 root@localhost\n`;
   out += "```\n\n";
   out += `If \`avocado build\` fails with a missing \`/etc/passwd\` under \`rootfs-work\`, the build volume is stale. Run \`avocado clean\`, \`avocado prune\`, \`avocado install\` and \`avocado build\`.\n\n`;
@@ -543,8 +572,12 @@ function qemuSection(info: TargetInfo, runtime: string): string {
  * serial console, and per profile the media, recovery mode, command and boot
  * steps. For QEMU, the provision-then-run flow.
  */
-export function provisioningText(info: TargetInfo, runtime: string): string {
-  if (isVirtual(info)) return qemuSection(info, runtime);
+export function provisioningText(
+  info: TargetInfo,
+  runtime: string,
+  target?: string,
+): string {
+  if (isVirtual(info)) return qemuSection(info, runtime, target);
 
   let out = "";
   if (info.entries.length === 0) {
@@ -554,7 +587,7 @@ export function provisioningText(info: TargetInfo, runtime: string): string {
       out += `Board \`${info.board}\` is not in the docs data for \`${info.target}\`.\n\n`;
     }
     out += `The docs data has no provisioning details for ${info.board ? `board \`${info.board}\`` : `\`${info.target}\``}. Follow the board page${page ? `: ${page}` : ""}. Without \`--profile\`, the CLI uses the default profile of the target:\n\n`;
-    out += `\`\`\`bash\n${provisionCommand(runtime)}\n\`\`\`\n\n`;
+    out += `\`\`\`bash\n${provisionCommand(runtime, null, target)}\n\`\`\`\n\n`;
     out += `After \`avocado install\`, \`list-provision-profiles\` shows the profiles the target has.\n\n`;
     out += serialSection(undefined, info.target);
     return out;
@@ -603,13 +636,13 @@ export function provisioningText(info: TargetInfo, runtime: string): string {
     } else {
       out += `## Provisioning\n\n`;
     }
-    for (const o of options) out += optionSection(o, runtime);
+    for (const o of options) out += optionSection(o, runtime, target);
     for (const o of all) {
       if (!isSafeProfile(o.profile))
         out += `${skippedProfileText(o.profile!)}\n\n`;
     }
   }
-  const notes = boardPageNotes(info, runtime);
+  const notes = boardPageNotes(info, runtime, target);
   if (notes.length > 0) {
     out += `## Notes from the board page\n\n`;
     for (const n of notes) out += `- ${n}\n`;
