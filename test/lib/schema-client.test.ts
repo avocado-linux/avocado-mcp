@@ -1,6 +1,12 @@
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, existsSync, readFileSync, writeFileSync } from "fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  existsSync,
+  readFileSync,
+  writeFileSync,
+} from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import {
@@ -94,6 +100,31 @@ test("a cache dir that cannot be written still serves the fetched schema", async
   const res = await loadSchema();
   assert.equal(res.source, SCHEMA_URL);
   assert.equal(res.schema.title, "live");
+});
+
+test("a disk entry keeps its age when it is loaded into memory", async () => {
+  const live = { ...VENDORED, title: "live" };
+  const calls = setup(() => new Response(JSON.stringify(live)));
+  const file = join(
+    process.env.AVOCADO_MCP_CACHE_DIR!,
+    "schema",
+    "avocado-config.json",
+  );
+  mkdirSync(join(process.env.AVOCADO_MCP_CACHE_DIR!, "schema"));
+  // Fetched almost one hour ago: 100 ms of life left.
+  writeFileSync(
+    file,
+    JSON.stringify({
+      fetchedAt: Date.now() - 60 * 60 * 1000 + 100,
+      schema: { ...VENDORED, title: "old" },
+    }),
+  );
+  assert.equal((await loadSchema()).schema.title, "old");
+  assert.equal(calls.length, 0);
+  await new Promise((r) => setTimeout(r, 200));
+  // Same process, no cache reset: the entry expired, so it fetches again.
+  assert.equal((await loadSchema()).schema.title, "live");
+  assert.equal(calls.length, 1);
 });
 
 test("AVOCADO_MCP_SCHEMA_OFFLINE=1 never touches the network", async () => {

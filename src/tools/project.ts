@@ -217,7 +217,11 @@ export function registerProjectTools(
             .join("\n");
           out += `\n\n`;
         }
-        out += `Save the YAML below as \`avocado.yaml\` at your project root, then:\n\n`;
+        out += `Save the YAML below as \`avocado.yaml\` at your project root.\n\n`;
+        if (extraExtensions?.length) {
+          out += `The runtime lists ${extraExtensions.map((e) => `\`${e}\``).join(", ")}, but the YAML does not define ${extraExtensions.length === 1 ? "it" : "them"} yet. Before \`avocado install\`, define each one with \`add-extension\` (a package, git or path source), or remove it from the runtime. Install fails on a runtime extension with no definition.\n\n`;
+        }
+        out += `Then:\n\n`;
       } else {
         out += renderInitSteps({
           target,

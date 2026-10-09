@@ -92,10 +92,15 @@ function diskPath(): string {
   return path.join(getCacheDir(), "schema", "avocado-config.json");
 }
 
-async function readDisk(): Promise<Record<string, unknown> | null> {
+async function readDisk(): Promise<{
+  schema: Record<string, unknown>;
+  fetchedAt: number;
+} | null> {
   try {
     const raw = JSON.parse(await fs.readFile(diskPath(), "utf8"));
-    if (Date.now() - raw.fetchedAt < TTL_MS) return raw.schema;
+    if (Date.now() - raw.fetchedAt < TTL_MS) {
+      return { schema: raw.schema, fetchedAt: raw.fetchedAt };
+    }
   } catch {
     // Missing or unreadable; fetch instead.
   }
@@ -124,7 +129,10 @@ export async function loadSchema(): Promise<LoadedSchema> {
   if (memory && Date.now() < memory.expiresAt) return memory;
   try {
     const cached = await readDisk();
-    const schema = cached ?? (await fetchRemote());
+    const schema = cached?.schema ?? (await fetchRemote());
+    // A disk entry keeps its own age, so the schema refreshes one hour after
+    // it was fetched, not one hour after this process read it.
+    const fetchedAt = cached?.fetchedAt ?? Date.now();
     // Compile before caching, so a schema that does not compile never
     // reaches the disk cache and the next call fetches again.
     const validate = compile(schema);
@@ -135,7 +143,7 @@ export async function loadSchema(): Promise<LoadedSchema> {
         await fs.mkdir(path.dirname(diskPath()), { recursive: true });
         await fs.writeFile(
           diskPath(),
-          JSON.stringify({ fetchedAt: Date.now(), schema }),
+          JSON.stringify({ fetchedAt, schema }),
           "utf8",
         );
       } catch (error) {
@@ -149,7 +157,7 @@ export async function loadSchema(): Promise<LoadedSchema> {
       schema,
       source: SCHEMA_URL,
       validate,
-      expiresAt: Date.now() + TTL_MS,
+      expiresAt: fetchedAt + TTL_MS,
     };
     return memory;
   } catch (error) {

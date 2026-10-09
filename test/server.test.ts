@@ -220,6 +220,13 @@ test("init-project from scratch tells the model to run avocado init", async () =
     assert.match(noCli, /```yaml\n# yaml-language-server/);
     assert.match(noCli, /default_target_board: mic-712-ox-16gb/);
     assert.match(noCli, /validates against the schema/);
+
+    const noCliExtra = await call({
+      cliAvailable: false,
+      extraExtensions: ["my-app"],
+    });
+    assert.match(noCliExtra, /does not define it yet/);
+    assert.match(noCliExtra, /add-extension/);
   } finally {
     globalThis.fetch = realFetch;
   }
