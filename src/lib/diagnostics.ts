@@ -36,7 +36,7 @@ const STAMP_PATTERNS: Pattern[] = [
     cause:
       "The CLI checks build stamps before each step. A step that this one needs is missing or stale, so the CLI stopped before it did any work.",
     suggestion:
-      "The log lists each missing or stale step, then prints the exact commands under `To fix:`. Run those commands in the order shown, then retry. In most cases this is `avocado install`, then the step that failed. Docs: https://docs.peridio.com/developer-reference/lockfiles-and-build-stamps",
+      "The log lists each missing or stale step, and the commands for them under `To fix:`. The CLI sorts that list by name, so it is not an install order. Run `avocado install`, which runs the install steps in dependency order (SDK first), then retry the command that failed. Docs: https://docs.peridio.com/developer-reference/lockfiles-and-build-stamps",
   },
   {
     label: "Stamps from an older CLI",
@@ -44,7 +44,7 @@ const STAMP_PATTERNS: Pattern[] = [
     cause:
       "The CLI was upgraded and its stamp format changed. Every stamp that the older CLI wrote now reads as stale, although `avocado.yaml` did not change.",
     suggestion:
-      "This is expected after `avocado upgrade`. Your config needs no edit. Run the commands that the CLI prints under `To fix:` (usually `avocado install`, then `avocado build`) to write new stamps. Docs: https://docs.peridio.com/developer-reference/lockfiles-and-build-stamps",
+      "This is expected after `avocado upgrade`. Your config needs no edit. Run `avocado install`, then `avocado build`, to write new stamps. Do not run the `To fix:` list line by line: the CLI sorts it by name, not in install order. Docs: https://docs.peridio.com/developer-reference/lockfiles-and-build-stamps",
   },
 ];
 
@@ -546,7 +546,7 @@ export function renderFallbackDiagnosis(
   if (kind === "deploy") {
     out += `1. **Check SSH and the network to the device.** Run \`ping -c 1 <device-ip>\` and \`ssh -o ConnectTimeout=5 -o BatchMode=yes root@<device-ip> true\`. Both return on their own, so they cannot hang an automated run. Deploy pushes the runtime over SSH and HTTP, so the device must be on and reachable from this host.\n`;
     out += `2. **Check \`avocadoctl\` on the device.** Run \`ssh -o ConnectTimeout=5 -o BatchMode=yes root@<device-ip> avocadoctl status\`. A missing or failing \`avocadoctl\` stops the runtime update on the device.\n`;
-    out += `3. **Compare against the deploy refusals the MCP knows:** extension \`image.verity: true\` (provision instead), no \`root.json\` in the runtime (set \`runtimes.<name>.signing.key\`), and stale or missing build stamps (run the commands that the CLI lists under \`To fix:\`, in order).\n`;
+    out += `3. **Compare against the deploy refusals the MCP knows:** extension \`image.verity: true\` (provision instead), no \`root.json\` in the runtime (set \`runtimes.<name>.signing.key\`), and stale or missing build stamps (run \`avocado install\`, then \`avocado build\`. The CLI sorts its \`To fix:\` list by name, so do not run it line by line).\n`;
     out += `4. **Read the device logs.** Run \`ssh -o ConnectTimeout=5 -o BatchMode=yes root@<device-ip> journalctl -b --no-pager | tail -n 100\`.\n`;
     out += `5. **\`search-docs\`** with a short, distinctive substring of the error line. Then report the error to the user with the extracted lines verbatim. Do not make up a cause.\n`;
     out += `\n**Do not interpret an empty pattern list as "the deploy is fine."** The log has errors. If this failure class is one you see often, file it at \`src/lib/diagnostics.ts\` so future runs get a curated fingerprint.\n`;
