@@ -42,10 +42,24 @@ install stages), \`username\`/\`password\`, \`ca\`, \`tls_verify\`,
 install in the \`ext\` stage and runtime packages in the \`runtime\` stage.
 
 Put credentials in \`username\`/\`password\` with \`{{ env.X }}\` references.
-The CLI refuses credentials inside a URL. The MCP expands only \`AVOCADO_*\`
-variables in feed settings. Give feed variables an \`AVOCADO_\` prefix so the
-package tools can read the feed. With another name, the CLI still reads the
-feed, and the MCP lists it as not checked.
+The CLI refuses credentials inside a URL.
+
+The MCP reads feed settings with less access than the CLI, so a project
+cannot make it send the server's secrets to a host the project names:
+
+- It does not read feed credentials from its environment. A feed whose
+  \`username\` or \`password\` reads \`{{ env.X }}\` is listed as not
+  checked.
+- In other feed settings, it expands only \`AVOCADO_*\` variables whose
+  names do not look like secrets. A name that contains \`TOKEN\`,
+  \`PASSWORD\`, \`PASSWD\`, \`PIN\`, \`SECRET\`, \`KEY\` or \`CRED\` after
+  the prefix is not expanded, and \`AVOCADO_CONNECT_TOKEN\` and
+  \`AVOCADO_PKCS11_PIN\` are never expanded. A feed that reads such a
+  variable, or a variable without the \`AVOCADO_\` prefix, is listed as not
+  checked. This is also true when avocado.lock records the feed URL.
+
+The CLI still reads these feeds with these variables. To confirm a package
+in a feed that the MCP lists as not checked, run \`avocado install\`.
 
 \`\`\`yaml
 distro:
@@ -61,8 +75,8 @@ repos:
     stages: [ext, runtime]
   vendor:
     url: https://rpm.vendor.example/$releasever/target/$target
-    username: "{{ env.AVOCADO_VENDOR_USER }}"
-    password: "{{ env.AVOCADO_VENDOR_TOKEN }}"
+    username: "{{ env.VENDOR_USER }}"
+    password: "{{ env.VENDOR_PASSWORD }}" # the MCP lists this feed as not checked
     targets: [raspberrypi5]
 \`\`\`
 

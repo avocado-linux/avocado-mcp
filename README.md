@@ -205,7 +205,13 @@ Without a project, the server reads from public HTTPS endpoints, except for the 
 
 With `projectDir`, the package feeds come from the project's configuration, so they can be any HTTP or HTTPS host or local path the project names, the same feeds `avocado install` reads. Pass `projectDir` only for a project you trust (see `SECURITY.md`).
 
-In feed settings, `{{ env.X }}` expands only `AVOCADO_*` variables. A project or a `yaml` argument cannot make the server send its other environment variables, such as `GITHUB_TOKEN`, to a feed host. A feed whose settings read another variable is listed as not checked, with the variable's name. Text that came from an expansion is masked in feed URLs in tool output.
+A project or a `yaml` argument cannot make the server send its own secrets, such as `GITHUB_TOKEN` or `AVOCADO_CONNECT_TOKEN`, to a feed host:
+
+- `username` and `password` in a feed never read the server's environment. A feed whose credentials read `{{ env.X }}` is listed as not checked. A literal credential in the project file is sent only to that feed's origin.
+- In other feed settings, `{{ env.X }}` expands only `AVOCADO_*` variables whose names do not look like secrets. `AVOCADO_CONNECT_TOKEN`, `AVOCADO_PKCS11_PIN`, and any name that matches `TOKEN`, `PASSWORD`, `PASSWD`, `PIN`, `SECRET`, `KEY` or `CRED` after the prefix are not expanded.
+- A feed that reads a variable the server does not expand is listed as not checked, with the variable's name. The server does not fetch it, even when the lock file records its URL, because that URL holds the expanded value.
+
+The CLI still reads these feeds. Text that came from an expansion is masked in feed URLs in tool output.
 
 - **The package feed** — RPM repodata (targets manifest, `repomd.xml`, `primary.xml.gz`). Used by `list-targets`, `search-packages`, `describe-package`, `check-package-coverage`, `add-package-to-extension`, `explain-build-error`, `init-project`, `get-provisioning-steps`, and reported by `environment-check`. Pass `projectDir` and the feed is resolved the same way avocado-cli resolves it (`src/lib/feed-config.ts`):
   - repo URL: `AVOCADO_REPO_URL` > `AVOCADO_SDK_REPO_URL` > `distro.repo.url` > `repos.<distro>.url` > `sdk.repo_url` > `https://repo.avocadolinux.org`
