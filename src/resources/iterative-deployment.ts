@@ -285,7 +285,7 @@ For new packages: \`rpm -q <name>\` confirms install. For service changes: \`sys
 | Purpose | First-time device setup; clean reflash | Iterative push of changes to running device |
 | Output | Bootable image written to media (SD / USB / NVMe / eMMC) | OTA-style update applied via avocadoctl |
 | Device state required | None (or media inserted) | Running, on network, sshd reachable |
-| Speed | Minutes (full image write) | Seconds (delta push of changed extensions) |
+| Speed | Minutes (full image write) | Seconds for extension changes. An OS change (kernel, rootfs, initramfs) sends and writes an OS bundle, then reboots, so it takes longer. |
 | Reboot required | Yes (to boot into new image) | No for extension changes. Yes for an OS change (A/B slot switch). |
 | When to use | First boot, partition-layout change, new seeded \`/var\` content, clean wipe | Every iteration after the first provision, including kernel and rootfs changes |
 
