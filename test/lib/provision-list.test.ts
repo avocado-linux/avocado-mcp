@@ -66,3 +66,12 @@ test("renders positional-runtime commands and --env settings", () => {
   assert.match(out, /`AVOCADO_HYPERVISOR` \(string, optional\): Hypervisor/);
   assert.match(out, /--env NAME=<value>/);
 });
+
+test("an unsafe profile name from the CLI is skipped, not put in a command", () => {
+  const list = parseProvisionList(AVAILABLE)!;
+  list.profiles!.push({ name: "x; rm -rf ~", fields: [] });
+  const out = renderProvisionList(list, "dev");
+  assert.doesNotMatch(out, /avocado provision dev --profile x;/);
+  assert.match(out, /Skipped profile "x; rm -rf ~"/);
+  assert.match(out, /`avocado provision dev --profile ufs`/);
+});

@@ -128,8 +128,11 @@ const COMMON_BAUD = 115200;
 export function getDeviceConnectionInfo(
   target: string,
   data: HardwareData | null,
+  board?: string,
 ): DeviceConnectionInfo {
-  const info = data ? lookupTarget(data, target) : null;
+  // A board narrows the lookup, so a MIC-733 does not get the wiring of the
+  // dev kit that shares its target.
+  const info = data ? lookupTarget(data, target, board) : null;
   const serial = info?.entries.find((e) => e.serial)?.serial;
   const base: DeviceConnectionInfo = {
     target,

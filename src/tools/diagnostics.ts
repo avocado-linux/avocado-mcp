@@ -10,7 +10,7 @@ import {
   INVESTIGATION_STREAMS,
   type StreamProbe,
 } from "../lib/diagnostics.js";
-import { RepoClient } from "../lib/repo-client.js";
+import { RepoClient, isSafeSegment } from "../lib/repo-client.js";
 import type { FeedContext } from "../lib/feed-config.js";
 import {
   feedArgsShape,
@@ -25,6 +25,7 @@ import {
   isVirtual,
   provisioningText,
   provisionCommand,
+  runProvisionCommand,
   unavailableText,
   unknownTargetText,
 } from "../lib/hardware-data.js";
@@ -265,6 +266,18 @@ export function registerDiagnosticsTools(
     async ({ target, board, runtime, ...feedArgs }) => {
       const feed = feedContextFrom(feedArgs);
       const rt = runtime?.trim() || "dev";
+      // The runtime goes into the shell commands this tool prints.
+      if (!isSafeSegment(rt)) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `# get-provisioning-steps failed\n\nInvalid runtime: ${JSON.stringify(rt)}. Use a runtime name from avocado.yaml, such as \`dev\`.`,
+            },
+          ],
+          isError: true,
+        };
+      }
       const validTargets = await repoClient.getTargetsConfig(feed.base);
       if (!validTargets) {
         return {
@@ -302,14 +315,7 @@ export function registerDiagnosticsTools(
           out += provisioningText(info, rt);
         } else {
           out += provisioningText(info, rt);
-          const profiles = info.entries.flatMap((e) =>
-            (e.provisioning?.options ?? []).map((o) => o.profile),
-          );
-          out += runSection(
-            profiles.length === 1
-              ? provisionCommand(rt, profiles[0])
-              : `${provisionCommand(rt)} --profile <profile>`,
-          );
+          out += runSection(runProvisionCommand(info, rt));
         }
       }
       out += feed.describe();

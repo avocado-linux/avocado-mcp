@@ -10,8 +10,11 @@ import {
   targetInfoText,
   lookupTarget,
   provisionCommand,
+  isSafeProfile,
+  skippedProfileText,
   unavailableText,
 } from "../lib/hardware-data.js";
+import { isSafeSegment } from "../lib/repo-client.js";
 
 const execFileP = promisify(execFile);
 
@@ -67,11 +70,16 @@ export function renderProvisionList(
 ): string {
   let out = `**Target:** \`${list.target ?? "unknown"}\`\n`;
   if (list.default) out += `**Default profile:** \`${list.default}\`\n`;
-  const profiles = list.profiles ?? [];
-  if (profiles.length === 0) {
+  const all = list.profiles ?? [];
+  // Profile names from the CLI go into the printed shell commands.
+  const profiles = all.filter((p) => isSafeProfile(p.name));
+  const skipped = all.filter((p) => !isSafeProfile(p.name));
+  if (profiles.length === 0 && skipped.length === 0) {
     return out + `\nThe manifest declares no provisioning profiles.\n`;
   }
-  out += `\n| Profile | Command |\n|---|---|\n`;
+  if (profiles.length > 0) {
+    out += `\n| Profile | Command |\n|---|---|\n`;
+  }
   for (const p of profiles) {
     out += `| \`${p.name}\` | \`${provisionCommand(runtime, p.name)}\` |\n`;
   }
@@ -83,6 +91,7 @@ export function renderProvisionList(
       out += `- \`${f.name}\` (${f.type}, ${f.required ? "required" : "optional"})${what ? `: ${what}` : ""}\n`;
     }
   }
+  for (const p of skipped) out += `\n${skippedProfileText(p.name)}\n`;
   return out;
 }
 
@@ -96,15 +105,20 @@ async function docsFallback(
   const data = await getHardwareData();
   if (!data) return unavailableText(target);
   const info = lookupTarget(data, target);
-  const options = (info?.entries ?? []).flatMap(
+  const all = (info?.entries ?? []).flatMap(
     (e) => e.provisioning?.options ?? [],
   );
-  if (options.length === 0) {
+  const options = all.filter((o) => isSafeProfile(o.profile));
+  if (all.length === 0) {
     return `The docs data lists no profiles for \`${target}\`. Call \`get-target-info\` for the board page.\n`;
   }
   let out = `Profiles in the docs data for \`${target}\` (call \`get-target-info\` for the full steps):\n\n`;
   for (const o of options) {
     out += `- ${o.label ?? o.id}: \`${provisionCommand(runtime, o.profile)}\`\n`;
+  }
+  for (const o of all) {
+    if (!isSafeProfile(o.profile))
+      out += `- ${skippedProfileText(o.profile!)}\n`;
   }
   return out;
 }
@@ -183,7 +197,21 @@ export function registerHardwareTools(server: McpServer): void {
     async ({ projectDir, target, runtime }, extra) => {
       await assertWorkstationChannel();
       const rt = runtime?.trim() || "dev";
-      const dir = projectDir.replace(/\/+$/, "");
+      // The runtime goes into the shell commands this tool prints.
+      if (!isSafeSegment(rt)) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `# list-provision-profiles failed\n\nInvalid runtime: ${JSON.stringify(rt)}. Use a runtime name from avocado.yaml, such as \`dev\`.`,
+            },
+          ],
+          isError: true,
+        };
+      }
+      // Resolve once, so the existence check, the cwd and --config all use
+      // the same directory when the caller passes a relative path.
+      const dir = path.resolve(projectDir);
       const configPath = path.join(dir, "avocado.yaml");
       if (!existsSync(configPath)) {
         return {
