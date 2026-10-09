@@ -847,3 +847,17 @@ test("/provision-device rechecks the disk for the target and passes the runtime"
     /call `get-provisioning-steps` with the chosen target and `runtime: "prod"`/,
   );
 });
+
+test("/provision-device keeps the host OS check for QEMU", async () => {
+  const { client } = await connect();
+  const res = await client.getPrompt({
+    name: "provision-device",
+    arguments: { target: "qemux86-64" },
+  });
+  const text = (res.messages[0].content as { text: string }).text;
+  const qemu = text.split("\n").find((l) => l.includes("For QEMU targets"));
+  assert.ok(qemu);
+  assert.doesNotMatch(qemu, /none of the above/i);
+  assert.match(qemu, /skip the serial console, media and device-state checks/);
+  assert.match(qemu, /Still check the host OS/);
+});
