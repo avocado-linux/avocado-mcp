@@ -226,7 +226,6 @@ export function registerProjectTools(
         out += `Then:\n\n`;
       }
       const rt = runtimeName ?? "dev";
-      out += `Save the YAML below as \`avocado.yaml\` at your project root, then:\n\n`;
       out += `**For a HUMAN running these in their own terminal:**\n\n`;
       out += "```bash\n";
       out += `avocado install\n`;
