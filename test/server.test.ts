@@ -118,6 +118,27 @@ test("unknown tool name is an error result, not a hang", async () => {
   assert.equal(res.isError, true);
 });
 
+test("an unknown deploy log gets deploy next steps, not build ones", async () => {
+  const { client } = await connect();
+  const res = await client.callTool({
+    name: "explain-build-error",
+    arguments: {
+      log: "Error: something new went wrong on the device\nexit code: 1",
+      command: "deploy",
+      targets: ["raspberrypi5"],
+    },
+  });
+  assert.notEqual(res.isError, true);
+  const text = (res.content as { text: string }[])[0].text;
+  assert.match(text, /deploy failures/);
+  assert.match(text, /avocadoctl status/);
+  assert.match(text, /journalctl/);
+  assert.doesNotMatch(text, /build failures|validate-yaml|search-packages/);
+  // No package lookup for a deploy log.
+  const sc = res.structuredContent as { investigations?: unknown };
+  assert.equal(sc.investigations, undefined);
+});
+
 test("a flag-like serial port is rejected by the tool's input schema", async () => {
   // The port pattern lives on the zod field, so the SDK rejects it before the
   // handler — the LLM is told the constraint rather than getting a bare throw.

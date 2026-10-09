@@ -467,13 +467,16 @@ export function extractLogShape(log: string): LogShape {
   };
 }
 
+/** The command whose log a diagnosis reads. */
+export type LogKind = "build" | "install" | "deploy" | "provision";
+
 /**
  * Render a fallback diagnosis when no curated pattern matched but the log
  * clearly contains error signals. Tells the LLM honestly that we don't
  * recognize this failure class, then routes it to productive next steps.
  */
 export function renderFallbackDiagnosis(
-  kind: "build" | "provision",
+  kind: LogKind,
   shape: LogShape,
 ): string {
   let out = `## ⚠️ No known failure pattern matched\n\n`;
@@ -499,6 +502,15 @@ export function renderFallbackDiagnosis(
   }
 
   out += `**Suggested next steps** (in order, stop when you find a useful lead):\n\n`;
+  if (kind === "deploy") {
+    out += `1. **Check SSH and the network to the device.** Run \`ping <device-ip>\` and \`ssh root@<device-ip> true\`. Deploy pushes the runtime over SSH and HTTP, so the device must be on and reachable from this host.\n`;
+    out += `2. **Check \`avocadoctl\` on the device.** Run \`ssh root@<device-ip> avocadoctl status\`. A missing or failing \`avocadoctl\` stops the runtime update on the device.\n`;
+    out += `3. **Compare against the deploy refusals the MCP knows:** extension \`image.verity: true\` (provision instead), no \`root.json\` in the runtime (set \`runtimes.<name>.signing.key\`), and stale or missing build stamps (run \`avocado build\`).\n`;
+    out += `4. **Read the device logs.** Run \`ssh root@<device-ip> journalctl -b --no-pager | tail -n 100\`.\n`;
+    out += `5. **\`search-docs\`** with a short, distinctive substring of the error line. Then report the error to the user with the extracted lines verbatim. Do not make up a cause.\n`;
+    out += `\n**Do not interpret an empty pattern list as "the deploy is fine."** The log has errors. If this failure class is one you see often, file it at \`src/lib/diagnostics.ts\` so future runs get a curated fingerprint.\n`;
+    return out;
+  }
   out += `1. **\`search-docs\`** with a short, distinctive substring of the error line — usually the verbatim message text without paths or numbers. The Avocado docs site indexes failure modes and CLI behaviour.\n`;
   out += `2. **\`search-packages\` / \`describe-package\`** if any error line names what looks like a package, library, or binary.\n`;
   out += `3. **\`get-reference-file\`** to compare the failing component against a working reference's analogous file (e.g. \`avocado.yaml\`, a hook script, an overlay file).\n`;
@@ -802,7 +814,7 @@ function runPatterns(patterns: Pattern[], log: string): Diagnosis[] {
 }
 
 export function renderDiagnoses(
-  kind: "build" | "provision",
+  kind: LogKind,
   diagnoses: Diagnosis[],
   investigations?: PackageInvestigation[],
   investigationContext?: {
@@ -812,7 +824,9 @@ export function renderDiagnoses(
   },
 ): string {
   const headerName =
-    kind === "build" ? "explain-build-error" : "diagnose-provision-log";
+    kind === "provision" ? "diagnose-provision-log" : "explain-build-error";
+  // The package-feed lookup only applies to build and install logs.
+  const feedLookup = kind === "build" || kind === "install";
   let out = `# ${headerName}\n\n`;
 
   if (diagnoses.length === 0) {
@@ -835,7 +849,11 @@ export function renderDiagnoses(
     } else {
       // No rawLog supplied (older callers / fallback). Generic checks.
       out += `No known failure pattern matched. The log may contain a novel error. Common things to check manually:\n\n`;
-      if (kind === "build") {
+      if (kind === "deploy") {
+        out += `- Can this host reach the device over SSH? \`ssh root@<device-ip> true\`.\n`;
+        out += `- Does \`avocadoctl status\` run on the device?\n`;
+        out += `- What do the device logs say? \`journalctl -b\` on the device.\n`;
+      } else if (feedLookup) {
         out += `- Is every package in your YAML in the repo? Run \`search-packages\`.\n`;
         out += `- Does your YAML validate? Run \`validate-yaml\`.\n`;
         out += `- Is Docker running with enough memory (≥8 GB)?\n`;
@@ -855,7 +873,7 @@ export function renderDiagnoses(
     }
   }
 
-  if (kind === "build" && investigations && investigations.length > 0) {
+  if (feedLookup && investigations && investigations.length > 0) {
     const archMismatchSuspected = investigationContext?.rawLog
       ? ARCH_MISMATCH_FINGERPRINT.test(investigationContext.rawLog)
       : false;
@@ -867,15 +885,11 @@ export function renderDiagnoses(
     for (const inv of investigations) {
       out += renderInvestigation(inv, archMismatchSuspected);
     }
-  } else if (
-    kind === "build" &&
-    investigations &&
-    investigations.length === 0
-  ) {
+  } else if (feedLookup && investigations && investigations.length === 0) {
     out += `## Package investigation\n\n_No package names extracted from the log — couldn't run a cross-channel lookup. If you can isolate the failing package, re-run with that name in mind or call \`describe-package\` directly._\n\n`;
   }
 
-  if (kind === "build" && !investigations) {
+  if (feedLookup && !investigations) {
     out += `\n_Pass \`targets: [...]\` to enable a cross-release package lookup. The tool will extract the failing package(s) from the log and probe your configured feed (pass \`projectDir\`) plus the \`edge\` channel on both releases (\`2024\` and \`2026\`) — the streams ~all users are on — for you._\n`;
   }
 
