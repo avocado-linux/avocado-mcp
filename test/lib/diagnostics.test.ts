@@ -749,3 +749,16 @@ test("an echoed script line from --verbose does not match", () => {
     ["No root.json in the runtime"],
   );
 });
+
+test("a bare 'returned N' below 100 is an exit code", () => {
+  assert.equal(extractLogShape("Command returned 1").exitCode, 1);
+  assert.equal(extractLogShape("Command returned 1").hasErrors, true);
+  assert.equal(extractLogShape("script returned 0").exitCode, 0);
+  for (const log of [
+    "health check returned 200 OK",
+    "returned 100 Continue",
+    "returned 0 warnings",
+  ]) {
+    assert.equal(extractLogShape(log).exitCode, null, log);
+  }
+});

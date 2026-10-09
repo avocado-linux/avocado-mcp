@@ -433,8 +433,10 @@ const ERROR_LINE_RE =
 // The trailing lookahead is what keeps this from matching counters like
 // "returned 0 warnings" / "exited with 2 errors" — those are tallies, not exit
 // codes, and treating them as one lets a benign number mask a real failure.
+// A bare "returned N" counts only below 100, because HTTP statuses start at
+// 100 ("returned 200 OK" is not an exit code).
 const EXIT_CODE_RE =
-  /\b(?:exit(?:ed with)?(?:\s+(?:code|status))?|returned (?:non-zero )?exit (?:code|status))\s*[:=]?\s*(\d+)\b(?!\s*(?:warning|error|result|package|match|file|byte|line|test|item|second)s?\b)/i;
+  /\b(?:(?:exit(?:ed with)?(?:\s+(?:code|status))?|returned (?:non-zero )?exit (?:code|status))\s*[:=]?\s*(\d+)|returned (\d{1,2}))\b(?!\s*(?:warning|error|result|package|match|file|byte|line|test|item|second)s?\b)/i;
 const FILE_PATH_RE =
   /(?:^|[\s'"`(])((?:\/[A-Za-z0-9._+\-/]+|[A-Za-z]:\\[A-Za-z0-9._+\-\\]+))(?=[\s'"`):,;]|$)/g;
 const COMMAND_RE = /^\s*\$\s+(.+?)$|^\+ (.+?)$|^Running:\s+(.+?)$/m;
@@ -482,7 +484,8 @@ export function extractLogShape(log: string): LogShape {
   // trailing "returned 0 warnings" cannot mask a failure here.
   const exitMatches = Array.from(log.matchAll(new RegExp(EXIT_CODE_RE, "gi")));
   if (exitMatches.length > 0) {
-    const n = Number(exitMatches[exitMatches.length - 1]![1]);
+    const last = exitMatches[exitMatches.length - 1]!;
+    const n = Number(last[1] ?? last[2]);
     if (Number.isFinite(n)) exitCode = n;
   }
 
