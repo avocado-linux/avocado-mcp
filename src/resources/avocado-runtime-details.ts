@@ -84,8 +84,8 @@ For every command, see https://docs.peridio.com/developer-reference/avocadoctl/c
 
 ## Users and auth
 
-- Dev runtime: passwordless \`root\` (\`config\` extension in the \`init-project\` template sets it). SSH login as \`root\` works with no password.
-- This is **not for production**. The \`config\` extension comment in the starter YAML says so explicitly.
+- Dev runtime: passwordless \`root\`. The \`avocado init\` template sets it in the top-level \`permissions.dev\` profile (\`users.root.password: \"\"\`), which \`rootfs\` and \`initramfs\` use. SSH login as \`root\` works with no password.
+- This is **not for production**. Give production runtimes their own \`permissions\` profile with a hashed password.
 
 ## What is NOT on the device
 
