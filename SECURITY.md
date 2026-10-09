@@ -92,12 +92,25 @@ recommend:
   hosts, never sends the project's files, and redacts credentials in feed URLs
   from its output.
 
-  In feed settings, `{{ env.X }}` expands only `AVOCADO_*` variables. The
-  agent decides when to pass `projectDir`, so a project must not be able to
-  make the server send its own secrets, such as `GITHUB_TOKEN`, to a host the
-  project names. A feed whose settings read any other variable is not
-  fetched, and the tools list it as not checked. Text that came from an
-  expansion is masked in every feed URL the tools show.
+  The agent decides when to pass `projectDir`, so a project must not be able
+  to make the server send its own secrets, such as `GITHUB_TOKEN` or
+  `AVOCADO_CONNECT_TOKEN`, to a host the project names. The server enforces
+  these rules:
+
+  - Feed `username` and `password` never read the server's environment.
+  - In other feed settings, `{{ env.X }}` expands only `AVOCADO_*`
+    variables. `AVOCADO_CONNECT_TOKEN`, `AVOCADO_PKCS11_PIN`, and names that
+    match `TOKEN`, `PASSWORD`, `PASSWD`, `PIN`, `SECRET`, `KEY` or `CRED`
+    after the prefix are not expanded.
+  - A feed that reads a variable the server does not expand is not fetched,
+    even when the lock file records its URL. The tools list it as not
+    checked.
+
+  The name rule is a pattern. A secret in an `AVOCADO_*` variable with a
+  name that does not match it, for example `AVOCADO_VENDOR_AUTH`, can still
+  reach a feed URL. Do not keep secrets in such variables in the server's
+  environment. Text that came from an expansion is masked in every feed URL
+  the tools show.
 
   See the *How it talks to the world* section of the README for details.
 - It is **stdio-only**: there is no hosted endpoint, no listening port, and no
