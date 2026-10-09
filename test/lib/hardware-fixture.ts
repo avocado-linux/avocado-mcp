@@ -497,6 +497,53 @@ export const TARGETS = {
     gettingStartedUrl: "/developer-reference/getting-started/any-target",
     hardwareUrl: "/hardware/compulab/iot-gate-imx8plus",
   },
+  raspberrypi5: {
+    name: "Raspberry Pi 5",
+    target: "raspberrypi5",
+    releases: { "2024": "supported", "2026": "in-progress" },
+    category: "sd",
+    provisioning: {
+      hostOs: ["macOS", "Linux"],
+      prerequisites: [
+        "microSD card (8 GB+), or an NVMe SSD installed in the Pi",
+      ],
+      options: [
+        {
+          id: "sd",
+          label: "SD card",
+          profile: "sd",
+          media: "microSD card (8GB+)",
+          autoMount: true,
+          prerequisites: ["SD card reader"],
+          description:
+            "Insert your SD card into a reader on your host, then run the sd profile, which writes the image directly to the SD card:",
+          command: "avocado provision -r dev --profile sd",
+          bootInstructions:
+            "With the SD card inserted, apply power to the Raspberry Pi 5 — it boots from the card.",
+        },
+        {
+          id: "usb",
+          label: "USB (device mode)",
+          profile: "usb",
+          media: "SD card or NVMe SSD in the Pi (flashed in place over USB)",
+          autoMount: true,
+          prerequisites: ["USB-C data cable (Pi to host)"],
+          description:
+            "Flash the Pi's storage in place over USB, with no card reader — this also works for an NVMe SSD installed in the Pi. With the Pi powered off and the target storage in place, press and hold the power button, then connect a USB-C data cable from the Pi to your host to apply power, releasing the button once it's connected. The Pi boots into USB device mode and your host detects it as a USB mass storage device. Note that the Pi is powered over this same USB-C cable: the Pi 5 targets a 5 V/5 A (27 W) supply and most host ports deliver less, so use a data-capable USB-C cable and a host port that can source enough current (an NVMe SSD adds to the draw); if provisioning is unreliable, use the SD-card method instead. The Pi 5's status LED confirms power: it shows red in standby and turns steady green once powered with enough current — if it won't turn green, stays red, or flickers, the supply is too weak. Then provision with the usb profile:",
+          command: "avocado provision -r dev --profile usb",
+          bootInstructions:
+            "Disconnect the USB-C data cable, then apply power to the Raspberry Pi 5 — it boots from its storage.",
+        },
+      ],
+    },
+    serial: {
+      baud: 115200,
+      voltage: "3.3V",
+      command: "tio -b 115200 /dev/ttyUSB0",
+    },
+    gettingStartedUrl: "/developer-reference/getting-started/raspberry-pi",
+    hardwareUrl: "/hardware/raspberry-pi/raspberry-pi-5",
+  },
   raspberrypi4: {
     name: "Raspberry Pi 4 Model B",
     target: "raspberrypi4",
