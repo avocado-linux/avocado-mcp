@@ -606,6 +606,39 @@ test("list-provision-profiles resolves a relative projectDir once", async () => 
   }
 });
 
+test("list-provision-profiles docs fallback uses the board in avocado.yaml", async () => {
+  const restore = serveHardwareFixture();
+  const realBinary = process.env.AVOCADO_BINARY;
+  const dir = mkdtempSync(join(tmpdir(), "avocado-mcp-board-"));
+  writeFileSync(
+    join(dir, "avocado.yaml"),
+    "default_target: jetson-agx-orin-devkit\ndefault_target_board: mic-733-ao5a1\n",
+  );
+  // A fake CLI for a project that is not installed yet.
+  const bin = join(dir, "fake-avocado");
+  writeFileSync(
+    bin,
+    `#!/bin/sh\necho '{"available":false,"reason":"not installed","target":"jetson-agx-orin-devkit"}'\n`,
+  );
+  chmodSync(bin, 0o755);
+  process.env.AVOCADO_BINARY = bin;
+  try {
+    const { client } = await connect();
+    const res = await client.callTool({
+      name: "list-provision-profiles",
+      arguments: { projectDir: dir },
+    });
+    const text = (res.content as { text: string }[])[0].text;
+    assert.match(text, /`jetson-agx-orin-devkit` board `mic-733-ao5a1`/);
+    assert.doesNotMatch(text, /tegraflash/);
+  } finally {
+    restore();
+    rmSync(dir, { recursive: true, force: true });
+    if (realBinary === undefined) delete process.env.AVOCADO_BINARY;
+    else process.env.AVOCADO_BINARY = realBinary;
+  }
+});
+
 test("environment-check says when the disk check fell back to 8 GB", async () => {
   const realFetch = globalThis.fetch;
   globalThis.fetch = (async () => {
