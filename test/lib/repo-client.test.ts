@@ -2,11 +2,19 @@ import { test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { gzipSync } from "node:zlib";
 import {
+  createServer,
+  type IncomingMessage,
+  type ServerResponse,
+} from "node:http";
+import { createServer as createHttpsServer } from "node:https";
+import type { AddressInfo } from "node:net";
+import {
   DEFAULT_FEED,
   NO_TARGET_REPOS,
   RepoClient,
   redactUrl,
   validateFeed,
+  type ExtraFeed,
 } from "../../src/lib/repo-client.js";
 
 const realFetch = globalThis.fetch;
@@ -296,4 +304,87 @@ test("skipExtRepo leaves out the target-ext repo, and only that repo", async () 
   calls = stubFeed({ targets, primaryXml: PRIMARY });
   await new RepoClient().fetchTargetPackages("t");
   assert.ok(calls.some((u) => u.includes("/target/t-ext/repodata/")));
+});
+
+test("redactUrl masks userinfo that holds a / or a #", () => {
+  assert.equal(redactUrl("https://user:ab/cd@host/r"), "https://***@host/r");
+  assert.equal(redactUrl("https://user:ab#cd@host/r"), "https://***@host/r");
+  // A query value with an @ is not userinfo.
+  assert.equal(redactUrl("https://host/r?mail=a@b"), "https://host/r?mail=***");
+});
+
+// Self-signed, for the node:https path. Test fixture only.
+const TEST_KEY = `-----BEGIN PRIVATE KEY-----
+MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgDyZqN3UkoyexBnZc
+OgJY9kLxpG6j8cDgxrUb85nxBfWhRANCAATV4e/D5I2jolNXrCfYy50BT7h8yjUU
+D3CGHibyiZAb2ZEtqCIWDOuejtcX6+GsnR8Ohq9qWI/1trxUZjFk8i3m
+-----END PRIVATE KEY-----
+`;
+const TEST_CERT = `-----BEGIN CERTIFICATE-----
+MIIBgDCCASWgAwIBAgIUK9PnJpx37aMaVfOtwq7LC8td5SwwCgYIKoZIzj0EAwIw
+FDESMBAGA1UEAwwJbG9jYWxob3N0MCAXDTI2MTAwOTIwMjQxNloYDzIxMjYwOTE1
+MjAyNDE2WjAUMRIwEAYDVQQDDAlsb2NhbGhvc3QwWTATBgcqhkjOPQIBBggqhkjO
+PQMBBwNCAATV4e/D5I2jolNXrCfYy50BT7h8yjUUD3CGHibyiZAb2ZEtqCIWDOue
+jtcX6+GsnR8Ohq9qWI/1trxUZjFk8i3mo1MwUTAdBgNVHQ4EFgQUvK8qrZ9a7Jzx
+CW3yuZ7rvQkVIdswHwYDVR0jBBgwFoAUvK8qrZ9a7JzxCW3yuZ7rvQkVIdswDwYD
+VR0TAQH/BAUwAwEB/zAKBggqhkjOPQQDAgNJADBGAiEA52T9bdCfXxEIXy2kmHF/
+P4Gfawo5CUVa7X1V9R5FgWkCIQD491Wp8j8i06l7CoSxsmTt4GxoAaORbge3Izon
+n7U6VQ==
+-----END CERTIFICATE-----
+`;
+
+test("a feed that never finishes its body times out on the fetch and node:https paths, and is not cached", async () => {
+  const repomd = `<repomd><data type="primary"><location href="repodata/p-primary.xml.gz"/></data></repomd>`;
+  const hits: string[] = [];
+  // Headers and part of the body, then the connection stays open.
+  const hang = (req: IncomingMessage, res: ServerResponse) => {
+    hits.push(req.url ?? "");
+    if (req.url?.endsWith("repomd.xml")) return res.end(repomd);
+    res.writeHead(200);
+    res.write(gzipSync(PRIMARY).subarray(0, 10));
+  };
+  const plain = createServer(hang);
+  const secure = createHttpsServer({ key: TEST_KEY, cert: TEST_CERT }, hang);
+  await new Promise<void>((r) => plain.listen(0, "127.0.0.1", r));
+  await new Promise<void>((r) => secure.listen(0, "127.0.0.1", r));
+  const port = (s: { address(): unknown }) => (s.address() as AddressInfo).port;
+  const client = new RepoClient(200);
+  const viaFetch: ExtraFeed = {
+    name: "plain",
+    priority: 20,
+    url: `http://127.0.0.1:${port(plain)}/r`,
+  };
+  const viaHttps: ExtraFeed = {
+    name: "tls",
+    priority: 30,
+    url: `https://127.0.0.1:${port(secure)}/r`,
+    tls: { insecure: true },
+  };
+  try {
+    for (const feed of [viaFetch, viaHttps]) {
+      await assert.rejects(
+        () => client.fetchExtraFeed(feed),
+        /did not finish within 0\.2 s/,
+      );
+    }
+    const primaries = () => hits.filter((u) => u.endsWith(".xml.gz")).length;
+    assert.equal(primaries(), 2);
+    // The timed-out entries left the cache, so a retry fetches again.
+    await assert.rejects(() => client.fetchExtraFeed(viaFetch));
+    assert.equal(primaries(), 3);
+
+    // One hung feed no longer keeps the whole lookup from settling.
+    const r = await client.fetchTargetPackages("t", {
+      ...DEFAULT_FEED,
+      baseUrl: `http://127.0.0.1:${port(plain)}`,
+      extraFeeds: [viaHttps],
+    });
+    assert.equal(r.errors.length, 2, r.errors.join("\n"));
+    assert.match(r.errors[1]!, /^tls: .*did not finish within 0\.2 s/);
+  } finally {
+    plain.closeAllConnections();
+    secure.closeAllConnections();
+    plain.close();
+    secure.close();
+  }
 });

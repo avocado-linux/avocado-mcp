@@ -32,6 +32,12 @@
  * from composed extension configs). `{{ env.X }}` and `{{ config.a.b }}`
  * templates in the fields we read are interpolated; anything else is left
  * as-is and reported in `notes`.
+ *
+ * `{{ env.X }}` expands only `AVOCADO_*` variables. The agent decides when to
+ * pass `projectDir`, so a project must not be able to make the server send
+ * its own secrets (for example `GITHUB_TOKEN`) to a host the project names.
+ * A feed whose settings read any other variable is not checked. Text that
+ * came from an expansion is masked in every URL the tools show.
  */
 
 import { existsSync, readFileSync, statSync } from "fs";
@@ -40,6 +46,7 @@ import { parse as parseYaml } from "yaml";
 import {
   DISTRO_FEED_NAME,
   redactUrl,
+  shownUrl,
   validateRepoUrl,
   type ExtraFeed,
   type FeedSpec,
@@ -146,8 +153,12 @@ export interface ResolveInput {
   baseDir?: string;
   /** `src_dir`, or the config dir. `repos:` paths resolve against it. */
   projectRoot?: string;
-  /** Resolve `repos:` feeds too (needs `target`). Default true. */
-  named?: boolean;
+  /**
+   * Resolve only the `repos:` feeds that follow the distro releasever (a
+   * `url:` with `$releasever` and no release of its own). Used to probe
+   * another stream: the other feeds do not change with it.
+   */
+  streamOnly?: boolean;
   /** Install stage the caller needs. Default: `ext` or `runtime`. */
   stage?: PackageStage;
   configPath?: string;
@@ -174,27 +185,42 @@ function getPath(root: unknown, path: string[]): unknown {
 }
 
 const TEMPLATE_RE = /\{\{\s*([^}]+?)\s*\}\}/g;
+const ENV_TEMPLATE_RE = /\{\{\s*env\.([^}\s]+)\s*\}\}/g;
+
+/** The only env vars a feed template may read (see the top of this file). */
+const EXPANDABLE_ENV_RE = /^AVOCADO_/;
+
+/** What interpolation reads, and where it records notes and masks. */
+interface Interp {
+  config: unknown;
+  env: Record<string, string | undefined>;
+  notes: string[];
+  /** Every env value an expansion produced. */
+  masks: string[];
+}
 
 /**
  * Interpolate the subset of CLI templates we can evaluate outside the CLI.
- * `env.X` → env value (empty when unset, like the CLI); `config.a.b` → main
- * config value; `avocado.distro.{version,release,channel}` → main config
- * distro value. Anything else is left in place and reported.
+ * `env.AVOCADO_X` → env value (empty when unset, like the CLI); `config.a.b`
+ * → main config value; `avocado.distro.{version,release,channel}` → main
+ * config distro value. Any other `env.X` is left in place, and the caller
+ * reports it with `blockedEnvVars`. Anything else is left in place and
+ * reported.
  */
-function interpolate(
-  value: string,
-  config: unknown,
-  env: Record<string, string | undefined>,
-  field: string,
-  notes: string[],
-): string {
+function interpolate(value: string, ctx: Interp, field: string): string {
+  const { config, env, notes } = ctx;
   let out = value;
   for (let pass = 0; pass < 10 && TEMPLATE_RE.test(out); pass++) {
     TEMPLATE_RE.lastIndex = 0;
     const before = out;
     out = out.replace(TEMPLATE_RE, (whole, expr: string) => {
       const [ns, ...rest] = expr.split(".");
-      if (ns === "env" && rest.length === 1) return env[rest[0]] ?? "";
+      if (ns === "env" && rest.length === 1) {
+        if (!EXPANDABLE_ENV_RE.test(rest[0])) return whole;
+        const v = env[rest[0]] ?? "";
+        if (v) ctx.masks.push(v);
+        return v;
+      }
       if (ns === "config" && rest.length > 0) {
         const v = getPath(config, rest);
         if (typeof v === "string" || typeof v === "number") return String(v);
@@ -219,6 +245,22 @@ function interpolate(
   return out;
 }
 
+/** Env vars in `{{ env.X }}` templates left in a value because they are not `AVOCADO_*`. */
+function blockedEnvVars(value: string): string[] {
+  return [
+    ...new Set(
+      [...value.matchAll(ENV_TEMPLATE_RE)]
+        .map((m) => m[1])
+        .filter((name) => !EXPANDABLE_ENV_RE.test(name)),
+    ),
+  ];
+}
+
+/** Why a feed that reads a blocked env var is not checked. */
+function blockedReason(what: string, names: string[]): string {
+  return `${what} reads ${names.map((n) => `\`env.${n}\``).join(", ")}. The MCP expands only \`AVOCADO_*\` environment variables in feed settings, so it does not send other variables to a feed host.`;
+}
+
 function nonEmpty(v: string | undefined): string | undefined {
   return v !== undefined && v !== "" ? v : undefined;
 }
@@ -233,20 +275,26 @@ export function resolveFeed(input: ResolveInput): ResolvedFeed {
   const cfg = input.config;
   const label = input.configLabel ?? "avocado.yaml";
   const notes: string[] = [];
+  const masks: string[] = [];
+  const interp: Interp = { config: cfg, env, notes, masks };
 
   const cfgString = (path: string[]): string | undefined => {
     const raw = getPath(cfg, path);
     if (raw === undefined || raw === null) return undefined;
     if (typeof raw !== "string" && typeof raw !== "number") return undefined;
-    return interpolate(String(raw), cfg, env, path.join("."), notes);
+    return interpolate(String(raw), interp, path.join("."));
   };
 
   // The distro feed's `repos:` entry, as in avocado-cli `distro_feed_def`:
   // a string `distro.repo` names it, no `distro.repo` means `avocado`, and an
-  // inline block means there is none.
+  // inline block means there is none. The CLI interpolates the config before
+  // this lookup, so a templated name selects `repos.<value>`. A name is not
+  // part of a URL, so its expansion is not masked.
   const distroRef = getPath(cfg, ["distro", "repo"]);
   const distroName =
-    typeof distroRef === "string" ? distroRef : DISTRO_FEED_NAME;
+    typeof distroRef === "string"
+      ? interpolate(distroRef, { ...interp, masks: [] }, "distro.repo")
+      : DISTRO_FEED_NAME;
   const hasDistroDef = asObj(distroRef) === undefined;
   const defString = (k: string): string | undefined =>
     hasDistroDef ? cfgString(["repos", distroName, k]) : undefined;
@@ -490,23 +538,38 @@ export function resolveFeed(input: ResolveInput): ResolvedFeed {
   const manifestPath = releasever.replace(/\/snapshots\/[^/]+$/, "");
   const tls = ca || insecure ? { ca, insecure } : undefined;
 
-  const named =
-    input.named !== false && input.target
-      ? resolveNamedFeeds({
-          config: cfg,
-          env,
-          target: input.target,
-          distroName,
-          distroReleasever: releasever,
-          projectRoot: input.projectRoot,
-          lock: input.lock,
-          stage: input.stage,
-          notes,
-        })
+  // The values the distro feed is fetched with. A blocked env var in any of
+  // them means the distro feed is not checked.
+  const distroBlocked = blockedEnvVars(
+    [distroName, baseUrl, releasever, ca ?? ""].join(" "),
+  );
+  const blocked =
+    distroBlocked.length > 0
+      ? blockedReason(`the distro feed \`${distroName}\``, distroBlocked)
       : undefined;
+  if (blocked) notes.push(`Not checked: ${blocked}`);
+
+  const named = input.target
+    ? resolveNamedFeeds({
+        interp,
+        target: input.target,
+        distroName,
+        distroReleasever: releasever,
+        projectRoot: input.projectRoot,
+        lock: input.lock,
+        stage: input.stage,
+        streamOnly: input.streamOnly,
+      })
+    : undefined;
   if (named) {
     const distro = named.feeds.find((f) => f.kind === "distro");
-    if (distro) distro.location = `${redactUrl(baseUrl)}/${releasever}`;
+    if (distro) {
+      distro.location = shownUrl(`${baseUrl}/${releasever}`, masks);
+      if (blocked) {
+        distro.status = "not-checked";
+        distro.reason = blocked;
+      }
+    }
   }
 
   return {
@@ -522,6 +585,8 @@ export function resolveFeed(input: ResolveInput): ResolvedFeed {
     // `target/<machine>-ext` repo. A lookup with no stage keeps it, so
     // extension packages stay findable.
     ...(input.stage ? { skipExtRepo: true } : {}),
+    ...(blocked ? { blocked } : {}),
+    masks,
     feeds: named?.feeds,
     release,
     channel,
@@ -555,8 +620,7 @@ function readPin(lock: unknown, target: string): RepoSnapshotPin | undefined {
 }
 
 interface NamedFeedsInput {
-  config: unknown;
-  env: Record<string, string | undefined>;
+  interp: Interp;
   target: string;
   distroName: string;
   /** Expands `$releasever` (already snapshot-pinned for this target). */
@@ -564,17 +628,52 @@ interface NamedFeedsInput {
   projectRoot?: string;
   lock: unknown;
   stage?: PackageStage;
-  notes: string[];
+  streamOnly?: boolean;
 }
 
-/** Env vars a `{{ env.X }}` template reads that the MCP's env does not set. */
+/** `AVOCADO_*` vars a `{{ env.X }}` template reads that the MCP's env does not set. */
 function unsetEnvVars(
   value: string,
   env: Record<string, string | undefined>,
 ): string[] {
-  return [...value.matchAll(/\{\{\s*env\.([^}\s]+)\s*\}\}/g)]
+  return [...value.matchAll(ENV_TEMPLATE_RE)]
     .map((m) => m[1])
-    .filter((name) => env[name] === undefined);
+    .filter((name) => EXPANDABLE_ENV_RE.test(name) && env[name] === undefined);
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * The text each template in a `url:` expanded to, found by matching the
+ * URL the lock file recorded against the template. These are masked in
+ * output. Undefined when the recorded URL no longer fits the template.
+ */
+function lockedUrlMasks(
+  template: string,
+  locked: string,
+  target: string,
+): string[] | undefined {
+  const pattern = template
+    .split(/(\{\{[^}]*\}\})/)
+    .map((part, i) =>
+      i % 2 === 1
+        ? "(.*?)"
+        : part
+            .split(/(\$target|\$releasever)/)
+            .map((s) =>
+              s === "$target"
+                ? escapeRegExp(target)
+                : s === "$releasever"
+                  ? ".*?"
+                  : escapeRegExp(s),
+            )
+            .join(""),
+    )
+    .join("");
+  const m = new RegExp(`^${pattern}$`, "s").exec(locked);
+  return m ? m.slice(1).filter((v) => v.length > 0) : undefined;
 }
 
 /**
@@ -598,15 +697,25 @@ function resolveNamedFeeds(input: NamedFeedsInput):
       distroPriority: number;
     }
   | undefined {
-  const { config: cfg, env, target, distroName, notes } = input;
+  const { interp, target, distroName } = input;
+  const { config: cfg, env, notes, masks } = interp;
   const repos = asObj(getPath(cfg, ["repos"]));
   const list = getPath(cfg, ["distro", "feeds"]);
   if (!repos && list === undefined && distroName === DISTRO_FEED_NAME) {
     return undefined;
   }
 
+  // The CLI interpolates `distro.feeds` entries before it looks them up.
   const order = Array.isArray(list)
-    ? [...new Set(list.filter((n): n is string => typeof n === "string"))]
+    ? [
+        ...new Set(
+          list
+            .filter((n): n is string => typeof n === "string")
+            .map((n) =>
+              interpolate(n, { ...interp, masks: [] }, "distro.feeds"),
+            ),
+        ),
+      ]
     : [];
   if (!order.includes(distroName)) order.unshift(distroName);
 
@@ -628,6 +737,14 @@ function resolveNamedFeeds(input: NamedFeedsInput):
       });
       return;
     }
+    const nameBlocked = blockedEnvVars(name);
+    if (nameBlocked.length > 0) {
+      notChecked.push({
+        feed: name,
+        reason: blockedReason("this `distro.feeds` entry", nameBlocked),
+      });
+      return;
+    }
     if (name === BUILTIN_EXT_FEED) {
       notes.push(
         `\`distro.feeds\` lists the built-in \`${name}\`. The CLI rejects this config. Set \`repos.${name}.stages\` to re-scope it instead.`,
@@ -641,16 +758,44 @@ function resolveNamedFeeds(input: NamedFeedsInput):
       );
       return;
     }
+    const kind =
+      def.org !== undefined ? "org" : def.path !== undefined ? "path" : "url";
+    // Another stream changes only the feeds that take the distro releasever
+    // (avocado-cli: a feed's own `releasever`, then `release`/`channel`,
+    // then the distro releasever).
+    if (
+      input.streamOnly &&
+      !(
+        kind === "url" &&
+        String(def.url ?? "").includes("$releasever") &&
+        def.releasever === undefined &&
+        (def.release === undefined || def.channel === undefined)
+      )
+    ) {
+      return;
+    }
+    // Fields that read an env var the MCP does not expand, as "`repos.x.k`".
+    const blockedFields: string[] = [];
+    const blockedVars: string[] = [];
     const field = (k: string): string | undefined => {
       const v = def[k];
       if (typeof v !== "string" && typeof v !== "number") return undefined;
-      return interpolate(String(v), cfg, env, `repos.${name}.${k}`, notes);
+      const out = interpolate(String(v), interp, `repos.${name}.${k}`);
+      const b = blockedEnvVars(out);
+      if (b.length > 0 && k !== "url") {
+        blockedFields.push(`\`repos.${name}.${k}\``);
+        blockedVars.push(...b);
+      }
+      return out;
     };
+    const blockedSkip = () =>
+      skip(
+        "not-checked",
+        blockedReason(blockedFields.join(", "), [...new Set(blockedVars)]),
+      );
     const stages = Array.isArray(def.stages)
       ? def.stages.map(String)
       : undefined;
-    const kind =
-      def.org !== undefined ? "org" : def.path !== undefined ? "path" : "url";
     const entry: FeedEntry = {
       name,
       kind,
@@ -696,6 +841,7 @@ function resolveNamedFeeds(input: NamedFeedsInput):
     }
     if (kind === "path") {
       const p = field("path") ?? "";
+      if (blockedFields.length > 0) return blockedSkip();
       if (!isAbsolute(p) && !input.projectRoot) {
         return skip(
           "not-checked",
@@ -712,26 +858,39 @@ function resolveNamedFeeds(input: NamedFeedsInput):
 
     // url feed.
     const rawUrl = typeof def.url === "string" ? def.url : "";
-    let url: string | undefined;
+    let url = field("url") ?? "";
     const unset = unsetEnvVars(rawUrl, env);
-    if (unset.length > 0) {
-      // The lock records the URL the CLI expanded at install time.
-      const locked = (
-        getPath(input.lock, ["targets", target, "feeds"]) as
-          | unknown[]
-          | undefined
-      )
-        ?.map(asObj)
-        .find((f) => f?.name === name)?.url;
+    const urlBlocked = blockedEnvVars(url);
+    if (unset.length > 0 || urlBlocked.length > 0) {
+      // The lock records the URL the CLI expanded at install time, with the
+      // configured stream's releasever, so another stream cannot use it.
+      const locked = input.streamOnly
+        ? undefined
+        : (
+            getPath(input.lock, ["targets", target, "feeds"]) as
+              | unknown[]
+              | undefined
+          )
+            ?.map(asObj)
+            .find((f) => f?.name === name)?.url;
       if (typeof locked !== "string") {
         return skip(
           "not-checked",
-          `\`url\` reads \`${unset.map((v) => `env.${v}`).join("`, `")}\`, which is not set in the MCP server's environment.`,
+          urlBlocked.length > 0
+            ? blockedReason(`\`repos.${name}.url\``, urlBlocked)
+            : `\`url\` reads \`${unset.map((v) => `env.${v}`).join("`, `")}\`, which is not set in the MCP server's environment.`,
         );
       }
+      const lockMasks = lockedUrlMasks(rawUrl, locked, target);
+      if (!lockMasks) {
+        return skip(
+          "not-checked",
+          `the URL the lock file records for this feed does not match its \`url\` any more. Run \`avocado install\` to refresh the lock.`,
+        );
+      }
+      masks.push(...lockMasks);
       url = locked;
     } else {
-      url = field("url") ?? "";
       if (/\{\{/.test(url)) {
         return skip(
           "not-checked",
@@ -747,22 +906,24 @@ function resolveNamedFeeds(input: NamedFeedsInput):
         .replaceAll("$target", target)
         .replaceAll("$releasever", releasever);
     }
-    entry.location = redactUrl(url);
+    if (blockedFields.length > 0) return blockedSkip();
+    entry.location = shownUrl(url, masks);
     try {
-      url = validateRepoUrl(url);
+      url = validateRepoUrl(url, masks);
     } catch (e) {
       return skip("not-checked", (e as Error).message);
     }
 
     const username = field("username");
     const password = field("password");
+    const ca = field("ca");
+    if (blockedFields.length > 0) return blockedSkip();
     if (username && !password) {
       return skip(
         "not-checked",
         "`username` is set but `password` is empty. An unset env var becomes an empty string.",
       );
     }
-    const ca = field("ca");
     const insecure = def.tls_verify === false;
     extraFeeds.push({
       name,
@@ -776,6 +937,9 @@ function resolveNamedFeeds(input: NamedFeedsInput):
             }
           : undefined,
       auth: username && password ? { username, password } : undefined,
+      // Shared with the whole resolution: masking more than this feed's own
+      // expansions only hides more.
+      masks,
     });
   });
 
@@ -806,7 +970,7 @@ export class FeedContext {
     private readonly configPath: string | undefined,
     private readonly loadNotes: string[],
     private readonly projectRoot: string | undefined,
-    private readonly named = true,
+    private readonly streamOnly = false,
     private readonly stage?: PackageStage,
   ) {}
 
@@ -886,7 +1050,7 @@ export class FeedContext {
       configPath,
       notes,
       projectRoot,
-      true,
+      false,
       input.stage,
     );
   }
@@ -905,7 +1069,7 @@ export class FeedContext {
       target,
       baseDir: this.baseDir,
       projectRoot: this.projectRoot,
-      named: this.named,
+      streamOnly: this.streamOnly,
       stage: this.stage,
       configPath: this.configPath,
     });
@@ -923,9 +1087,9 @@ export class FeedContext {
   }
 
   /**
-   * Same project config, but a different release/channel stream. Only the
-   * distro feed is probed there: the project's `repos:` feeds don't change
-   * with the stream.
+   * Same project config, but a different release/channel stream. The distro
+   * feed is probed there, plus the `repos:` feeds whose URL takes the distro
+   * `$releasever`. The other `repos:` feeds don't change with the stream.
    */
   withStream(release: string, channel: string): FeedContext {
     return new FeedContext(
@@ -937,7 +1101,7 @@ export class FeedContext {
       this.configPath,
       this.loadNotes,
       this.projectRoot,
-      false,
+      true,
       this.stage,
     );
   }
@@ -957,7 +1121,7 @@ export class FeedContext {
       (this.forTarget(target).feeds ?? []).map((f) => ({ target, ...f })),
     );
     return {
-      repoUrl: redactUrl(base.baseUrl),
+      repoUrl: shownUrl(base.baseUrl, base.masks),
       repoUrlOverridden: repoUrlOverridden(base),
       defaultRepoUrl: DEFAULT_REPO_URL,
       releasever: base.releasever,
@@ -1010,7 +1174,7 @@ function dedupNotes(notes: string[]): string[] {
 }
 
 export function feedUrl(feed: FeedSpec, path = feed.releasever): string {
-  return `${redactUrl(feed.baseUrl)}/${path}`;
+  return shownUrl(`${feed.baseUrl}/${path}`, feed.masks);
 }
 
 /** Where targets.json is fetched from — for error messages. */
@@ -1032,9 +1196,10 @@ function describeFeeds(
   }
   if (base.configPath) out += `; config \`${base.configPath}\``;
   out += `\n`;
+  const repoUrl = shownUrl(base.baseUrl, base.masks);
   out += repoUrlOverridden(base)
-    ? `**Repo URL:** \`${redactUrl(base.baseUrl)}\` — **overridden** by ${s.repoUrl} (default is \`${DEFAULT_REPO_URL}\`)\n`
-    : `**Repo URL:** \`${redactUrl(base.baseUrl)}\` (default, not overridden)\n`;
+    ? `**Repo URL:** \`${repoUrl}\`, **overridden** by ${s.repoUrl} (default is \`${DEFAULT_REPO_URL}\`)\n`
+    : `**Repo URL:** \`${repoUrl}\` (default, not overridden)\n`;
   perTarget.forEach((f, i) => {
     if (f.snapshot && f.releasever !== base.releasever) {
       out += `**Snapshot pin:** \`${targets[i]}\` → \`${feedUrl(f)}\` (${f.sources.releasever} — matches what \`avocado install\` resolves)\n`;
