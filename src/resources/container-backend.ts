@@ -119,9 +119,12 @@ This page is about the development host. The device has no container engine
 by default. Add \`avocado-ext-docker\` or \`avocado-ext-podman\` to a runtime
 to run containers on the device. Extensions are still the main Avocado model.
 
-- To pre-load images so that a device starts containers offline, use
-  \`extensions.<name>.docker_images\`. The images land in \`/var\` at
-  provision. For more information, see \`avocado://skills/filesystem-model\`.
+- With \`avocado-ext-docker\`, use \`extensions.<name>.docker_images\` to
+  pre-load images so that a device starts containers offline. At provision,
+  the CLI pulls the images with \`dockerd\` into \`/var/lib/docker\`. This does
+  not seed Podman. With \`avocado-ext-podman\`, pull or import images in
+  Podman's own store. For more information, see
+  \`avocado://skills/filesystem-model\`.
 - For a fast inner loop on a containerized app, use container dev mode. It
   pushes only the changed layer to a running device:
   https://docs.peridio.com/developer-reference/container-dev-mode

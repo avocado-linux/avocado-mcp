@@ -17,6 +17,8 @@ There are two ways the LLM in this session can invoke \`avocado <args>\`. Pickin
 
 **How to invoke:** call the host MCP's \`run_avocado_cli\` tool. The host returns a \`run_id\` immediately. **Then wait on it with \`await_avocado_cli\` — that's a host-push, near-zero-latency wake.** Reach for \`avocado_cli_status\` only for one-shot snapshots (e.g. inside a scheduled follow-up, or when you already know the run is terminal and just want a fresh tail).
 
+**Older hosts have no \`await_avocado_cli\`.** \`environment-check\` then shows \`Poll with\` instead of \`Wait with\`. In that case, poll \`avocado_cli_status\` with the \`run_id\` until \`status\` is not \`running\`. Space the calls by \`recommendedNextPollSeconds\`. For long waits, schedule each snapshot with \`schedule_task\` as described below.
+
 \`\`\`json
 // Start (host MCP tool: run_avocado_cli)
 {
@@ -70,7 +72,7 @@ There are two ways the LLM in this session can invoke \`avocado <args>\`. Pickin
 
 - **Cancel via the user's pill click.** If the user clicks the [x] on a scheduled-followup pill, the chat panel injects a synthetic prompt telling you to drop the task. Handle it by calling your scheduler's delete API (\`CronDelete\` if available, or microclaw's equivalent) on the \`task_id\`, then \`clear_scheduled_followup\` so the pill disappears. If the task has already fired, just confirm.
 
-- **\`avocado_cli_status\` is for snapshots, not waits.** Reach for it when (a) you're inside a scheduled follow-up that just woke up, (b) you already know the run is terminal and want a fresh tail, or (c) \`await_avocado_cli\` is unavailable for some reason. Never spin-poll \`avocado_cli_status\` in-turn — that's the failure mode \`await_avocado_cli\` was built to replace.
+- **\`avocado_cli_status\` is for snapshots, not waits.** Reach for it when (a) you're inside a scheduled follow-up that just woke up, (b) you already know the run is terminal and want a fresh tail, or (c) the host has no \`await_avocado_cli\` (see the older-hosts note above). Never spin-poll \`avocado_cli_status\` in-turn. \`await_avocado_cli\` exists to replace that.
 - **Never** finish your turn with "still running, ping me when it's done" without either (a) being inside an active \`await_avocado_cli\` call, or (b) having scheduled a follow-up. The user delegated the work to you and expects it to land.
 - **Only stop awaiting on:** terminal status, explicit user cancellation, or a hard error in the await tool itself. "I've awaited a lot" is not a reason — loop the await.
 - **Failure handling:** when \`status\` is \`failed\`, the \`error\` field carries the spawn / exit message and \`outputTail\` carries the CLI's own output. Pass the \`outputTail\` to \`explain-build-error\` the same way you would a captured log file.

@@ -37,7 +37,7 @@ The rows marked "No" are the common case. The CLI covers them. Do not send the u
 When Yocto is necessary:
 
 - Rebuild the single recipe, not a full image. \`bitbake <recipe>\` produces the new RPM in \`tmp/deploy/rpm/<arch>/\` of the build.
-- Some components (\`avocadoctl\` is one) ship in both the rootfs and the initramfs. A change to runtime behavior needs only the rootfs copy. A change to early boot needs a new initramfs, and thus a rebuild and a reprovision of the boot image.
+- Some components (\`avocadoctl\` is one) ship in both the rootfs and the initramfs. A change to runtime behavior needs only the rootfs copy. A change to early boot needs a new initramfs. That is an OS change: \`avocado deploy\` writes it to the inactive A/B slot with the OS bundle, and the device reboots into it. See \`avocado://skills/iterative-deployment\`.
 - If only the user's own code must run on the device, cross-compiling in the SDK is faster and needs no Yocto.
 
 Read the full guide with \`get-doc\`: https://docs.peridio.com/developer-reference/modifying-os-components. If a change belongs in a BSP or in \`meta-avocado\` for everyone, suggest an upstream issue or PR at the repo.
