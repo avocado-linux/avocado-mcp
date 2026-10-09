@@ -66,12 +66,24 @@ recommend:
 
 ## Data and privacy
 
-- The server itself makes outbound requests to **public HTTPS endpoints only**:
+- Without a project, the server makes outbound requests to these **public
+  HTTPS endpoints**:
   - `repo.avocadolinux.org` — RPM package feed.
   - `api.github.com` and `raw.githubusercontent.com` — reference projects and
     documentation manifests/content (an optional, read-only `GITHUB_TOKEN`
     only raises GitHub API rate limits).
   - `docs.peridio.com` — documentation content.
+
+  When a tool gets a `projectDir`, the server also reads the package feeds
+  that project configures: `distro.repo`, the `repos:` feeds enabled in
+  `distro.feeds`, and `AVOCADO_REPO_URL` in the server's environment. These
+  can be any HTTP or HTTPS host, including a private mirror or `localhost`,
+  or a local `path:`. They are the same feeds that `avocado install` reads for
+  that project. Pass `projectDir` only for a project you trust. A project can
+  already reach those hosts through the CLI, and it runs its own hook scripts
+  during `avocado build`. The server reads only feed metadata from these
+  hosts, never sends the project's files, and redacts credentials in feed URLs
+  from its output.
 
   See the *How it talks to the world* section of the README for details.
 - It is **stdio-only**: there is no hosted endpoint, no listening port, and no
