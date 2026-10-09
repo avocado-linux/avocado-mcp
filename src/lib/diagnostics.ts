@@ -459,7 +459,9 @@ export function extractLogShape(log: string): LogShape {
   }
 
   return {
-    hasErrors: errorLines.length > 0,
+    // A nonzero exit code is an error even when no line says so (a deploy
+    // that prints only progress, then `exit code: 1`).
+    hasErrors: errorLines.length > 0 || (exitCode !== null && exitCode !== 0),
     exitCode,
     errorLines,
     filePaths: Array.from(filePathsSeen),
