@@ -118,6 +118,16 @@ test("toDocEntry skips drafts and applies the frontmatter slug", () => {
     ),
     null,
   );
+  for (const spelling of ["True", "TRUE"]) {
+    assert.equal(
+      toDocEntry(
+        "src/docs-guides/wip.md",
+        sha,
+        `---\ntitle: WIP\ndraft: ${spelling}\n---\nbody\n`,
+      ),
+      null,
+    );
+  }
   const cra = toDocEntry(
     "src/docs-overview/cra.mdx",
     sha,
