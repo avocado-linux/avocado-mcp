@@ -9,6 +9,7 @@ import {
   emulatorInstallHint,
   SUPPORTED_EMULATORS,
   SAFE_PORT_RE,
+  CONSOLE_TEXT,
   type SerialEmulator,
 } from "../lib/device-info.js";
 import { getHardwareData } from "../lib/hardware-data.js";
@@ -153,6 +154,11 @@ export function registerDebuggingTools(server: McpServer): void {
         onboardConsole: z
           .boolean()
           .describe("True when the board has an onboard USB console."),
+        consoleType: z
+          .enum(["onboard", "adapter", "none", "unknown"])
+          .describe(
+            "`onboard`: onboard USB console. `adapter`: needs a USB-to-UART adapter. `none`: virtual target with no physical port. `unknown`: the docs data does not describe the console.",
+          ),
         defaultUser: z.string(),
         defaultPasswordNote: z.string(),
         caveats: z.array(z.string()),
@@ -174,7 +180,7 @@ export function registerDebuggingTools(server: McpServer): void {
       );
       let out = `# get-device-connection-info — \`${target}\`\n\n`;
       out += `## Serial parameters\n\n`;
-      out += `- **Console:** ${info.onboardConsole ? "onboard USB (no adapter needed)" : "USB-to-UART adapter"}\n`;
+      out += `- **Console:** ${CONSOLE_TEXT[info.consoleType]}\n`;
       out += `- **Baud:** ${info.serial.baud}\n`;
       out += `- **Voltage:** ${info.serial.voltage}\n`;
       out += `- **Format:** ${info.serial.dataBits}${info.serial.parity[0].toUpperCase()}${info.serial.stopBits} (${info.serial.dataBits} data bits, ${info.serial.parity} parity, ${info.serial.stopBits} stop bit)\n\n`;

@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  CONSOLE_TEXT,
   getDeviceConnectionInfo,
   buildTmuxSnippet,
   emulatorInvocation,
@@ -65,6 +66,51 @@ test("an adapter board gets its voltage and wiring from the data", () => {
   assert.equal(info.onboardConsole, false);
   assert.equal(info.serial.voltage, "3.3V");
   assert.match(info.caveats.join(" "), /`UART TXD` to adapter UART RX/);
+});
+
+test("the Orin Nano FC REC strap is a temporary recovery connection", () => {
+  const caveats = getDeviceConnectionInfo(
+    "jetson-orin-nano-devkit",
+    DATA,
+  ).caveats;
+  assert.ok(!caveats.some((c) => c.startsWith("Wire `FC REC`")));
+  const strap = caveats.find((c) => c.includes("`FC REC`"));
+  assert.match(strap ?? "", /^Recovery mode only/);
+  assert.match(strap ?? "", /Remove this connection before a normal boot/);
+});
+
+test("console type: onboard, adapter, none and unknown", () => {
+  assert.equal(
+    getDeviceConnectionInfo("rubikpi3", DATA).consoleType,
+    "onboard",
+  );
+  assert.equal(
+    getDeviceConnectionInfo("jetson-orin-nano-devkit", DATA).consoleType,
+    "adapter",
+  );
+  const qemu = getDeviceConnectionInfo("qemux86-64", DATA);
+  assert.equal(qemu.consoleType, "none");
+  assert.equal(qemu.onboardConsole, false);
+  assert.doesNotMatch(CONSOLE_TEXT[qemu.consoleType], /adapter/);
+  // MIC-733 has no serial data in the docs.
+  const mic = getDeviceConnectionInfo(
+    "jetson-agx-orin-devkit",
+    DATA,
+    "mic-733-ao5a1",
+  );
+  assert.equal(mic.consoleType, "unknown");
+  assert.doesNotMatch(CONSOLE_TEXT[mic.consoleType], /^USB-to-UART adapter/);
+  assert.equal(getDeviceConnectionInfo("qemuarm64", null).consoleType, "none");
+  assert.equal(
+    getDeviceConnectionInfo("rubikpi3", null).consoleType,
+    "unknown",
+  );
+});
+
+test("the root password note names the permissions dev profile", () => {
+  const note = getDeviceConnectionInfo("rubikpi3", DATA).defaultPasswordNote;
+  assert.match(note, /`dev` profile in the top-level `permissions` section/);
+  assert.doesNotMatch(note, /`config` extension/);
 });
 
 test("QEMU has no physical serial port", () => {

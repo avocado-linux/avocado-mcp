@@ -101,22 +101,51 @@ export function probeHostMcp(): Promise<HostMcpDelegation> {
   return cached;
 }
 
+/** An operation that runs `avocado` locally, and the command a user runs instead. */
+export interface LocalCliOperation {
+  /** What runs locally, e.g. "Listing provision profiles". */
+  operation: string;
+  /** The command to run through the host channel instead. */
+  command: string;
+}
+
 /**
- * Throw if this session uses the host-tool channel. The `connect-*` tools run
- * `avocado` locally via `execFile`, which inside the avocado-vm would hit the
- * wrong CLI, with no Connect credentials, against VM-local paths instead of the
- * user's real project. Fail fast with an actionable message instead.
+ * The host-tool channel error. Without an operation it is the Connect tools
+ * message, which those tools have always shown.
  */
-export async function assertWorkstationChannel(): Promise<void> {
+export function hostChannelMessage(op?: LocalCliOperation): string {
+  if (!op) {
+    return (
+      "Avocado Connect tools run `avocado` locally, but this session is using the " +
+      "host-tool execution channel — the Avocado desktop runs the CLI on your Mac " +
+      "with your credentials and project files, and these tools cannot reach it from " +
+      "inside the VM. Run `avocado connect …` through the host channel (the way build " +
+      "and deploy are run), or use the Connect tools from a workstation session where " +
+      "`avocado` runs locally."
+    );
+  }
+  return (
+    `${op.operation} runs \`avocado\` locally, but this session uses the host-tool ` +
+    "execution channel. The Avocado desktop runs the CLI on your Mac with your " +
+    "credentials and project files. This tool cannot reach it from inside the VM. " +
+    `Run \`${op.command}\` yourself through the host channel (the way build and ` +
+    "deploy are run), or use a workstation session where `avocado` runs locally."
+  );
+}
+
+/**
+ * Throw if this session uses the host-tool channel. The `connect-*` tools and
+ * `list-provision-profiles` run `avocado` locally via `execFile`, which inside
+ * the avocado-vm would hit the wrong CLI, with no Connect credentials, against
+ * VM-local paths instead of the user's real project. Fail fast with an
+ * actionable message instead. Pass `op` for a message about that operation.
+ * Without it, the message is for the Connect tools.
+ */
+export async function assertWorkstationChannel(
+  op?: LocalCliOperation,
+): Promise<void> {
   const delegation = await probeHostMcp();
   if (delegation.available) {
-    throw new Error(
-      "Avocado Connect tools run `avocado` locally, but this session is using the " +
-        "host-tool execution channel — the Avocado desktop runs the CLI on your Mac " +
-        "with your credentials and project files, and these tools cannot reach it from " +
-        "inside the VM. Run `avocado connect …` through the host channel (the way build " +
-        "and deploy are run), or use the Connect tools from a workstation session where " +
-        "`avocado` runs locally.",
-    );
+    throw new Error(hostChannelMessage(op));
   }
 }

@@ -195,7 +195,10 @@ export function registerHardwareTools(server: McpServer): void {
       },
     },
     async ({ projectDir, target, runtime }, extra) => {
-      await assertWorkstationChannel();
+      await assertWorkstationChannel({
+        operation: "Listing provision profiles",
+        command: "avocado provision --list --output json",
+      });
       const rt = runtime?.trim() || "dev";
       // The runtime goes into the shell commands this tool prints.
       if (!isSafeSegment(rt)) {

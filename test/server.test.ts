@@ -598,3 +598,20 @@ test("environment-check says when the disk check fell back to 8 GB", async () =>
     globalThis.fetch = realFetch;
   }
 });
+
+test("/provision-device rechecks the disk for the target and passes the runtime", async () => {
+  const { client } = await connect();
+  const res = await client.getPrompt({
+    name: "provision-device",
+    arguments: { target: "jetson-orin-nano-devkit", runtime: "prod" },
+  });
+  const text = (res.messages[0].content as { text: string }).text;
+  assert.match(
+    text,
+    /Call `environment-check` again with `target` set to the chosen target/,
+  );
+  assert.match(
+    text,
+    /call `get-provisioning-steps` with the chosen target and `runtime: "prod"`/,
+  );
+});

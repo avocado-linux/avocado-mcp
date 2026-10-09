@@ -312,10 +312,19 @@ export function serialCaveats(
   }
   const out: string[] = [];
   if (serial.description) out.push(serial.description);
-  for (const g of serial.gpio ?? []) {
+  const gpio = serial.gpio ?? [];
+  // A row marked for recovery mode (the Orin Nano `FC REC` strap) is not
+  // serial wiring. Left in place, it stops a normal boot.
+  const isRecovery = (g: { note?: string }) => /recovery/i.test(g.note ?? "");
+  for (const g of gpio.filter((g) => !isRecovery(g))) {
     out.push(`Wire \`${g.pin}\` to ${g.to}${g.note ? ` (${g.note})` : ""}.`);
   }
   if (serial.onboard) out.push(ONBOARD_PORT_HINT);
+  for (const g of gpio.filter(isRecovery)) {
+    out.push(
+      `Recovery mode only, not part of the serial wiring: connect \`${g.pin}\` to ${g.to} only to put the board in recovery mode for provisioning. Remove this connection before a normal boot. The board does not boot normally while it is connected.`,
+    );
+  }
   return out;
 }
 

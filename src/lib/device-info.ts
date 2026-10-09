@@ -110,12 +110,29 @@ export interface DeviceConnectionInfo {
   };
   /** True when the board has an onboard USB console (no adapter needed). */
   onboardConsole: boolean;
+  /**
+   * `onboard`: onboard USB console. `adapter`: needs a USB-to-UART adapter.
+   * `none`: a virtual target with no physical port. `unknown`: the docs data
+   * does not describe a serial console for this board.
+   */
+  consoleType: ConsoleType;
   defaultUser: string;
   defaultPasswordNote: string;
   caveats: string[];
   /** Board page, when the docs data has one. */
   docsUrl?: string;
 }
+
+export type ConsoleType = "onboard" | "adapter" | "none" | "unknown";
+
+/** The "Console" line of `get-device-connection-info` for each type. */
+export const CONSOLE_TEXT: Record<ConsoleType, string> = {
+  onboard: "onboard USB (no adapter needed)",
+  adapter: "USB-to-UART adapter",
+  none: "none (virtual target, the VM console is the terminal that runs the VM)",
+  unknown:
+    "unknown (the docs data does not describe a serial console for this board, check the board page)",
+};
 
 const COMMON_BAUD = 115200;
 
@@ -134,6 +151,14 @@ export function getDeviceConnectionInfo(
   // dev kit that shares its target.
   const info = data ? lookupTarget(data, target, board) : null;
   const serial = info?.entries.find((e) => e.serial)?.serial;
+  const virtual = info ? isVirtual(info) : target.startsWith("qemu");
+  const consoleType: ConsoleType = virtual
+    ? "none"
+    : serial?.onboard
+      ? "onboard"
+      : serial
+        ? "adapter"
+        : "unknown";
   const base: DeviceConnectionInfo = {
     target,
     serial: {
@@ -148,14 +173,15 @@ export function getDeviceConnectionInfo(
       stopBits: 1,
     },
     onboardConsole: serial?.onboard === true,
+    consoleType,
     defaultUser: "root",
     defaultPasswordNote:
-      "Passwordless in the `dev` runtime (set by the `config` extension in the starter YAML). NOT FOR PRODUCTION.",
+      "Empty root password, set by the `dev` profile in the top-level `permissions` section of the starter `avocado.yaml` (`rootfs` and `initramfs` use it). NOT FOR PRODUCTION.",
     caveats: [SERIAL_OPTIONAL],
     docsUrl: info ? boardDocsUrl(info) : undefined,
   };
 
-  if (info ? isVirtual(info) : target.startsWith("qemu")) {
+  if (virtual) {
     base.caveats = [
       "QEMU targets have no physical serial port. The VM console is the terminal that runs `avocado sdk run -iE vm dev` (after `avocado provision dev`). No USB adapter or `tio` is used.",
     ];
