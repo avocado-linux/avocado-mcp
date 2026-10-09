@@ -618,3 +618,21 @@ test("a specific RCM diagnosis replaces the generic tegraflash one", () => {
     "USB / tegraflash failure",
   ]);
 });
+
+test("an invalid cli_requirement is fixed in avocado.yaml, not by an upgrade", () => {
+  // avocado-cli src/utils/version.rs check_cli_requirement
+  const invalid = diagnoseBuildLog(
+    "Error: Invalid cli_requirement 'latest'. Expected a semver requirement (e.g., '>=0.25.0', '^0.25')",
+  );
+  assert.deepEqual(labels(invalid), ["Invalid cli_requirement"]);
+  assert.doesNotMatch(invalid[0]!.suggestion, /avocado upgrade/);
+  assert.match(invalid[0]!.suggestion, /avocado\.yaml/);
+
+  const unmet = diagnoseBuildLog(
+    "Error: This project requires avocado CLI version '>=2.0.0', but you are running version 1.0.0-rc.5.",
+  );
+  assert.deepEqual(labels(unmet), [
+    "CLI version does not meet cli_requirement",
+  ]);
+  assert.match(unmet[0]!.suggestion, /avocado upgrade/);
+});

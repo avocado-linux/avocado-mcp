@@ -340,12 +340,19 @@ const BUILD_PATTERNS: Pattern[] = [
   },
   {
     label: "CLI version does not meet cli_requirement",
-    match:
-      /This project requires avocado CLI version '|Invalid cli_requirement '/,
+    match: /This project requires avocado CLI version '/,
     cause:
-      "`cli_requirement` in `avocado.yaml` names CLI versions that do not include the one you run, or the value is not a valid semver requirement.",
+      "`cli_requirement` in `avocado.yaml` names CLI versions that do not include the one you run.",
     suggestion:
-      'Run `avocado upgrade`, then retry. If the error says `Invalid cli_requirement`, use a semver requirement such as `">=1.0.0"`. Change the requirement to allow an older CLI only if you know that the project works with it. Docs: https://docs.peridio.com/developer-reference/avocado-cli/commands#avocado-upgrade',
+      "Run `avocado upgrade`, then retry. Change the requirement to allow an older CLI only if you know that the project works with it. Docs: https://docs.peridio.com/developer-reference/avocado-cli/commands#avocado-upgrade",
+  },
+  {
+    label: "Invalid cli_requirement",
+    match: /Invalid cli_requirement '/,
+    cause:
+      "`cli_requirement` in `avocado.yaml` is not a valid semver requirement. An upgrade does not fix this.",
+    suggestion:
+      'Correct `cli_requirement` in `avocado.yaml` to a semver requirement such as `">=1.0.0"` or `"^1.0"`, then retry. Docs: https://docs.peridio.com/changelog/march-2026/0.26.0',
   },
   {
     label: "Encrypted /var config error",
