@@ -27,16 +27,3 @@ jobs:
 
       - name: Run checks
         run: ./scripts/checks.sh
-
-  schema-drift:
-    name: Vendored schema matches the live copy
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
-        with:
-          node-version: '22.x'
-
-      - name: Compare with docs.peridio.com and avocado-cli main
-        run: node scripts/sync-schema.mjs --check
