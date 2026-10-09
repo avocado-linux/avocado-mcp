@@ -105,7 +105,7 @@ Pre-built workflows the user can invoke by name:
 - `provision-device` — fully automated first-time flash: env check → target validation → per-target caveats → build → provision → physical handoff → first-boot UART verification.
 - `build-and-deploy` — fully automated `avocado build && avocado deploy` (with conditional `install` on missing-package errors) to a running device, with verification. The canonical iteration loop after first provision.
 - `package-coverage` — for users moving off Docker: ingests a Dockerfile or SBOM (CycloneDX / SPDX) plus a target, extracts runtime dependencies, checks each against the live package feed, researches gaps on the web, and writes a shareable `package-coverage.md` (present/missing table + upstream links + headline coverage %) for an Avocado OS feed maintainer.
-- `setup-connect`: links a project to Avocado Connect for fleet OTA updates. It checks auth, picks the org, project, and cohort, runs `avocado connect init`, then rebuilds.
+- `setup-connect`: links a project to Avocado Connect for fleet OTA updates. It checks auth, picks the org, project, and cohort, runs `avocado connect init`, then gives the user the rebuild steps.
 
 ## Recommended flow
 
