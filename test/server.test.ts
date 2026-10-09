@@ -164,6 +164,27 @@ test("init-project refuses runtime, board and extension values that would inject
   }
 });
 
+test("init-project refuses an unsafe target when targets.json is unreachable", async () => {
+  // Offline: the feed support check is skipped, so only the input check
+  // stands between the target and the printed shell commands.
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => {
+    throw new Error("offline");
+  }) as typeof fetch;
+  try {
+    const { client } = await connect();
+    const res = await client.callTool({
+      name: "init-project",
+      arguments: { target: "qemux86-64; rm -rf ~", forceFromScratch: true },
+    });
+    const text = (res.content as { text: string }[])[0].text;
+    assert.match(text, /^# init-project failed/);
+    assert.doesNotMatch(text, /rm -rf ~[^"]/);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
 test("init-project from scratch tells the model to run avocado init", async () => {
   // No network: the feed's target list is unavailable, so the target is not
   // checked, and the from-scratch path runs.
