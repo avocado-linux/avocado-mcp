@@ -20,6 +20,12 @@ import {
   filterSelectable,
 } from "../lib/hardware-support.js";
 import { probeHostMcp, HOST_MCP_URL } from "../lib/cli-channel.js";
+import {
+  getHardwareData,
+  lookupTarget,
+  minDiskGB,
+  DEFAULT_MIN_DISK_GB,
+} from "../lib/hardware-data.js";
 
 /**
  * Normalize Node's `os.arch()` to the same vocabulary the rest of the MCP
@@ -73,7 +79,6 @@ export function qemuArchAdvisory(target: string): string | null {
 
 const execFileP = promisify(execFile);
 
-const MIN_FREE_GB = 8;
 const INSTALL_HINT = "curl -fsSL https://connect.peridio.com/install.sh | sh";
 
 async function checkBinary(
@@ -240,38 +245,17 @@ async function checkContainerEngine(
   };
 }
 
-async function checkDiskGB(): Promise<{ ok: boolean; freeGB: number }> {
+async function checkDiskGB(
+  minGB: number,
+): Promise<{ ok: boolean; freeGB: number }> {
   try {
     const s = await statfs(homedir());
     const freeBytes = Number(s.bavail) * Number(s.bsize);
     const freeGB = freeBytes / 1024 ** 3;
-    return { ok: freeGB >= MIN_FREE_GB, freeGB };
+    return { ok: freeGB >= minGB, freeGB };
   } catch {
     return { ok: false, freeGB: 0 };
   }
-}
-
-/**
- * `qemu-system-<arch>` presence. We probe the binary that matches the host
- * arch since that's the one a same-arch QEMU target needs (HVF / KVM). Note:
- * QEMU is ONLY required for QEMU-target workflows — `environment-check` does
- * not include this. It's exposed for `get-provisioning-steps` to call when
- * the resolved target is a QEMU one.
- */
-export async function checkQemu(): Promise<{ ok: boolean; detail: string }> {
-  const host = normalizedHostArch();
-  // Same-arch QEMU is the common path; check it. Users doing cross-arch QEMU
-  // need the other one too, but we already advise against that.
-  const binary =
-    host === "arm64"
-      ? "qemu-system-aarch64"
-      : host === "x86-64"
-        ? "qemu-system-x86_64"
-        : null;
-  if (!binary) {
-    return { ok: false, detail: `host arch '${host}' — unknown QEMU binary` };
-  }
-  return checkBinary(binary, ["--version"]);
 }
 
 export function registerDiscoveryTools(
@@ -283,9 +267,15 @@ export function registerDiscoveryTools(
     {
       title: "Check host prerequisites",
       description:
-        "Verify the host has the prerequisites to build and provision an Avocado OS project: `avocado` CLI on PATH, a working container engine, and ≥8 GB free disk space in $HOME. On macOS the container engine is the avocado-vm, which supplies Docker, so Docker Desktop is not required. On Linux it is the native Docker Engine. Also (a) reports host CPU arch + OS so downstream tools (e.g. `init-project`) can warn about cross-arch QEMU performance gotchas, and (b) detects the avocado-cli execution channel for this session — when reachable, the Avocado desktop's host MCP runs CLI commands on the user's Mac (their CLI, their config, their keys) so the LLM doesn't have to invoke the CLI directly. It also (c) reports the package feed this session resolves to — the effective repo URL and whether it is overridden (tool arg, AVOCADO_REPO_URL, or avocado.yaml) — for the project when `projectDir` is given. Call this BEFORE init-project / list-targets / build-and-deploy so subsequent steps follow the right invocation pattern. **QEMU-target prerequisites** (qemu-system-*) are NOT checked here — `get-provisioning-steps` validates those when the resolved target is a QEMU one. Read-only.",
+        "Verify the host has the prerequisites to build and provision an Avocado OS project: `avocado` CLI on PATH, a working container engine, and ≥8 GB free disk space in $HOME. On macOS the container engine is the avocado-vm, which supplies Docker, so Docker Desktop is not required. On Linux it is the native Docker Engine. Also (a) reports host CPU arch + OS so downstream tools (e.g. `init-project`) can warn about cross-arch QEMU performance gotchas, and (b) detects the avocado-cli execution channel for this session — when reachable, the Avocado desktop's host MCP runs CLI commands on the user's Mac (their CLI, their config, their keys) so the LLM doesn't have to invoke the CLI directly. It also (c) reports the package feed this session resolves to — the effective repo URL and whether it is overridden (tool arg, AVOCADO_REPO_URL, or avocado.yaml) — for the project when `projectDir` is given. Call this BEFORE init-project / list-targets / build-and-deploy so subsequent steps follow the right invocation pattern. Pass `target` to check the free disk space the docs give for that target (for example 16 GB for Jetson). QEMU needs no host install: it runs in the SDK container. Read-only.",
       inputSchema: {
         projectDir: feedArgsShape.projectDir,
+        target: z
+          .string()
+          .optional()
+          .describe(
+            "Target slug. When the docs give a larger disk space need for it, the disk check uses that number.",
+          ),
       },
       outputSchema: {
         ok: z
@@ -351,13 +341,18 @@ export function registerDiscoveryTools(
         openWorldHint: true,
       },
     },
-    async ({ projectDir }) => {
+    async ({ projectDir, target }) => {
       const host = { arch: normalizedHostArch(), platform: osPlatform() };
       const feed = feedContextFrom({ projectDir });
+      let minGB = DEFAULT_MIN_DISK_GB;
+      if (target?.trim()) {
+        const data = await getHardwareData();
+        if (data) minGB = minDiskGB(lookupTarget(data, target.trim()));
+      }
       const [cliCheck, docker, disk, delegation] = await Promise.all([
         checkBinary("avocado", ["--version"]),
         checkContainerEngine(host.platform),
-        checkDiskGB(),
+        checkDiskGB(minGB),
         probeHostMcp(),
       ]);
       const cli = {
@@ -386,7 +381,7 @@ export function registerDiscoveryTools(
       out += `|-------|--------|--------|\n`;
       out += `| \`avocado\` CLI on PATH | ${cli.ok ? (cli.outdated ? "⚠️" : "✅") : "❌"} | ${cli.detail} |\n`;
       out += `| Container engine | ${docker.ok ? "✅" : "❌"} | ${docker.detail} |\n`;
-      out += `| Free disk (\`$HOME\`) | ${disk.ok ? "✅" : "❌"} | ${disk.freeGB.toFixed(1)} GB free (need ≥${MIN_FREE_GB}) |\n`;
+      out += `| Free disk (\`$HOME\`) | ${disk.ok ? "✅" : "❌"} | ${disk.freeGB.toFixed(1)} GB free (need ≥${minGB}${minGB > DEFAULT_MIN_DISK_GB ? ` for \`${target?.trim()}\`` : ""}) |\n`;
 
       out += `\n## Avocado-CLI execution channel\n\n`;
       if (delegation.available) {
@@ -429,7 +424,7 @@ export function registerDiscoveryTools(
         }
         if (!disk.ok) {
           fixes.push(
-            `- **Free disk space:** the SDK container + builds need ≥${MIN_FREE_GB} GB. Clear caches or move builds to a larger volume.`,
+            `- **Free disk space:** the SDK container + builds need ≥${minGB} GB. Clear caches or move builds to a larger volume.`,
           );
         }
       }
@@ -437,7 +432,6 @@ export function registerDiscoveryTools(
         out += `\n## Fix\n\n${fixes.join("\n")}\n`;
       } else if (ready) {
         out += `\nAll prerequisites satisfied. Safe to proceed with \`list-targets\` → \`init-project\`.\n`;
-        out += `\n_QEMU prerequisites (\`qemu-system-*\`) are validated by \`get-provisioning-steps\` when the resolved target is a QEMU one — no need to check them here._\n`;
       }
 
       const executionChannel = delegation.available
@@ -458,7 +452,7 @@ export function registerDiscoveryTools(
           executionChannel,
           cli,
           docker,
-          disk: { ok: disk.ok, freeGB: disk.freeGB, minGB: MIN_FREE_GB },
+          disk: { ok: disk.ok, freeGB: disk.freeGB, minGB },
           fixes,
           feed: feed.structured(),
         },
@@ -471,7 +465,7 @@ export function registerDiscoveryTools(
     {
       title: "List Avocado OS targets",
       description:
-        "List Avocado OS hardware targets from the package feed — the project's configured feed when `projectDir` is given (distro.release / distro.channel / distro.repo.url, AVOCADO_* env overrides), otherwise the default repo.avocadolinux.org 2024/edge. Pass `query` to narrow down — strongly recommended when the user has named hardware in their own words (e.g. 'rpi4', 'pi 5', 'jetson orin', 'intel x86'). The query does fuzzy-matching against the canonical slug; an exact match shortcuts to a single row. Without `query`, returns the full list. **Targets differ per release/channel** — newer hardware may exist only on a newer release (e.g. NVIDIA Thor on 2026, not 2024). Pass `projectDir` when validating a project's targets, or `release`/`channel` to list a specific stream; call it for each stream to discover which release supports a given board (or consult the docs support matrix at https://docs.peridio.com/hardware/support-matrix#supported).",
+        "List Avocado OS hardware targets from the package feed — the project's configured feed when `projectDir` is given (distro.release / distro.channel / distro.repo.url, AVOCADO_* env overrides), otherwise the default repo.avocadolinux.org 2024/edge. Pass `query` to narrow down — strongly recommended when the user has named hardware in their own words (e.g. 'rpi4', 'pi 5', 'jetson orin', 'intel x86'). The query does fuzzy-matching against the canonical slug; an exact match shortcuts to a single row. Without `query`, returns the full list. **Targets differ per release/channel** — newer hardware may exist only on a newer release (e.g. NVIDIA Thor on 2026, not 2024). Pass `projectDir` when validating a project's targets, or `release`/`channel` to list a specific stream; call it for each stream to discover which release supports a given board, or call `get-target-info` for the stream status per LTS release from the docs.",
       inputSchema: {
         query: z
           .string()
@@ -590,7 +584,7 @@ export function registerDiscoveryTools(
         out += `| \`${target}\` | ${repos.map((r) => `\`${r}\``).join(", ")} |\n`;
       }
       out += selectable
-        ? `\n_These are the user-selectable targets from the [support matrix](https://docs.peridio.com/hardware/support-matrix); use any as \`default_target\` / \`supported_targets\` in \`avocado.yaml\`. (Arch/tune pseudo-targets in the raw feed are filtered out.)_`
+        ? `\n_These are the user-selectable targets from the [support matrix](https://docs.peridio.com/hardware/support-matrix); use any as \`default_target\` / \`supported_targets\` in \`avocado.yaml\`. (Arch/tune pseudo-targets in the raw feed are filtered out.) Call \`get-target-info\` for the board facts of a target._`
         : `\n_⚠️ Support matrix unavailable — showing the raw \`${stream}\` feed, which may include arch/tune pseudo-targets that aren't user-selectable. Use any board string as \`default_target\` / \`supported_targets\` in \`avocado.yaml\`._`;
 
       return {

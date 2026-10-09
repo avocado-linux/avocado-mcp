@@ -6,40 +6,54 @@ import {
   emulatorInvocation,
   SUPPORTED_EMULATORS,
 } from "../../src/lib/device-info.js";
+import type { HardwareData } from "../../src/lib/hardware-data.js";
+import { TARGETS, DEVICES } from "./hardware-fixture.js";
 
-test("unknown targets fall back to 115200 8N1 rather than throwing", () => {
-  const info = getDeviceConnectionInfo("brand-new-board-9000");
+const DATA: HardwareData = { targets: TARGETS, devices: DEVICES };
+
+test("unknown targets fall back to 115200 8N1 and say the data has no entry", () => {
+  const info = getDeviceConnectionInfo("brand-new-board-9000", DATA);
   assert.equal(info.serial.baud, 115200);
   assert.equal(info.serial.dataBits, 8);
   assert.equal(info.serial.stopBits, 1);
   assert.equal(info.serial.parity, "none");
-  assert.deepEqual(info.caveats, []);
+  assert.match(info.caveats.join(" "), /no entry for `brand-new-board-9000`/);
 });
 
-test("targets with wiring hazards always carry a caveat", () => {
-  for (const t of [
-    "jetson-orin-nano-devkit",
-    "raspberrypi5",
-    "imx8mp-evk",
-    "fr201",
-    "qemux86-64",
-  ]) {
-    assert.ok(getDeviceConnectionInfo(t).caveats.length > 0, t);
+test("without board data the result says the values are defaults", () => {
+  const info = getDeviceConnectionInfo("rubikpi3", null);
+  assert.equal(info.serial.baud, 115200);
+  assert.match(info.caveats.join(" "), /Board data unavailable/);
+});
+
+test("a serial console is recommended, not required", () => {
+  for (const t of ["rubikpi3", "jetson-orin-nano-devkit", "rb3gen2"]) {
+    const text = getDeviceConnectionInfo(t, DATA).caveats.join(" ");
+    assert.match(text, /recommended, not required/, t);
   }
 });
 
-test("boards where a 3.3V TTL adapter is the wrong tool say so", () => {
-  const info = getDeviceConnectionInfo("fr201");
-  assert.match(info.caveats.join(" "), /RS-232|±12V/);
+test("an onboard USB console is reported with the by-id hint", () => {
+  const info = getDeviceConnectionInfo("rubikpi3", DATA);
+  assert.equal(info.onboardConsole, true);
+  assert.match(info.caveats.join(" "), /\/dev\/serial\/by-id/);
+  assert.equal(
+    info.docsUrl,
+    "https://docs.peridio.com/hardware/qualcomm/rubik-pi-3",
+  );
 });
 
-test("targets warning against VCC do so unambiguously", () => {
-  for (const t of ["jetson-orin-nano-devkit", "raspberrypi5"]) {
-    assert.match(
-      getDeviceConnectionInfo(t).caveats.join(" "),
-      /Do NOT connect VCC/,
-    );
-  }
+test("an adapter board gets its voltage and wiring from the data", () => {
+  const info = getDeviceConnectionInfo("jetson-orin-nano-devkit", DATA);
+  assert.equal(info.onboardConsole, false);
+  assert.equal(info.serial.voltage, "3.3V");
+  assert.match(info.caveats.join(" "), /`UART TXD` to adapter UART RX/);
+});
+
+test("QEMU has no physical serial port", () => {
+  const info = getDeviceConnectionInfo("qemux86-64", DATA);
+  assert.match(info.caveats.join(" "), /no physical serial port/);
+  assert.match(info.caveats.join(" "), /avocado provision dev/);
 });
 
 test("every emulator invocation sets the baud rate and names the port", () => {

@@ -9,6 +9,15 @@
 
 import { readdir } from "fs/promises";
 import * as path from "path";
+import {
+  boardDocsUrl,
+  isVirtual,
+  lookupTarget,
+  serialCaveats,
+  SERIAL_OPTIONAL,
+  HARDWARE_DOCS_URL,
+  type HardwareData,
+} from "./hardware-data.js";
 
 export interface SerialPortCandidate {
   /** Full path, e.g. /dev/tty.usbserial-AB0123 */
@@ -99,90 +108,74 @@ export interface DeviceConnectionInfo {
     dataBits: number;
     stopBits: number;
   };
+  /** True when the board has an onboard USB console (no adapter needed). */
+  onboardConsole: boolean;
   defaultUser: string;
   defaultPasswordNote: string;
   caveats: string[];
+  /** Board page, when the docs data has one. */
+  docsUrl?: string;
 }
 
+const COMMON_BAUD = 115200;
+
 /**
- * Per-target connection info. Most targets are 115200/8N1/3.3V — this table
- * captures the exceptions (Jetson pinout, x86 boards without onboard TTL).
+ * Serial console facts for a target from the docs board data. Every Avocado
+ * console runs 8N1. The baud, voltage, onboard console and wiring come from
+ * the data. When the data is missing, the result says so and falls back to
+ * the common 115200 baud.
  */
-export function getDeviceConnectionInfo(target: string): DeviceConnectionInfo {
-  // The standard everywhere unless noted.
+export function getDeviceConnectionInfo(
+  target: string,
+  data: HardwareData | null,
+): DeviceConnectionInfo {
+  const info = data ? lookupTarget(data, target) : null;
+  const serial = info?.entries.find((e) => e.serial)?.serial;
   const base: DeviceConnectionInfo = {
     target,
     serial: {
-      baud: 115200,
-      voltage: "3.3V",
+      baud: serial?.baud ?? COMMON_BAUD,
+      voltage:
+        serial?.voltage ??
+        (serial?.onboard
+          ? "n/a (onboard USB console)"
+          : "not in the docs data (check the board page)"),
       parity: "none",
       dataBits: 8,
       stopBits: 1,
     },
+    onboardConsole: serial?.onboard === true,
     defaultUser: "root",
     defaultPasswordNote:
       "Passwordless in the `dev` runtime (set by the `config` extension in the starter YAML). NOT FOR PRODUCTION.",
-    caveats: [],
+    caveats: [SERIAL_OPTIONAL],
+    docsUrl: info ? boardDocsUrl(info) : undefined,
   };
 
-  if (target.startsWith("jetson")) {
-    return {
-      ...base,
-      caveats: [
-        "Jetson serial console needs three jumper wires to the 40-pin header: GND (pin 6), UART TXD (pin 8) → adapter RX, UART RXD (pin 10) → adapter TX.",
-        "Do NOT connect VCC — the adapter's 3.3V from USB and the Jetson's regulators don't coexist.",
-        "For provisioning recovery mode, also short FC REC to GND (a fourth jumper).",
-      ],
-    };
+  if (info ? isVirtual(info) : target.startsWith("qemu")) {
+    base.caveats = [
+      "QEMU targets have no physical serial port. The VM console is the terminal that runs `avocado sdk run -iE vm dev` (after `avocado provision dev`). No USB adapter or `tio` is used.",
+    ];
+    return base;
   }
-
-  if (target.startsWith("intel-x86-64") || target === "fr201") {
-    return {
-      ...base,
-      caveats: [
-        "x86 platforms typically expose the serial console over the board's DB9 / RJ45 console port (NOT a 3.3V TTL header). Use a proper RS-232 serial cable / USB-to-RS-232 adapter, not a 3.3V TTL adapter.",
-        "Voltage may be RS-232 levels (±12V), not 3.3V. Check the board manual before connecting a TTL adapter.",
-      ],
-    };
+  if (!data) {
+    base.caveats.push(
+      `Board data unavailable. These are the common defaults, not facts for \`${target}\`. Check ${HARDWARE_DOCS_URL}.`,
+    );
+    return base;
   }
-
-  if (target.startsWith("qemu")) {
-    return {
-      ...base,
-      caveats: [
-        "QEMU targets have no physical serial port — the VM's serial output goes to stdout / a pty. `tio` and a USB adapter are not used; instead use `avocado sdk run` to launch the VM with the console in your terminal.",
-      ],
-    };
+  if (!info) {
+    base.caveats.push(
+      `The docs data has no entry for \`${target}\`. These are the common defaults. Check ${HARDWARE_DOCS_URL}.`,
+    );
+    return base;
   }
-
-  if (target.startsWith("raspberrypi")) {
-    return {
-      ...base,
-      caveats: [
-        "Wire the adapter to the 40-pin header: GND (pin 6 or any GND), UART TXD (pin 8, GPIO 14) → adapter RX, UART RXD (pin 10, GPIO 15) → adapter TX.",
-        "Do NOT connect VCC.",
-      ],
-    };
+  if (serial && !serial.baud) {
+    base.caveats.push(
+      `The docs data gives no baud rate for this board. ${COMMON_BAUD} is the common default.`,
+    );
   }
-
-  if (target.startsWith("imx") || target.startsWith("stm32")) {
-    return {
-      ...base,
-      caveats: [
-        "Refer to the board's debug header in the vendor docs for the exact UART pinout. Most NXP and STM32 EVKs expose a labeled 3-pin header (RX/TX/GND).",
-      ],
-    };
-  }
-
-  if (target === "grinn-astra-1680-sbc" || target === "rzv2n-sr-som") {
-    return {
-      ...base,
-      caveats: [
-        "Refer to the carrier board's labeled debug UART header. Connect GND, RX, TX (cross over: adapter TX → target RX, adapter RX → target TX).",
-      ],
-    };
-  }
-
+  base.caveats.push(...serialCaveats(serial));
   return base;
 }
 

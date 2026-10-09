@@ -17,8 +17,17 @@ import {
   feedContextFrom,
   feedSummarySchema,
 } from "./feed-args.js";
-import { checkQemu, qemuArchAdvisory } from "./discovery.js";
-import { platform as osPlatform } from "os";
+import { qemuArchAdvisory } from "./discovery.js";
+import {
+  getHardwareData,
+  lookupTarget,
+  boardDocsUrl,
+  isVirtual,
+  provisioningText,
+  provisionCommand,
+  unavailableText,
+  unknownTargetText,
+} from "../lib/hardware-data.js";
 
 export function registerDiagnosticsTools(
   server: McpServer,
@@ -226,13 +235,23 @@ export function registerDiagnosticsTools(
     {
       title: "Get per-target provisioning steps",
       description:
-        "Return the per-target provisioning steps for a given target (which profile to use, which media to flash, the exact `avocado provision` command, and per-target caveats like linuxAutoMount or tegraflash recovery mode). Look this up before telling a user how to provision.",
+        "Return the provisioning steps for a target from the docs board data: the profile, the media, host OS support, recovery mode steps, the exact `avocado provision` command, boot steps, and how to run it from Bash. QEMU targets get the provision-then-run VM flow. Look this up before telling a user how to provision.",
       inputSchema: {
         target: z
           .string()
           .describe(
             "Target name (must match an entry from list-targets, e.g. 'raspberrypi5').",
           ),
+        board: z
+          .string()
+          .optional()
+          .describe(
+            "Board (`default_target_board`) when the target has several, e.g. 'mic-733-ao5a1'.",
+          ),
+        runtime: z
+          .string()
+          .optional()
+          .describe("Runtime to provision. Defaults to `dev`."),
         ...feedArgsShape,
       },
       annotations: {
@@ -243,8 +262,9 @@ export function registerDiagnosticsTools(
         openWorldHint: true,
       },
     },
-    async ({ target, ...feedArgs }) => {
+    async ({ target, board, runtime, ...feedArgs }) => {
       const feed = feedContextFrom(feedArgs);
+      const rt = runtime?.trim() || "dev";
       const validTargets = await repoClient.getTargetsConfig(feed.base);
       if (!validTargets) {
         return {
@@ -267,162 +287,60 @@ export function registerDiagnosticsTools(
         };
       }
 
-      const profile = guessProfile(target);
-      const isQemu = target.startsWith("qemu");
-      let out = `# Provisioning \`${target}\`\n\n`;
-
-      if (!isQemu) {
-        out += `## ⚠️  HARDWARE REQUIRED: USB-to-UART adapter\n\n`;
-        out += `Provisioning AND debugging an Avocado OS device requires a **USB-to-UART adapter wired into the device's debug UART**. This is a hard prerequisite — without it the user cannot see boot output, cannot recover from boot failures, and cannot drive the device for diagnostics. **Before recommending any provision command, confirm the user has the adapter connected.**\n\n`;
-        out += `If the user doesn't have an adapter, point them at \`avocado://skills/device-debugging\` and \`avocado://skills/tmux-uart-bridge\` for setup, or suggest they start with a QEMU target instead (\`qemuarm64\`, \`qemux86-64\`) which doesn't need physical hardware.\n\n`;
+      let out = `# Provisioning \`${target}\`${board ? ` (board \`${board}\`)` : ""}\n\n`;
+      const data = await getHardwareData();
+      const info = data ? lookupTarget(data, target, board) : null;
+      if (!info) {
+        out += data ? unknownTargetText(target) : unavailableText(target);
+        out += `\n${genericSteps(rt)}`;
       } else {
-        out += `## QEMU target — no UART adapter needed\n\n`;
-        out += `\`${target}\` runs in a VM; the serial console comes directly to the launching terminal. See the \`qemu-quickstart\` reference for the full flow.\n\n`;
-        const archWarning = qemuArchAdvisory(target);
-        if (archWarning) {
-          out += `${archWarning}\n\n`;
-        }
-
-        // QEMU-only prerequisite: verify `qemu-system-<arch>` is on PATH.
-        // Skipped for non-QEMU targets in `environment-check` to avoid noise.
-        const qemu = await checkQemu();
-        if (!qemu.ok) {
-          const platform = osPlatform();
-          const installCmd =
-            platform === "darwin"
-              ? "brew install qemu"
-              : platform === "linux"
-                ? "sudo apt install qemu-system  # or your distro's equivalent (e.g. `dnf install qemu-system-x86 qemu-system-arm` on Fedora)"
-                : "install QEMU for your platform";
-          out += `## ⚠️  QEMU prerequisite missing\n\n`;
-          out += `\`${target}\` is a QEMU target, but the matching \`qemu-system\` binary isn't on PATH: ${qemu.detail}.\n\n`;
-          out += `**Fix:** \`${installCmd}\`. Then retry. \`environment-check\` does not include this check because it's only relevant for QEMU targets.\n\n`;
+        const page = boardDocsUrl(info);
+        if (page) out += `**Docs:** ${page}\n\n`;
+        if (isVirtual(info)) {
+          const archWarning = qemuArchAdvisory(target);
+          if (archWarning) out += `${archWarning}\n\n`;
+          out += provisioningText(info, rt);
+        } else {
+          out += provisioningText(info, rt);
+          const profiles = info.entries.flatMap((e) =>
+            (e.provisioning?.options ?? []).map((o) => o.profile),
+          );
+          out += runSection(
+            profiles.length === 1
+              ? provisionCommand(rt, profiles[0])
+              : `${provisionCommand(rt)} --profile <profile>`,
+          );
         }
       }
-
-      out += `**Profile:** \`${profile.profile}\`\n`;
-      out += `**Media:** ${profile.media}\n`;
-      out += `**Host OS supported:** ${profile.hostOs.join(", ")}\n`;
-      if (profile.warnings.length > 0) {
-        out += `**Warnings:** ${profile.warnings.join(", ")}\n`;
-      }
-      const profileArg =
-        profile.profile !== "default" ? ` --profile ${profile.profile}` : "";
-      const provisionCmd = `avocado provision dev${profileArg}`;
-
-      out += `\n## Steps\n\n`;
-      if (isQemu) {
-        out += `For QEMU targets, there's no provision-to-media step — launch the VM directly:\n\n`;
-        out += "```bash\n";
-        out += `avocado build --no-tui\n`;
-        out += `avocado sdk run -iE vm dev\n`;
-        out += "```\n\n";
-      } else {
-        out += `**For a HUMAN running these in their own terminal:**\n\n`;
-        out += "```bash\n";
-        out += `avocado build --no-tui\n`;
-        out += `${provisionCmd} --no-tui\n`;
-        out += "```\n\n";
-        out += `**For an LLM running via the Bash tool (NO interactive terminal):** no TTY wrapper is needed. The CLI detects a non-TTY stdin and starts the SDK container without a PTY. Set \`AVOCADO_NONINTERACTIVE=1\` so it never waits for an answer, and write logs to \`.avocado/logs/\` in the project:\n\n`;
-        out += "```bash\n";
-        out += `mkdir -p .avocado/logs\n`;
-        out += `avocado build --no-tui > .avocado/logs/build.log 2>&1\n`;
-        out += `AVOCADO_NONINTERACTIVE=1 ${provisionCmd} --no-tui > .avocado/logs/provision.log 2>&1\n`;
-        out += "```\n\n";
-        out += `If the provision fails with \`the input device is not a TTY\`, the CLI is older than 1.0.0-rc.2. Run \`avocado upgrade\`. On macOS, a host-side SD card write asks for confirmation and cancels with no terminal (\`Operation cancelled.\`). Ask the user to run that provision in their own terminal.\n\n`;
-      }
-      if (profile.notes.length > 0) {
-        out += `## Notes\n\n`;
-        for (const n of profile.notes) out += `- ${n}\n`;
-      }
-      out += `\nFor authoritative per-target documentation, see:\n\n`;
-      out += `\`https://docs.peridio.com/hardware/${target}\` (or the parent vendor's section).\n\n`;
       out += feed.describe();
-
       return { content: [{ type: "text", text: out }] };
     },
   );
 }
 
-// Best-effort target → provisioning profile mapping. Falls back to 'sd' for
-// unrecognised targets since that's the most common.
-function guessProfile(target: string): {
-  profile: string;
-  media: string;
-  hostOs: string[];
-  warnings: string[];
-  notes: string[];
-} {
-  if (target.startsWith("qemu")) {
-    return {
-      profile: "default",
-      media: "no media — runs in a VM",
-      hostOs: ["macOS", "Linux"],
-      warnings: [],
-      notes: [
-        "QEMU targets don't flash anything. Launch with `avocado sdk run -iE vm dev`.",
-        "Useful for trying Avocado OS without hardware.",
-      ],
-    };
-  }
-  if (target.startsWith("jetson")) {
-    return {
-      profile: "tegraflash",
-      media: "NVMe SSD over USB (recovery mode)",
-      hostOs: ["Linux"],
-      warnings: ["linuxHostOnly"],
-      notes: [
-        "Tegraflash provisioning requires a Linux host. macOS is NOT supported for this target.",
-        "Put the device in recovery mode (short FC REC to GND) and connect USB-C before running provision.",
-        "You'll be prompted to disconnect/reconnect USB partway through — follow the on-screen instructions.",
-      ],
-    };
-  }
-  if (target.startsWith("intel-x86-64")) {
-    return {
-      profile: "usb",
-      media: "USB drive",
-      hostOs: ["macOS", "Linux"],
-      warnings: [],
-      notes: [
-        "Target must support UEFI boot (Legacy BIOS is not supported).",
-        "Insert the USB drive into the target and boot from USB via the BIOS boot menu.",
-      ],
-    };
-  }
-  if (target === "fr201") {
-    return {
-      profile: "default",
-      media: "internal eMMC (already-provisioned device)",
-      hostOs: ["macOS", "Linux"],
-      warnings: [],
-      notes: [
-        "FR201 ships pre-configured for Avocado. `avocado provision dev` over the network.",
-      ],
-    };
-  }
-  if (target === "icam-540") {
-    return {
-      profile: "default",
-      media: "internal eMMC",
-      hostOs: ["macOS", "Linux"],
-      warnings: [],
-      notes: [
-        "ICAM-540 ships pre-configured. Apply power; provisioning happens over network/serial.",
-      ],
-    };
-  }
-  // Default to SD card for everything else (Raspberry Pi, NXP, STM, Grinn, SolidRun, Seeed, etc.)
-  return {
-    profile: "sd",
-    media: "microSD card (8 GB+)",
-    hostOs: ["macOS", "Linux"],
-    warnings: ["linuxAutoMount"],
-    notes: [
-      "On Linux hosts (especially Ubuntu/GNOME), disable auto-mount before provisioning to avoid corrupting the flash: `gsettings set org.gnome.desktop.media-handling automount false`.",
-      "Insert the SD card after `avocado provision dev --profile sd` finishes, then apply power to the target.",
-    ],
-  };
+/** The flow for a target with no docs data. States only what holds for all. */
+function genericSteps(runtime: string): string {
+  let out = `## Generic flow\n\n`;
+  out += `Without \`--profile\`, the CLI uses the default profile of the target. After \`avocado install\`, \`list-provision-profiles\` lists the profiles the target has. Check the board page before you flash media.\n\n`;
+  return out + runSection(provisionCommand(runtime));
+}
+
+/** How a human and an LLM run build + provision. */
+function runSection(provisionCmd: string): string {
+  let out = `## Run it\n\n`;
+  out += `**For a HUMAN running these in their own terminal:**\n\n`;
+  out += "```bash\n";
+  out += `avocado build --no-tui\n`;
+  out += `${provisionCmd} --no-tui\n`;
+  out += "```\n\n";
+  out += `**For an LLM running via the Bash tool (NO interactive terminal):** no TTY wrapper is needed. The CLI detects a non-TTY stdin and starts the SDK container without a PTY. Set \`AVOCADO_NONINTERACTIVE=1\` so it never waits for an answer, and write logs to \`.avocado/logs/\` in the project:\n\n`;
+  out += "```bash\n";
+  out += `mkdir -p .avocado/logs\n`;
+  out += `avocado build --no-tui > .avocado/logs/build.log 2>&1\n`;
+  out += `AVOCADO_NONINTERACTIVE=1 ${provisionCmd} --no-tui > .avocado/logs/provision.log 2>&1\n`;
+  out += "```\n\n";
+  out += `If the provision fails with \`the input device is not a TTY\`, the CLI is older than 1.0.0-rc.2. Run \`avocado upgrade\`. On macOS, a host-side SD card write asks for confirmation and cancels with no terminal (\`Operation cancelled.\`). Ask the user to run that provision in their own terminal.\n\n`;
+  return out;
 }
 
 /**
