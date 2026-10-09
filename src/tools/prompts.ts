@@ -124,7 +124,7 @@ export function registerPrompts(server: McpServer): void {
         .string()
         .optional()
         .describe(
-          "Device address as `[user@]host[:port]` (e.g. '192.168.1.42', 'root@avocado-rpi5.local', '10.0.0.5:2222'). If omitted, ask the user before proceeding.",
+          "Device address as `[user@]host[:port]` (e.g. '192.168.1.42', 'root@avocado-raspberrypi5.local', 'avocado-raspberrypi5', '10.0.0.5:2222'). If omitted, ask the user before proceeding.",
         ),
       runtime: z
         .string()
@@ -159,7 +159,7 @@ export function registerPrompts(server: McpServer): void {
                 "",
                 "**Do this fully automated** — don't just print commands for me to run. Execute each step yourself and report progress between them.",
                 "",
-                "**See it through. Don't hand back mid-flow.** install / build / provision are slow (minutes; provision flash writes can take 10-30 min). **Drive the wait with `await_avocado_cli`** — kick off the run, then call `await_avocado_cli` with the returned `run_id`; the host blocks the response until the run actually finishes and wakes the call within milliseconds of process exit. If the response has `timedOut: true` (run still going after 240s), loop the await. Use `avocado_cli_status` only for one-shot snapshots, never as a wait. Pivot to `schedule_task` only for genuinely long flashes (you've already awaited ~10 minutes and the output makes clear it's still going). See `avocado://skills/avocado-cli-execution` for the full pattern. **Never** end your turn with \"ping me when it's done\" without either (a) being inside an active `await_avocado_cli` call, or (b) having scheduled a follow-up.",
+                "**See it through. Don't hand back mid-flow.** install, build and deploy are slow (minutes). How to wait depends on the execution channel. On the `bash` channel, run each command in the foreground and wait for it to exit. On the `host-tool` channel, start the run with `run_avocado_cli`, then call `await_avocado_cli` with the returned `run_id`. The host wakes the call when the run exits. If the response has `timedOut: true`, call it again. Use `avocado_cli_status` only for one-shot snapshots, never as a wait. Change to `schedule_task` only after about 10 minutes of awaiting one run that is still going. See `avocado://skills/avocado-cli-execution` for the full pattern. **Never** end your turn with \"ping me when it's done\" unless you are inside an active wait or you have scheduled a follow-up.",
                 "",
                 "**Set your execution channel before the first `avocado` call.** Call `environment-check` once this session if you haven't already — its **Execution channel** section says whether to invoke `avocado <args>` via the host MCP's `run_avocado_cli` tool (host-tool channel) or via your Bash tool (bash channel). Read `avocado://skills/avocado-cli-execution` for the contract of both channels: exact tool arguments, where output lives, how to poll, status reporting, log-path conventions. **Stick with the selected channel for the rest of this prompt** — don't mix.",
                 "",
@@ -176,11 +176,11 @@ export function registerPrompts(server: McpServer): void {
                   : `5. **Skip install — start with build.** \`avocado install\` is the slow part of the loop and is NOT needed when only source files / overlays / hook scripts have changed. The default is to skip it. Only run install if step 6 (build) tells us it's needed.`,
                 `6. Invoke \`avocado build\` per \`avocado://skills/avocado-cli-execution\`. Status: \`✅ build succeeded — image at <path if shown>\` or \`❌ build failed (exit N)\`.
 
-   **If build failed, decide:** does the captured error look like a missing-package / unresolved-extension / "needs install" signal? Specifically: \`nothing provides X\`, \`no package matching\`, \`package X not found\`, \`unable to find a match\`, or an explicit CLI message asking the user to run \`avocado install\`?
+   **If build failed, decide:** does the captured error look like a missing-package / unresolved-extension / "needs install" signal? Specifically: \`nothing provides X\`, \`no package matching\`, \`package X not found\`, \`unable to find a match\`, \`dependencies not satisfied\` with a \`To fix:\` line that names \`avocado install\` (build stamps found a stale or missing install), or another CLI message asking the user to run \`avocado install\`?
 
    - **If yes (install needed):** tell me \`🔄 build failed because of a missing dependency — running install and retrying\`, then invoke \`avocado install\` (same channel). Report install ✅/❌. If install succeeded, re-run \`avocado build\` and report build ✅/❌ again. If the retried build still fails, surface to \`explain-build-error\` and STOP. Don't proceed to deploy.
    - **If no (real build error):** pass the output to \`explain-build-error\` with my target and STOP — running install won't help. Don't proceed to deploy.`,
-                `7. Invoke \`avocado deploy ${r} ${device ? `-d ${device}` : "-d <device>"}${target ? ` -t ${target}` : ""}\` per \`avocado://skills/avocado-cli-execution\`. The deploy is staged via a local HTTP server and SSH-triggered on the device. Status: \`✅ deploy succeeded — pushed runtime '${r}' to <device>\` or \`❌ deploy failed (exit N)\`. If it failed mid-stream, name the stage that failed (TUF metadata generation, HTTP server bind, SSH to device, \`avocadoctl runtime add\` on device).`,
+                `7. Invoke \`avocado deploy ${r} ${device ? `-d ${device}` : "-d <device>"}${target ? ` -t ${target}` : ""}\` per \`avocado://skills/avocado-cli-execution\`. The deploy is staged via a local HTTP server and SSH-triggered on the device. Status: \`✅ deploy succeeded: pushed runtime '${r}' to <device>\` or \`❌ deploy failed (exit N)\`. If it failed mid-stream, name the stage that failed (TUF metadata generation, HTTP server bind, SSH to device, \`avocadoctl runtime add\` on device). If the device has already received a Connect OTA update, add \`--connect-sign\` (it needs a local signing key for the runtime). If deploy refuses a runtime with extension \`image.verity: true\`, tell me: that runtime must be provisioned, not deployed. If the runtime includes an OS change, the device reboots into the new A/B slot. Wait for it to come back before you verify.`,
                 `8. **Verify on the device.** Use whatever channel is already established (UART tmux session or SSH). Targeted check: \`systemctl is-active <relevant-unit>\`, \`rpm -q <newly-added-package>\`, or whatever fits the change just deployed. Bound your output (\`--no-pager -n 20\`, \`| tail -20\`) per the token-discipline rules in \`avocado://skills/tmux-uart-bridge\`. Status: \`✅ <unit> active\` / \`❌ <unit> failed: <reason>\`.`,
                 `9. Final summary paragraph: confirm build ✅/❌ (and install ✅/❌ if it was run), deploy ✅/❌, on-device verification ✅/❌. Call out anything I should test manually next.`,
                 "",
@@ -205,7 +205,7 @@ export function registerPrompts(server: McpServer): void {
         .string()
         .optional()
         .describe(
-          "Device address as `[user@]host[:port]` (e.g. '192.168.1.42', 'root@avocado-rpi5.local', '10.0.0.5:2222'). User defaults to `root` (passwordless in dev runtime). If omitted, ask the user before proceeding.",
+          "Device address as `[user@]host[:port]` (e.g. '192.168.1.42', 'root@avocado-raspberrypi5.local', 'avocado-raspberrypi5', '10.0.0.5:2222'). User defaults to `root` (passwordless in dev runtime). If omitted, ask the user before proceeding.",
         ),
       symptom: z
         .string()
@@ -296,9 +296,11 @@ export function registerPrompts(server: McpServer): void {
               text: [
                 `Provision my Avocado OS device for the first time${target ? ` (target: \`${target}\`)` : ""}. This is the initial flash, not an iterative deploy.`,
                 "",
-                "**Do this fully automated** — run each step via Bash and report progress between them. The only manual steps will be the physical handoffs (inserting media, putting the device in recovery mode, powering on). When those moments come up, STOP and tell me exactly what to do.",
+                "**Do this fully automated.** Run each step yourself and report progress between them. The only manual steps will be the physical handoffs (inserting media, putting the device in recovery mode, powering on). When those moments come up, STOP and tell me exactly what to do.",
                 "",
-                "**Collect and filter the `avocado` CLI's own output. Do not inspect its internals.** The CLI is the source of truth for what happened; whatever container/build mechanism it uses is an implementation detail. Run `avocado` commands as foreground Bash commands and read their stdout/stderr/exit code.",
+                "**Set your execution channel before the first `avocado` call.** Call `environment-check` once this session if you haven't already. Its **Execution channel** section says whether to run `avocado <args>` with the host MCP's `run_avocado_cli` tool (`host-tool` channel) or with your Bash tool (`bash` channel). Follow `avocado://skills/avocado-cli-execution` for that channel, and stick with it. The Bash rules below (`--no-tui`, log files in `.avocado/logs/`, `AVOCADO_NONINTERACTIVE=1`) apply to the `bash` channel. On the `host-tool` channel, pass only the `avocado` arguments, wait with `await_avocado_cli`, and read `outputTail`.",
+                "",
+                "**Collect and filter the `avocado` CLI's own output. Do not inspect its internals.** The CLI is the source of truth for what happened. Whatever container/build mechanism it uses is an implementation detail. Wait for each `avocado` command to exit, then read its output and exit code.",
                 "",
                 "**Always pass `--no-tui`** to `avocado build` and `avocado provision` when running under Bash with captured output — the default TUI renders ANSI escapes that garble captured log files.",
                 "",
