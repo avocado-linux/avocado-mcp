@@ -45,7 +45,7 @@ Overlay paths are relative to the project root.
 
 ## How it maps to the device
 
-At boot, systemd-sysext merges every sysext into \`/usr/\` (and confext into \`/etc/\`) via OverlayFS. The base rootfs is read-only and atomic — sysext/confext images are the only writable layer at the filesystem level, and they're signed (and optionally dm-verity'd) for integrity.
+At boot, systemd-sysext merges every sysext into \`/usr/\` (and confext into \`/etc/\`) via OverlayFS. The base rootfs is read-only and atomic. The merged extensions are read-only too. They are signed, and they can have dm-verity for integrity. \`/var\` is the only writable partition. See \`avocado://skills/filesystem-model\`.
 
 This is why packages must be installed *into an extension*, not just into the root image: the root is sealed.
 
@@ -54,8 +54,8 @@ This is why packages must be installed *into an extension*, not just into the ro
 You typically have **one app extension** plus pre-built extensions for dev tooling and BSP. Adding new functionality usually means:
 
 1. Add packages to your app extension (\`add-package-to-extension\`).
-2. Drop new files into \`overlays/app/\`.
-3. \`avocado build\` → \`avocado provision\`.
+2. Drop new files into the extension's overlay directory (\`app/overlay/\` in the references).
+3. \`avocado install\` if packages changed, then \`avocado build\`. Then \`avocado deploy\` to a running device, or \`avocado provision\` for the first flash.
 
 You rarely need to create a brand-new extension. When you do (e.g. a separate confext for production config), use \`add-extension\`.
 `;
