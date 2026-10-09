@@ -620,6 +620,35 @@ test("an unset env var in a feed url is not checked, unless the lock recorded th
   assert.equal(h.extraFeeds?.[0]?.url, "https://env.example/r");
 });
 
+test("a token in a feed url query never reaches the summary, structured output or errors", () => {
+  const dir = project(
+    "distro:\n  release: 2026\n  channel: edge\n  feeds: [vendor]\nrepos:\n  vendor:\n    url: 'https://vendor.example/repo?token={{ env.TOKEN }}'\n",
+  );
+  const ctx = FeedContext.load({
+    projectDir: dir,
+    env: {
+      TOKEN: "s3cr3t-token",
+      AVOCADO_REPO_URL: "https://mirror.example/r?key=s3cr3t-key",
+    },
+  });
+  const f = ctx.forTarget("qemuarm64");
+  const vendor = f.feeds?.find((e) => e.name === "vendor");
+  assert.equal(vendor?.status, "not-checked");
+  assert.equal(vendor?.location, "https://vendor.example/repo?token=***");
+  assert.match(vendor?.reason ?? "", /query or fragment/);
+  const shown = JSON.stringify([
+    f.feeds,
+    f.notChecked,
+    ctx.describe(["qemuarm64"]),
+    ctx.structured(["qemuarm64"]),
+  ]);
+  assert.doesNotMatch(shown, /s3cr3t/);
+  assert.throws(
+    () => validateFeed(f),
+    (e: Error) => !e.message.includes("s3cr3t"),
+  );
+});
+
 test("withStream drops the named feeds (they don't follow the stream)", () => {
   const dir = project(
     "distro:\n  release: 2026\n  channel: edge\n  feeds: [x]\nrepos:\n  x:\n    url: https://x.example/r\n",
