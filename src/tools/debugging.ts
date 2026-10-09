@@ -11,6 +11,7 @@ import {
   SAFE_PORT_RE,
   type SerialEmulator,
 } from "../lib/device-info.js";
+import { getHardwareData } from "../lib/hardware-data.js";
 
 const execFileP = promisify(execFile);
 
@@ -126,7 +127,7 @@ export function registerDebuggingTools(server: McpServer): void {
     {
       title: "Get UART parameters + credentials for a target",
       description:
-        "Get the serial-console connection parameters (baud, voltage, parity, data bits, stop bits) and default login credentials for a given Avocado target, plus per-target wiring caveats (Jetson pinout, RS-232 vs TTL, etc.). Call this once you know the user's target so you can configure the serial bridge correctly.",
+        "Get the serial-console connection parameters (baud, voltage, parity, data bits, stop bits), whether the board has an onboard USB console, and default login credentials for a given Avocado target, plus wiring notes from the docs board data. A serial console is recommended, not required. Call this once you know the user's target so you can configure the serial bridge correctly.",
       inputSchema: {
         target: z
           .string()
@@ -143,34 +144,36 @@ export function registerDebuggingTools(server: McpServer): void {
           dataBits: z.number().int(),
           stopBits: z.number().int(),
         }),
+        onboardConsole: z
+          .boolean()
+          .describe("True when the board has an onboard USB console."),
         defaultUser: z.string(),
         defaultPasswordNote: z.string(),
         caveats: z.array(z.string()),
+        docsUrl: z.string().optional(),
       },
       annotations: {
         title: "Get UART parameters + credentials for a target",
         readOnlyHint: true,
         destructiveHint: false,
         idempotentHint: true,
-        openWorldHint: false,
+        openWorldHint: true,
       },
     },
     async ({ target }) => {
-      const info = getDeviceConnectionInfo(target);
+      const info = getDeviceConnectionInfo(target, await getHardwareData());
       let out = `# get-device-connection-info — \`${target}\`\n\n`;
       out += `## Serial parameters\n\n`;
+      out += `- **Console:** ${info.onboardConsole ? "onboard USB (no adapter needed)" : "USB-to-UART adapter"}\n`;
       out += `- **Baud:** ${info.serial.baud}\n`;
       out += `- **Voltage:** ${info.serial.voltage}\n`;
       out += `- **Format:** ${info.serial.dataBits}${info.serial.parity[0].toUpperCase()}${info.serial.stopBits} (${info.serial.dataBits} data bits, ${info.serial.parity} parity, ${info.serial.stopBits} stop bit)\n\n`;
       out += `## Default credentials (dev runtime)\n\n`;
       out += `- **User:** \`${info.defaultUser}\`\n`;
       out += `- **Password:** ${info.defaultPasswordNote}\n\n`;
-      if (info.caveats.length > 0) {
-        out += `## Wiring caveats\n\n`;
-        for (const c of info.caveats) out += `- ${c}\n`;
-      } else {
-        out += `_No target-specific wiring caveats._\n`;
-      }
+      out += `## Notes\n\n`;
+      for (const c of info.caveats) out += `- ${c}\n`;
+      if (info.docsUrl) out += `\nBoard page: ${info.docsUrl}\n`;
       return {
         content: [
           { type: "text", text: out },
@@ -205,7 +208,7 @@ export function registerDebuggingTools(server: McpServer): void {
         target: z
           .string()
           .describe(
-            "Target name. Used to look up the correct baud rate (almost always 115200).",
+            "Target name. Used to look up the baud rate and console type in the docs board data.",
           ),
         emulator: z
           .enum(["tio", "picocom", "minicom"])
@@ -225,11 +228,11 @@ export function registerDebuggingTools(server: McpServer): void {
         readOnlyHint: true,
         destructiveHint: false,
         idempotentHint: true,
-        openWorldHint: false,
+        openWorldHint: true,
       },
     },
     async ({ portPath, target, emulator, sessionName }) => {
-      const info = getDeviceConnectionInfo(target);
+      const info = getDeviceConnectionInfo(target, await getHardwareData());
       const session = sessionName ?? "avocado-uart";
       const chosen: SerialEmulator = emulator ?? "tio";
 
@@ -239,7 +242,7 @@ export function registerDebuggingTools(server: McpServer): void {
           content: [
             {
               type: "text",
-              text: `# get-tmux-uart-snippet\n\n⚠️  \`${target}\` is a virtual target. There is no physical serial port. Launch the VM with \`avocado sdk run -iE vm dev\` instead, and the console will appear in your terminal directly.`,
+              text: `# get-tmux-uart-snippet\n\n⚠️  \`${target}\` is a virtual target. There is no physical serial port. Run \`avocado provision dev\` to write the disk image, then \`avocado sdk run -iE vm dev\`. The console is the terminal that runs the VM.`,
             },
           ],
         };
@@ -271,6 +274,7 @@ export function registerDebuggingTools(server: McpServer): void {
       out += `# tmux — macOS: brew install tmux  •  Debian/Ubuntu: sudo apt install tmux\n`;
       out += `# ${chosen} — ${emulatorInstallHint(chosen)}\n`;
       out += "```\n\n";
+      out += `**Baud:** ${info.serial.baud}${info.onboardConsole ? ". This board has an onboard USB console, so no adapter is needed. On Linux, prefer the stable name from \`ls /dev/serial/by-id/\`." : ""}\n\n`;
       out += `## Bridge setup + usage\n\n`;
       out += "```bash\n" + snippet + "\n```\n\n";
       out += `## Important rules\n\n`;
