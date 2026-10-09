@@ -402,3 +402,178 @@ test("unread configured feeds are listed when the configured stream also has an 
   assert.match(out, /Could not query your configured stream/);
   assert.match(out, /`acme` \(private\)/);
 });
+
+// ---------------------------------------------------------------------------
+// CLI and provision-script messages. Each log line is copied from the source
+// that prints it (avocado-cli, or meta-avocado for the provision scripts), with
+// the format arguments filled in.
+// ---------------------------------------------------------------------------
+
+const BUILD_CASES: { label: string; log: string }[] = [
+  {
+    label: "Build step prerequisites not met",
+    log: "[ERROR] Cannot build runtime 'dev' - dependencies not satisfied\n[INFO] Missing steps:\n[INFO]   - SDK install (sdk/install.json)",
+  },
+  {
+    label: "Stamps from an older CLI",
+    log: "  - SDK install (sdk/install.json: stamp format changed (v3 → v4); re-run the step to refresh it)",
+  },
+  {
+    label: "Connect login missing or expired",
+    log: "Error: repos.acme: `org: acme` is a private feed and you are not logged in.\nRun `avocado login`, or set AVOCADO_CONNECT_TOKEN for CI.",
+  },
+  {
+    label: "Connect login missing or expired",
+    log: "Error: repos.acme: feed-token request returned 401 Unauthorized — the stored credential was rejected. Run `avocado login` to refresh it.",
+  },
+  {
+    label: "Connect login missing or expired",
+    log: "Error: --connect-sign requires an active Connect session. Run `avocado connect auth login` first.",
+  },
+  {
+    label: "Not entitled to a private feed",
+    log: "Error: repos.acme: feed-token request returned 403 Forbidden — this account is not entitled to that org's private feed",
+  },
+  {
+    label: "Connect serves no feed tokens",
+    log: "Error: repos.acme: feed-token request returned 404 Not Found — this Connect deployment does not serve feed tokens yet",
+  },
+  {
+    label: "Rootfs verity needs a FIT signing key",
+    log: "ERROR: rootfs.image.verity is on, which needs the boot FIT rebuilt with the root hash, but no FIT signing key is configured. Set runtimes.<name>.signing.fit_key to an RSA key in the signing-key registry, or signing.fit_unsigned: true if this machine's U-Boot enforces no key.",
+  },
+  {
+    label: "Feed has no bootloader rekey tool",
+    log: "ERROR: signing.fit_key_in_bootloader is on but this feed ships no imx-boot-tools/rekey-imx-boot.sh for imx93-frdm. Set signing.fit_key_in_bootloader: false to keep the distro bootloader.",
+  },
+  {
+    label: "Deploy refuses extension verity",
+    log: "ERROR: this runtime has extensions with image.verity: true; deploy does not publish their dm-verity hash trees yet, so the device would refuse them. Provision instead, or build without verity.",
+  },
+  {
+    label: "No root.json in the runtime",
+    log: "ERROR: No root.json found at /opt/_avocado/x/var-staging/lib/avocado/metadata/root.json\n       The runtime has no update-authority (root.json) baked into its build.",
+  },
+  {
+    label: "Unresolved depends_on closure",
+    log: "Error: Cannot install with an unresolved dependency closure: Extension 'base' is not defined in `extensions:` and could not be resolved from the target's feed.\nRequired by: app -> base\nFix the depends_on declaration (or fetch the missing extension) and re-run.",
+  },
+  {
+    label: "Unresolved depends_on closure",
+    log: "Error: Extension 'base' declares `source: { type: git }` but its configuration has not been merged, so its dependencies are unknown.\nRun `avocado ext fetch` to fetch it before resolving dependencies.",
+  },
+  {
+    label: "avocado.lock drift under --locked",
+    log: "Error: avocado.lock does not pin declared extension(s):\n  app\n--locked forbids resolving them. Re-run without --locked to update the lock.",
+  },
+  {
+    label: "avocado.lock drift under --locked",
+    log: "Error: avocado.lock is out of date; --locked forbids updating it:\n  app: 1.0.0 -> 1.1.0\nRe-run without --locked to update the lock.",
+  },
+  {
+    label: "Lockfile from another distro release",
+    log: "[WARNING] Lock file was created with distro.release '2024' but config has '2026'. This may indicate an incompatible feed year change. Run 'avocado unlock' and reinstall to update.",
+  },
+  {
+    label: "avocado.yaml keys ignored",
+    log: "[WARNING] avocado.yaml: unknown key 'runtimes.dev.pakages' is ignored; did you mean 'packages'?",
+  },
+  {
+    label: "avocado.yaml keys ignored",
+    log: "[WARNING] avocado.yaml: 'ext' is an old name for 'extensions' and is no longer read; rename it to 'extensions'",
+  },
+  {
+    label: "CLI version does not meet cli_requirement",
+    log: "Error: This project requires avocado CLI version '>=2.0.0', but you are running version 1.0.0-rc.5.\n\nPlease update your avocado CLI.",
+  },
+  {
+    label: "Encrypted /var config error",
+    log: "Error: runtimes.dev.var.hardware: 'none' needs var.recovery - without a hardware keyslot or an operator recovery key /var would be unrecoverable",
+  },
+  {
+    label: "Encrypted /var config error",
+    log: "Error: runtimes.dev.var.recovery is set but var.encrypt is not true - there is no encrypted /var to enrol a recovery key on",
+  },
+  {
+    label: "Stale build volume",
+    log: "ERROR: rootfs staging at /opt/_avocado/qemux86-64/rootfs-work is missing /etc/passwd. The build volume looks half-populated or stale.",
+  },
+];
+
+test("each CLI build, install and deploy message gets its diagnosis", () => {
+  for (const { label, log } of BUILD_CASES) {
+    assert.ok(
+      labels(diagnoseBuildLog(log)).includes(label),
+      `${label}: ${log}`,
+    );
+  }
+});
+
+test("the depends_on closure error is not read as a DNF dependency failure", () => {
+  const log = BUILD_CASES.find((c) =>
+    c.log.includes("unresolved dependency closure"),
+  )!.log;
+  assert.ok(!labels(diagnoseBuildLog(log)).includes("Unresolved dependency"));
+});
+
+const PROVISION_CASES: { label: string; log: string }[] = [
+  {
+    label: "Build step prerequisites not met",
+    log: "[ERROR] Cannot provision runtime 'dev' - dependencies not satisfied",
+  },
+  {
+    label: "Qualcomm board not in EDL mode",
+    log: "Waiting for QDL device...\nERROR: QDL device not found after 30 seconds, aborting",
+  },
+  {
+    label: "Qualcomm board not in EDL mode",
+    log: "Bus 001 Device 012: ID 05c6:900e Qualcomm, Inc. QUSB_BULK_CID",
+  },
+  {
+    label: "Jetson not in recovery mode",
+    log: "Please put device into recovery mode (hold recovery button, press reset)...\nERROR: Device did not enter RCM mode (waited 60s)",
+  },
+  {
+    label: "Jetson not in recovery mode",
+    log: "ERR: No Jetson device in recovery mode found on USB",
+  },
+];
+
+test("each provision script message gets its diagnosis", () => {
+  for (const { label, log } of PROVISION_CASES) {
+    assert.ok(
+      labels(diagnoseProvisionLog(log)).includes(label),
+      `${label}: ${log}`,
+    );
+  }
+});
+
+test("new patterns stay quiet on a clean CLI run", () => {
+  const clean = [
+    "[INFO] Using config: avocado.yaml",
+    "[INFO] Resolving feeds for target 'qemux86-64'",
+    "[SUCCESS] Installed SDK packages.",
+    "[INFO] Building extension 'app'.",
+    "Copying /etc/passwd, /etc/shadow, and /etc/group from /opt/_avocado/qemux86-64/rootfs/etc to /opt/_avocado/qemux86-64/rootfs-work/etc",
+    "Assembling boot FIT from /opt/_avocado/qemux86-64/runtimes/dev/fit-image.its...",
+    "Built boot FIT: /opt/_avocado/qemux86-64/runtimes/dev/fitImage (signed)",
+    "Phase 2: Generating signed TUF metadata...",
+    "Waiting for QDL device...",
+    "QDL device found",
+    "Device in RCM mode",
+    "[SUCCESS] Successfully built runtime 'dev'.",
+  ].join("\n");
+  assert.deepEqual(labels(diagnoseBuildLog(clean)), []);
+  assert.deepEqual(labels(diagnoseProvisionLog(clean)), []);
+});
+
+test("the QDL wait timeout is not read as missing target storage", () => {
+  assert.deepEqual(
+    labels(
+      diagnoseProvisionLog(
+        "ERROR: QDL device not found after 30 seconds, aborting",
+      ),
+    ),
+    ["Qualcomm board not in EDL mode"],
+  );
+});
