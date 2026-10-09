@@ -12,10 +12,12 @@ import * as path from "path";
 import {
   unknownTargetText,
   boardDocsUrl,
+  isRs232Console,
   isVirtual,
   lookupTarget,
   resolvedLine,
   serialCaveats,
+  RS232_WARNING,
   SERIAL_OPTIONAL,
   HARDWARE_DOCS_URL,
   type HardwareData,
@@ -114,8 +116,9 @@ export interface DeviceConnectionInfo {
   onboardConsole: boolean;
   /**
    * `onboard`: onboard USB console. `adapter`: needs a USB-to-UART adapter.
-   * `none`: a virtual target with no physical port. `unknown`: the docs data
-   * does not describe a serial console for this board.
+   * `rs232`: an RS-232 port, needs a USB-to-RS-232 adapter. `none`: a
+   * virtual target with no physical port. `unknown`: the docs data does not
+   * describe a serial console for this board.
    */
   consoleType: ConsoleType;
   defaultUser: string;
@@ -125,12 +128,14 @@ export interface DeviceConnectionInfo {
   docsUrl?: string;
 }
 
-export type ConsoleType = "onboard" | "adapter" | "none" | "unknown";
+export type ConsoleType = "onboard" | "adapter" | "rs232" | "none" | "unknown";
 
 /** The "Console" line of `get-device-connection-info` for each type. */
 export const CONSOLE_TEXT: Record<ConsoleType, string> = {
   onboard: "onboard USB (no adapter needed)",
   adapter: "USB-to-UART adapter",
+  rs232:
+    "RS-232 serial port (use a USB-to-RS-232 adapter, not a 3.3 V USB-to-UART adapter)",
   none: "none (virtual target, the VM console is the terminal that runs the VM)",
   unknown:
     "unknown (the docs data does not describe a serial console for this board, check the board page)",
@@ -158,22 +163,27 @@ export function getDeviceConnectionInfo(
   const virtual = info
     ? isVirtual(info)
     : !data && /^qemu/i.test(target.trim());
+  const rs232 = info ? isRs232Console(info.target, serial) : false;
   const consoleType: ConsoleType = virtual
     ? "none"
     : serial?.onboard
       ? "onboard"
       : serial
-        ? "adapter"
+        ? rs232
+          ? "rs232"
+          : "adapter"
         : "unknown";
   const base: DeviceConnectionInfo = {
     target: info?.target ?? target,
     serial: {
       baud: serial?.baud ?? COMMON_BAUD,
-      voltage:
-        serial?.voltage ??
-        (serial?.onboard
-          ? "n/a (onboard USB console)"
-          : "not in the docs data (check the board page)"),
+      // The docs give the FR201 3.3V, but its port runs RS-232 levels.
+      voltage: rs232
+        ? "RS-232 levels, up to ±12 V (check the board page)"
+        : (serial?.voltage ??
+          (serial?.onboard
+            ? "n/a (onboard USB console)"
+            : "not in the docs data (check the board page)")),
       parity: "none",
       dataBits: 8,
       stopBits: 1,
@@ -202,6 +212,8 @@ export function getDeviceConnectionInfo(
     base.caveats.push(
       `Board data unavailable. These are the common defaults, not facts for \`${target}\`. Check ${HARDWARE_DOCS_URL}.`,
     );
+    // The RS-232 list is local, so it still applies (FR201, Intel x86-64).
+    if (isRs232Console(target.trim(), null)) base.caveats.push(RS232_WARNING);
     return base;
   }
   if (!info) {
@@ -215,7 +227,7 @@ export function getDeviceConnectionInfo(
       `The docs data gives no baud rate for this board. ${COMMON_BAUD} is the common default.`,
     );
   }
-  base.caveats.push(...serialCaveats(serial));
+  base.caveats.push(...serialCaveats(serial, info.target));
   return base;
 }
 

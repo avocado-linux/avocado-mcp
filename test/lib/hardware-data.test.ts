@@ -29,7 +29,8 @@ test("Jetson Orin Nano: tegraflash, macOS supported, FC REC jumper, 16 GB", () =
   assert.match(out, /Avocado Desktop/);
   assert.match(out, /short the FC REC pin to GND/);
   assert.match(out, /\*\*Free disk space:\*\* 16 GB/);
-  assert.match(out, /3\.3V TTL/);
+  assert.match(out, /- \*\*Voltage:\*\* 3\.3V\n/);
+  assert.doesNotMatch(out, /TTL/);
   assert.match(
     out,
     /https:\/\/docs\.peridio\.com\/hardware\/nvidia\/jetson-orin-nano-developer-kit\n/,
@@ -365,4 +366,55 @@ test("a board the data does not list gets no other board's name or page", () => 
     boardDocsUrl(lookupTarget(DATA, "jetson-orin-nx", "mic-999")!),
     undefined,
   );
+});
+
+test("an adapter console gets the VCC and TX/RX rule and the docs voltage as written", () => {
+  const out = targetInfoText(DATA, "raspberrypi4", undefined);
+  assert.match(
+    out,
+    /- \*\*Console:\*\* a USB-to-UART adapter on the debug UART\.\n/,
+  );
+  assert.match(out, /- \*\*Voltage:\*\* 3\.3V\n/);
+  assert.match(out, /Leave the adapter's VCC pin disconnected/);
+  assert.match(out, /board TX to adapter RX, and board RX to adapter TX/);
+  assert.match(out, /Confirm the console voltage on the board page/);
+  assert.doesNotMatch(out, /TTL/);
+});
+
+test("FR201 gets the RS-232 warning, not a 3.3 V adapter", () => {
+  const out = targetInfoText(DATA, "fr201", undefined);
+  const serial = out.slice(out.indexOf("## Serial console"));
+  assert.match(serial, /RS-232 serial port\. Use a USB-to-RS-232 adapter/);
+  assert.match(serial, /5-pin RS-232\/422\/485 terminal block/);
+  assert.match(serial, /±12 V/);
+  assert.match(serial, /Do not connect a 3\.3 V USB-to-UART adapter/);
+  assert.doesNotMatch(out, /TTL/);
+  assert.doesNotMatch(serial, /\*\*Voltage:\*\* 3\.3V/);
+  assert.doesNotMatch(serial, /a USB-to-UART adapter on the debug UART/);
+  assert.doesNotMatch(serial, /VCC/);
+});
+
+test("Intel x86-64 has no console data but keeps the RS-232 warning", () => {
+  const out = targetInfoText(DATA, "intel-x86-64-v3", undefined);
+  assert.match(out, /does not describe a serial console/);
+  assert.match(out, /DB9 or RJ45 RS-232 port/);
+  assert.match(out, /±12 V/);
+});
+
+test("a voltage in the data that says RS-232 is not a USB-to-UART adapter", () => {
+  const data: HardwareData = {
+    targets: {
+      ...TARGETS,
+      raspberrypi4: {
+        ...TARGETS.raspberrypi4,
+        serial: { baud: 115200, voltage: "RS-232" },
+      },
+    },
+    devices: DEVICES,
+  };
+  const out = targetInfoText(data, "raspberrypi4", undefined);
+  assert.match(out, /RS-232 serial port\. Use a USB-to-RS-232 adapter/);
+  assert.match(out, /- \*\*Voltage:\*\* RS-232\n/);
+  assert.doesNotMatch(out, /USB-to-UART adapter on the debug UART/);
+  assert.doesNotMatch(out, /RS-232 TTL/);
 });

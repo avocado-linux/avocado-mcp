@@ -33,7 +33,7 @@ These are fixed across every supported Avocado target unless \`get-device-connec
 - **Baud:** 115200
 - **Format:** 8N1 (8 data bits, no parity, 1 stop bit)
 - **Flow control:** none
-- **Voltage:** 3.3V TTL (exception: x86 boards, RS-232 levels — \`get-device-connection-info\` flags these)
+- **Voltage:** the board page and \`get-device-connection-info\` give it. The FR201 and x86 boards use RS-232 levels (up to ±12 V), and \`get-device-connection-info\` flags them. With a USB-to-UART adapter, leave its VCC pin disconnected and cross TX and RX.
 
 **Do not ask the user to confirm these.** They are the documented default. Per-target overrides come from \`get-device-connection-info\`, not from the user.
 

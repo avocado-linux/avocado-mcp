@@ -497,6 +497,92 @@ export const TARGETS = {
     gettingStartedUrl: "/developer-reference/getting-started/any-target",
     hardwareUrl: "/hardware/compulab/iot-gate-imx8plus",
   },
+  raspberrypi4: {
+    name: "Raspberry Pi 4 Model B",
+    target: "raspberrypi4",
+    releases: { "2024": "supported", "2026": "in-progress" },
+    category: "sd",
+    provisioning: {
+      hostOs: ["macOS", "Linux"],
+      prerequisites: ["microSD card (8GB+)", "SD card reader"],
+      options: [
+        {
+          id: "sd",
+          label: "SD card",
+          profile: "sd",
+          media: "microSD card (8GB+)",
+          autoMount: true,
+          command: "avocado provision -r dev --profile sd",
+          bootInstructions:
+            "Insert the SD card into the device and apply power.",
+        },
+      ],
+    },
+    serial: {
+      baud: 115200,
+      voltage: "3.3V",
+      command: "tio -b 115200 /dev/ttyUSB0",
+    },
+    gettingStartedUrl: "/developer-reference/getting-started/any-target",
+    hardwareUrl: "/hardware/raspberry-pi/raspberry-pi-4-model-b",
+  },
+  fr201: {
+    name: "OnLogic FR201",
+    target: "fr201",
+    releases: { "2024": "supported", "2026": "in-progress" },
+    category: "usb",
+    provisioning: {
+      hostOs: ["macOS", "Linux"],
+      prerequisites: ["USB drive"],
+      options: [
+        {
+          id: "usb",
+          label: "USB drive",
+          profile: "usb",
+          media: "USB drive",
+          autoMount: true,
+          command: "avocado provision -r dev --profile usb",
+          bootInstructions:
+            "Insert the USB drive into the device and apply power.",
+        },
+      ],
+    },
+    serial: {
+      baud: 115200,
+      voltage: "3.3V",
+      command: "tio -b 115200 /dev/ttyUSB0",
+    },
+    gettingStartedUrl: "/developer-reference/getting-started/any-target",
+    hardwareUrl: "/hardware/onlogic/fr201",
+  },
+  "intel-x86-64-v3": {
+    name: "Intel x86-64-v3",
+    target: "intel-x86-64-v3",
+    releases: { "2024": "supported", "2026": "in-progress" },
+    category: "usb",
+    provisioning: {
+      hostOs: ["macOS", "Linux"],
+      prerequisites: [
+        "USB drive",
+        "UEFI boot support (Legacy BIOS not supported)",
+      ],
+      options: [
+        {
+          id: "usb",
+          label: "USB drive",
+          profile: "usb",
+          media: "USB drive",
+          autoMount: true,
+          command: "avocado provision -r dev --profile usb",
+          bootInstructions:
+            "Insert the USB drive into the device and boot from USB via UEFI.",
+        },
+      ],
+    },
+    serial: null,
+    gettingStartedUrl: "/developer-reference/getting-started/any-target",
+    hardwareUrl: "/hardware/intel/x86-64-v3",
+  },
 };
 
 export const DEVICES = [
