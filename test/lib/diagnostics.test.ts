@@ -339,3 +339,66 @@ test("investigatePackages keeps an alternate stream whose targets.json failed to
     globalThis.fetch = realFetch;
   }
 });
+
+test("investigatePackages lists an unread feed once for a project with two targets", async () => {
+  const { investigatePackages } = await import("../../src/lib/diagnostics.js");
+  const lookup = {
+    async searchPackages() {
+      return {
+        results: [],
+        notChecked: [
+          { target: "a", feed: "acme", reason: "private" },
+          { target: "b", feed: "acme", reason: "private" },
+        ],
+      };
+    },
+  };
+  const [inv] = await investigatePackages(
+    lookup,
+    ["pkg"],
+    ["a", "b"],
+    [
+      {
+        release: "2026",
+        channel: "edge",
+        configured: true,
+        feed: "x" as never,
+      },
+    ],
+  );
+  assert.deepEqual(inv.streams[0].notChecked, [
+    { feed: "acme", reason: "private" },
+  ]);
+});
+
+test("unread configured feeds are listed when the configured stream also has an error", async () => {
+  const { renderDiagnoses } = await import("../../src/lib/diagnostics.js");
+  const out = renderDiagnoses(
+    "build",
+    [],
+    [
+      {
+        name: "pkg",
+        streams: [
+          {
+            release: "2026",
+            channel: "edge",
+            configured: true,
+            hits: [],
+            error: "target/x: fetch failed",
+            notChecked: [{ feed: "acme", reason: "private" }],
+          },
+          {
+            release: "2026",
+            channel: "next",
+            configured: false,
+            hits: [{ repo: "target/x", version: "1" }],
+          },
+        ],
+      },
+    ],
+    { targets: ["x"] },
+  );
+  assert.match(out, /Could not query your configured stream/);
+  assert.match(out, /`acme` \(private\)/);
+});

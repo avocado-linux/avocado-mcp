@@ -11,8 +11,10 @@ import { feedFetchLabel } from "../lib/feed-config.js";
 import {
   feedArgsShape,
   feedContextFrom,
+  feedFailures,
   feedSummarySchema,
   notCheckedSchema,
+  renderFeedFailures,
   renderNotChecked,
   streamLabel,
 } from "./feed-args.js";
@@ -117,6 +119,12 @@ export function registerPackageTools(
           .optional()
           .describe("If no exact match, top-N near package names."),
         notChecked: notCheckedSchema.optional(),
+        errors: z
+          .array(z.object({ target: z.string(), message: z.string() }))
+          .optional()
+          .describe(
+            "Feeds that failed to load. The package can be in one of these.",
+          ),
         feed: feedSummarySchema.optional(),
       },
       annotations: {
@@ -149,12 +157,15 @@ export function registerPackageTools(
         };
       }
       try {
-        const { results, notChecked } = await repoClient.searchPackages(
+        const { results, notChecked, errors } = await repoClient.searchPackages(
           targets,
           name,
           200,
           (t) => feed.forTarget(t),
         );
+        const failed = feedFailures(errors);
+        const unread =
+          renderNotChecked(notChecked) + renderFeedFailures(failed);
         const exact = results.filter((r) => r.name === name);
         if (exact.length === 0) {
           const near = results.slice(0, 5);
@@ -162,11 +173,11 @@ export function registerPackageTools(
             content: [
               {
                 type: "text",
-                text: `# describe-package\n\n${feed.describe(targets)}\nNo exact match for \`${name}\` in ${targets.map((t) => `\`${t}\``).join(", ")}${notChecked.length ? " in the feeds checked" : ""}.${
+                text: `# describe-package\n\n${feed.describe(targets)}\nNo exact match for \`${name}\` in ${targets.map((t) => `\`${t}\``).join(", ")}${notChecked.length || failed.length ? " in the feeds checked" : ""}.${
                   near.length
                     ? `\n\nNearest matches: ${near.map((r) => `\`${r.name}\``).join(", ")}.`
                     : ""
-                }\n${renderNotChecked(notChecked)}`,
+                }\n${unread}`,
               },
             ],
             structuredContent: {
@@ -175,6 +186,7 @@ export function registerPackageTools(
               results: [],
               nearest: near.map((r) => r.name),
               notChecked,
+              errors: failed,
               feed: feedInfo,
             },
           };
@@ -191,7 +203,7 @@ export function registerPackageTools(
           }
           out += `\n`;
         }
-        out += renderNotChecked(notChecked);
+        out += unread;
         return {
           content: [{ type: "text", text: out }],
           structuredContent: {
@@ -207,6 +219,7 @@ export function registerPackageTools(
               description: p.description,
             })),
             notChecked,
+            errors: failed,
             feed: feedInfo,
           },
         };
@@ -408,7 +421,7 @@ export function registerPackageTools(
     {
       title: "Batch-check dependencies against the Avocado feed",
       description:
-        'Check a WHOLE LIST of dependencies against one target\'s package feed in a SINGLE call. It is the batch engine behind the `/package-coverage` report. For each dependency you pass a display name plus one or more candidate feed search terms (`queries`); the tool warms the target\'s feed once and returns a present/missing/not-checked verdict per dependency (not-checked means no match in the feeds read while an enabled feed, such as a private `org:` feed, could not be read) with a match-confidence tier (`exact`/`strong`/`fuzzy`), the best-matching feed package, and near-miss alternatives, plus an overall coverage summary. **Use this instead of calling `search-packages` once per dependency**. It collapses N round-trips into one and shares the exact `dnf search` scoring. YOU do the name normalization (Debian/Alpine/pip/npm → RPM/Yocto): put every plausible variant for a dependency in its `queries` array (e.g. for `libssl-dev`: `["openssl", "libssl", "ssl"]`). Matching is optimistic: any hit (including a summary-only hit) counts as present, flagged `fuzzy` so a maintainer can verify. See `avocado://skills/package-coverage`.',
+        'Check a WHOLE LIST of dependencies against one target\'s package feed in a SINGLE call. It is the batch engine behind the `/package-coverage` report. For each dependency you pass a display name plus one or more candidate feed search terms (`queries`); the tool warms the target\'s feed once and returns a present/missing/not-checked verdict per dependency (not-checked means no match in the feeds read while an enabled feed could not be read, such as a private `org:` feed or a feed that failed to load. Not-checked rows are left out of the coverage percentage) with a match-confidence tier (`exact`/`strong`/`fuzzy`), the best-matching feed package, and near-miss alternatives, plus an overall coverage summary. **Use this instead of calling `search-packages` once per dependency**. It collapses N round-trips into one and shares the exact `dnf search` scoring. YOU do the name normalization (Debian/Alpine/pip/npm → RPM/Yocto): put every plausible variant for a dependency in its `queries` array (e.g. for `libssl-dev`: `["openssl", "libssl", "ssl"]`). Matching is optimistic: any hit (including a summary-only hit) counts as present, flagged `fuzzy` so a maintainer can verify. See `avocado://skills/package-coverage`.',
       inputSchema: {
         target: z
           .string()
@@ -468,9 +481,12 @@ export function registerPackageTools(
             .number()
             .int()
             .describe(
-              "No match in the feeds checked, but at least one enabled feed was not checked.",
+              "No match in the feeds checked, but at least one enabled feed was not read. Not part of `coveragePercent`.",
             ),
-          coveragePercent: z.number().int(),
+          coveragePercent: z
+            .number()
+            .int()
+            .describe("present / (total - notChecked), as a percentage."),
           exact: z.number().int(),
           strong: z.number().int(),
           fuzzy: z.number().int(),
@@ -587,9 +603,13 @@ export function registerPackageTools(
         );
         const { packages, errors } = fetched;
         const notChecked = fetched.notChecked.map((n) => ({ target, ...n }));
-        // With an unread feed enabled, "no match" is unknown, not missing.
+        // With an unread feed enabled (private, refused, or failed to load),
+        // "no match" is unknown, not missing.
         const noMatch: "missing" | "not-checked" =
-          notChecked.length > 0 ? "not-checked" : "missing";
+          notChecked.length > 0 ||
+          feedFailures([{ target, messages: errors }]).length > 0
+            ? "not-checked"
+            : "missing";
 
         // fetchTargetPackages does NOT throw when repos are unreachable — it
         // returns an empty package list plus per-repo errors. Reporting that as
@@ -658,15 +678,16 @@ export function registerPackageTools(
         const notCheckedCount = results.filter(
           (r) => r.status === "not-checked",
         ).length;
-        const missing = results.length - present - notCheckedCount;
+        // Not-checked rows are unknown, so they stay out of the percentage.
+        const checked = results.length - notCheckedCount;
+        const missing = checked - present;
         // Round, but never let rounding show a false 100% while something is
         // missing (199/200 → 99, not 100) or a false 0% while something is
         // present (1/200 → 1, not 0). The headline must not contradict counts.
-        let coveragePercent = results.length
-          ? Math.round((present / results.length) * 100)
+        let coveragePercent = checked
+          ? Math.round((present / checked) * 100)
           : 0;
-        if (coveragePercent === 100 && present < results.length)
-          coveragePercent = 99;
+        if (coveragePercent === 100 && present < checked) coveragePercent = 99;
         if (coveragePercent === 0 && present > 0) coveragePercent = 1;
         const summary = {
           total: results.length,
@@ -759,13 +780,14 @@ function renderCoverage(
   let out = `# check-package-coverage\n\n`;
   out += `**Target:** \`${target}\`\n`;
   out += feedDescription;
-  out += `**Coverage:** ${summary.coveragePercent}% (${summary.present}/${summary.total} present)`;
+  const checked = summary.total - summary.notChecked;
+  out += `**Coverage:** ${summary.coveragePercent}% (${summary.present}/${checked} present)`;
   if (summary.fuzzy > 0) {
     out += ` — of which ${summary.exact} exact, ${summary.strong} strong, **${summary.fuzzy} fuzzy** (verify before relying on the number)`;
   }
   out += `\n**Missing:** ${summary.missing}\n`;
   if (summary.notChecked > 0) {
-    out += `**Not checked:** ${summary.notChecked} (no match in the feeds read, but some enabled feeds were not read)\n`;
+    out += `**Not checked:** ${summary.notChecked} of ${summary.total} (no match in the feeds read, but some enabled feeds were not read). These are not part of the coverage figure.\n`;
   }
 
   if (errors.length > 0) {
