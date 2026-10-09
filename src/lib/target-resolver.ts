@@ -112,8 +112,10 @@ export interface TargetAlias {
 /**
  * Resolve what a user typed ("rpi5", "Raspberry Pi 5") to one slug. An exact
  * slug wins. Otherwise the top match wins when it matched a whole word and
- * is the only match or scores higher than the next one. A tie ("jetson",
- * "pi") is ambiguous and returns only the candidates.
+ * is the only match or scores higher than the next one, and the names of
+ * that match cover every word of the input. A tie ("jetson", "pi") is
+ * ambiguous and returns only the candidates. So is a word the winner does not
+ * have ("Thundercomm DragonBoard 410c" for the Rubik Pi 3).
  *
  * `aliases` adds the docs names. A target scores its best name. When that
  * name is for a board, the match returns the board too. A tie between two
@@ -139,7 +141,8 @@ export function resolveTargetInput(
     !top ||
     top.score < 3 ||
     (next && top.score === next.score) ||
-    !allTargets.includes(top.target)
+    !allTargets.includes(top.target) ||
+    !covers(q, top, aliases)
   ) {
     return { candidates };
   }
@@ -155,6 +158,39 @@ export function resolveTargetInput(
     ...(board ? { board } : {}),
     ...(name ? { name } : {}),
     candidates,
+  };
+}
+
+/**
+ * True when the winner's names account for every word of the query. One
+ * shared word is not enough: "Thundercomm DragonBoard 410c" shares only
+ * "Thundercomm" with the Rubik Pi 3, so it must not resolve to it. A word
+ * counts when it is a word of the slug, a synonym, or a best-matching alias,
+ * or a prefix of one (2 characters or more). The whole query squashed
+ * ("icam540") also counts when it equals or prefixes a squashed name.
+ */
+function covers(query: string, top: Scored, aliases: TargetAlias[]): boolean {
+  const hay = haystackFor(top.target);
+  const squashes = [squash(top.target)];
+  for (const a of aliases) {
+    if (a.target !== top.target || !top.names.has(a.name)) continue;
+    const alias = aliasHaystack(a);
+    hay.push(...alias.hay);
+    squashes.push(...alias.squashes);
+  }
+  const qSquash = squash(query);
+  if (squashes.some((t) => t.startsWith(qSquash))) return true;
+  return tokenize(query).every((qt) =>
+    hay.some((h) => h === qt || (qt.length >= 2 && h.startsWith(qt))),
+  );
+}
+
+/** The words and squashed forms of a docs name and its board. */
+function aliasHaystack(a: TargetAlias): { hay: string[]; squashes: string[] } {
+  const board = a.board?.trim() ?? "";
+  return {
+    hay: [...tokenize(a.name), ...tokenize(board), board.toLowerCase()],
+    squashes: [squash(a.name), squash(board)].filter((x) => x),
   };
 }
 
@@ -251,8 +287,7 @@ function scoreTargets(
   }
   for (const a of aliases) {
     const board = a.board?.trim() ?? "";
-    const hay = [...tokenize(a.name), ...tokenize(board), board.toLowerCase()];
-    const squashes = [squash(a.name), squash(board)].filter((x) => x);
+    const { hay, squashes } = aliasHaystack(a);
     const score = scoreHaystack(qTokens, qSquash, hay, squashes);
     // Docs names are long ("SolidRun HummingBoard RZ/V2N AIOT"), so a weak
     // substring hit ("board") is noise. An alias counts from a whole word.
