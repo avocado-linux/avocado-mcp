@@ -418,3 +418,18 @@ test("a voltage in the data that says RS-232 is not a USB-to-UART adapter", () =
   assert.doesNotMatch(out, /USB-to-UART adapter on the debug UART/);
   assert.doesNotMatch(out, /RS-232 TTL/);
 });
+
+test("a runtime other than dev is named before the docs text for dev", () => {
+  const out = targetInfoText(DATA, "rubikpi3", undefined, "prod");
+  const note = out.indexOf(
+    "The docs text below is written for the `dev` runtime. Use `prod` in its place.",
+  );
+  assert.ok(note >= 0, out);
+  // The docs sample output still says dev, and comes after the note.
+  assert.ok(note < out.indexOf("runtime 'dev'"), out);
+  assert.match(out, /avocado provision prod --profile ufs\n/);
+  assert.doesNotMatch(
+    targetInfoText(DATA, "rubikpi3", undefined),
+    /written for the `dev` runtime/,
+  );
+});

@@ -565,6 +565,11 @@ export function provisioningText(info: TargetInfo, runtime: string): string {
     : info.devices.filter(
         (d) => d.board && !info.entries.some((e) => covers(e, d.board!)),
       );
+  // The docs prose and sample output name `dev`. The commands here use the
+  // runtime given, so say which one wins instead of rewriting the docs.
+  if (runtime !== "dev") {
+    out += `The docs text below is written for the \`dev\` runtime. Use \`${runtime}\` in its place. The commands below already use \`${runtime}\`.\n\n`;
+  }
   if (otherBoards.length > 0) {
     out += `The steps below are for ${info.entries.map((e) => e.name).join(" and ")}. For ${otherBoards.map((d) => d.name).join(", ")}, pass \`board\` to get the steps for that board.\n\n`;
   }
