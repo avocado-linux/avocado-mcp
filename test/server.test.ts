@@ -208,7 +208,10 @@ test("init-project from scratch tells the model to run avocado init", async () =
     };
 
     const withCli = await call({});
-    assert.match(withCli, /avocado init --target jetson-orin-nx <project-dir>/);
+    assert.match(
+      withCli,
+      /avocado init --target jetson-orin-nx <project-dir> && cd <project-dir>/,
+    );
     assert.match(withCli, /default_target_board: mic-712-ox-16gb/);
     assert.doesNotMatch(withCli, /```yaml/);
 

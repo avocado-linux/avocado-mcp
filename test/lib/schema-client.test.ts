@@ -1,6 +1,6 @@
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, existsSync, readFileSync } from "fs";
+import { mkdtempSync, existsSync, readFileSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import {
@@ -82,6 +82,18 @@ test("a fetched schema that does not compile falls back and is not cached", asyn
   clearSchemaCache();
   await loadSchema();
   assert.equal(calls.length, 2, "the next call must fetch again");
+});
+
+test("a cache dir that cannot be written still serves the fetched schema", async () => {
+  const live = { ...VENDORED, title: "live" };
+  setup(() => new Response(JSON.stringify(live)));
+  // A file where the cache dir must be: mkdir fails.
+  const blocker = join(process.env.AVOCADO_MCP_CACHE_DIR!, "blocker");
+  writeFileSync(blocker, "");
+  process.env.AVOCADO_MCP_CACHE_DIR = blocker;
+  const res = await loadSchema();
+  assert.equal(res.source, SCHEMA_URL);
+  assert.equal(res.schema.title, "live");
 });
 
 test("AVOCADO_MCP_SCHEMA_OFFLINE=1 never touches the network", async () => {

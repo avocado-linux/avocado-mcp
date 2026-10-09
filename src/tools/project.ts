@@ -687,11 +687,11 @@ function renderInitSteps(opts: {
 }): string {
   const rt = opts.runtimeName ?? "dev";
   let out = `## Create the project with the avocado CLI\n\n`;
-  out += `Run \`avocado init\`. It writes \`avocado.yaml\` from the template of the installed CLI, so the file always matches that CLI. Replace \`<project-dir>\` with the directory for the new project. Omit it to use the current directory.\n\n`;
+  out += `Run \`avocado init\`. It writes \`avocado.yaml\` from the template of the installed CLI, so the file always matches that CLI. Replace \`<project-dir>\` with the directory for the new project. The commands after this step run inside that directory. To use the current directory, omit both \`<project-dir>\` and the \`cd\`.\n\n`;
   out += "```bash\n";
-  out += `avocado init --target ${opts.target} <project-dir>\n`;
+  out += `avocado init --target ${opts.target} <project-dir> && cd <project-dir>\n`;
   out += "```\n\n";
-  out += `\`avocado init\` stops if \`avocado.yaml\` already exists. Add \`--name <name>\` to create the project in \`<project-dir>/<name>/\`.\n\n`;
+  out += `\`avocado init\` stops if \`avocado.yaml\` already exists. Add \`--name <name>\` to create the project in \`<project-dir>/<name>/\`, and \`cd\` into that directory instead.\n\n`;
 
   const edits: string[] = [];
   if (opts.board) {
@@ -771,7 +771,7 @@ function renderReferenceMatch(
   out += "```\n\n";
   out += `The first command clones the reference project into \`./<slug>/\` and sets \`default_target\` to \`${target}\` in its \`avocado.yaml\`.\n\n`;
 
-  out += `_If after reading getting_started.md none of these fit, call \`init-project\` again with \`forceFromScratch: true\` to get a blank starter YAML._\n`;
+  out += `_If after reading getting_started.md none of these fit, call \`init-project\` again with \`forceFromScratch: true\`. It returns the \`avocado init --target\` command and the edits to make after it._\n`;
   return out;
 }
 
