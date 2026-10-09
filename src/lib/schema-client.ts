@@ -129,12 +129,21 @@ export async function loadSchema(): Promise<LoadedSchema> {
     // reaches the disk cache and the next call fetches again.
     const validate = compile(schema);
     if (!cached) {
-      await fs.mkdir(path.dirname(diskPath()), { recursive: true });
-      await fs.writeFile(
-        diskPath(),
-        JSON.stringify({ fetchedAt: Date.now(), schema }),
-        "utf8",
-      );
+      // Best effort: a read-only or full cache dir must not throw away a
+      // schema that was fetched and compiled.
+      try {
+        await fs.mkdir(path.dirname(diskPath()), { recursive: true });
+        await fs.writeFile(
+          diskPath(),
+          JSON.stringify({ fetchedAt: Date.now(), schema }),
+          "utf8",
+        );
+      } catch (error) {
+        console.error(
+          "[schema-client] could not cache the schema:",
+          (error as Error).message,
+        );
+      }
     }
     memory = {
       schema,
