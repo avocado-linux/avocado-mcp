@@ -186,6 +186,31 @@ test("get-tmux-uart-snippet sends a QEMU board name to the VM console", async ()
   }
 });
 
+test("get-tmux-uart-snippet gives the wiring rule for the console type", async () => {
+  const restore = serveHardwareFixture();
+  try {
+    const { client } = await connect();
+    const snippet = async (target: string) => {
+      const res = await client.callTool({
+        name: "get-tmux-uart-snippet",
+        arguments: { portPath: "/dev/ttyUSB0", target },
+      });
+      return (res.content as { text: string }[])[0].text;
+    };
+    const pi = await snippet("raspberrypi4");
+    assert.match(
+      pi,
+      /\*\*Wiring:\*\* Leave the adapter's VCC pin disconnected/,
+    );
+    const fr201 = await snippet("fr201");
+    assert.match(fr201, /\*\*Wiring:\*\* RS-232 serial port/);
+    assert.match(fr201, /Do not connect a 3\.3 V USB-to-UART adapter/);
+    assert.doesNotMatch(fr201, /TTL|VCC/);
+  } finally {
+    restore();
+  }
+});
+
 test("serial tools name the resolved target for a docs name", async () => {
   const restore = serveHardwareFixture();
   try {

@@ -357,16 +357,61 @@ const ONBOARD_PORT_HINT =
 export const SERIAL_OPTIONAL =
   "A serial console is recommended, not required. It shows boot output and helps you recover a device that is not on the network. Without one, use SSH after the device boots and joins the network.";
 
+/**
+ * Wiring safety for any USB-to-UART adapter. The docs data has no VCC or TX/RX
+ * rule, and a wrong wire can damage the board or the adapter.
+ */
+export const ADAPTER_SAFETY =
+  "Leave the adapter's VCC pin disconnected. Connect GND to GND, then cross the data lines: board TX to adapter RX, and board RX to adapter TX. Confirm the console voltage on the board page before you connect.";
+
+// Consoles at RS-232 levels that targets.json does not mark yet. It gives the
+// FR201 a 3.3V console and the Intel targets no console. OnLogic documents the
+// FR201 external serial port as a 5-pin RS-232/422/485 terminal block. Remove
+// a target here when the docs data says RS-232 for it.
+const RS232_CONSOLES: Record<string, string> = {
+  fr201:
+    "The OnLogic FR201 serial port is a 5-pin RS-232/422/485 terminal block, not a 3.3 V header.",
+  "intel-x86-64-v2":
+    "x86 boards usually have the console on a DB9 or RJ45 RS-232 port, not a 3.3 V header.",
+  "intel-x86-64-v3":
+    "x86 boards usually have the console on a DB9 or RJ45 RS-232 port, not a 3.3 V header.",
+};
+
+export const RS232_WARNING =
+  "RS-232 levels go up to ±12 V. Use a USB-to-RS-232 adapter. Do not connect a 3.3 V USB-to-UART adapter: these levels can damage it. Check the board page for the port pinout.";
+
+/**
+ * True when the console runs at RS-232 levels: a target in the list above, or
+ * docs data that says RS-232 (or RS-422/485) in the voltage.
+ */
+export function isRs232Console(
+  target: string,
+  serial: SerialConsole | null | undefined,
+): boolean {
+  return (
+    Object.hasOwn(RS232_CONSOLES, target) ||
+    /RS-?(232|422|485)/i.test(serial?.voltage ?? "")
+  );
+}
+
 /** Wiring and port notes for a serial console, from the docs data. */
 export function serialCaveats(
   serial: SerialConsole | null | undefined,
+  target: string,
 ): string[] {
+  const out: string[] = [];
+  if (isRs232Console(target, serial)) {
+    if (Object.hasOwn(RS232_CONSOLES, target)) {
+      out.push(RS232_CONSOLES[target]);
+    }
+    out.push(RS232_WARNING);
+  }
   if (!serial) {
     return [
       "The docs data does not describe a serial console for this board. See the board page.",
+      ...out,
     ];
   }
-  const out: string[] = [];
   if (serial.description) out.push(serial.description);
   const gpio = serial.gpio ?? [];
   // A row marked for recovery mode (the Orin Nano `FC REC` strap) is not
@@ -376,6 +421,7 @@ export function serialCaveats(
     out.push(`Wire \`${g.pin}\` to ${g.to}${g.note ? ` (${g.note})` : ""}.`);
   }
   if (serial.onboard) out.push(ONBOARD_PORT_HINT);
+  else if (!isRs232Console(target, serial)) out.push(ADAPTER_SAFETY);
   for (const g of gpio.filter(isRecovery)) {
     out.push(
       `Recovery mode only, not part of the serial wiring: connect \`${g.pin}\` to ${g.to} only to put the board in recovery mode for provisioning. Remove this connection before a normal boot. The board does not boot normally while it is connected.`,
@@ -384,15 +430,26 @@ export function serialCaveats(
   return out;
 }
 
-function serialSection(serial: SerialConsole | null | undefined): string {
+function serialSection(
+  serial: SerialConsole | null | undefined,
+  target: string,
+): string {
   let out = `## Serial console\n\n${SERIAL_OPTIONAL}\n\n`;
+  const rs232 = isRs232Console(target, serial);
   if (serial?.onboard) {
     out += `- **Console:** onboard USB. You do not need a USB-to-UART adapter.\n`;
+  } else if (rs232) {
+    out += `- **Console:** RS-232 serial port. Use a USB-to-RS-232 adapter.\n`;
+    // The docs voltage for a listed target is wrong (FR201: 3.3V).
+    if (serial?.voltage && !Object.hasOwn(RS232_CONSOLES, target)) {
+      out += `- **Voltage:** ${serial.voltage}\n`;
+    }
   } else if (serial) {
-    out += `- **Console:** a USB-to-UART adapter${serial.voltage ? ` (${serial.voltage} TTL)` : ""} on the debug UART.\n`;
+    out += `- **Console:** a USB-to-UART adapter on the debug UART.\n`;
+    if (serial.voltage) out += `- **Voltage:** ${serial.voltage}\n`;
   }
   if (serial?.baud) out += `- **Baud:** ${serial.baud}\n`;
-  for (const c of serialCaveats(serial)) out += `- ${c}\n`;
+  for (const c of serialCaveats(serial, target)) out += `- ${c}\n`;
   return out + "\n";
 }
 
@@ -499,7 +556,7 @@ export function provisioningText(info: TargetInfo, runtime: string): string {
     out += `The docs data has no provisioning details for ${info.board ? `board \`${info.board}\`` : `\`${info.target}\``}. Follow the board page${page ? `: ${page}` : ""}. Without \`--profile\`, the CLI uses the default profile of the target:\n\n`;
     out += `\`\`\`bash\n${provisionCommand(runtime)}\n\`\`\`\n\n`;
     out += `After \`avocado install\`, \`list-provision-profiles\` shows the profiles the target has.\n\n`;
-    out += serialSection(undefined);
+    out += serialSection(undefined, info.target);
     return out;
   }
 
@@ -533,7 +590,7 @@ export function provisioningText(info: TargetInfo, runtime: string): string {
       out += `This target needs a board:\n\n`;
       out += `\`\`\`yaml\ndefault_target: ${entry.target}\ndefault_target_board: ${entry.board}\n\`\`\`\n\n`;
     }
-    out += serialSection(entry.serial);
+    out += serialSection(entry.serial, entry.target);
     const all = entry.provisioning?.options ?? [];
     const options = all.filter((o) => isSafeProfile(o.profile));
     if (options.length > 1) {

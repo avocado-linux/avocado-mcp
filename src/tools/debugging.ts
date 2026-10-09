@@ -12,7 +12,11 @@ import {
   CONSOLE_TEXT,
   type SerialEmulator,
 } from "../lib/device-info.js";
-import { getHardwareData } from "../lib/hardware-data.js";
+import {
+  ADAPTER_SAFETY,
+  getHardwareData,
+  RS232_WARNING,
+} from "../lib/hardware-data.js";
 
 const execFileP = promisify(execFile);
 
@@ -155,9 +159,9 @@ export function registerDebuggingTools(server: McpServer): void {
           .boolean()
           .describe("True when the board has an onboard USB console."),
         consoleType: z
-          .enum(["onboard", "adapter", "none", "unknown"])
+          .enum(["onboard", "adapter", "rs232", "none", "unknown"])
           .describe(
-            "`onboard`: onboard USB console. `adapter`: needs a USB-to-UART adapter. `none`: virtual target with no physical port. `unknown`: the docs data does not describe the console.",
+            "`onboard`: onboard USB console. `adapter`: needs a USB-to-UART adapter. `rs232`: an RS-232 port that needs a USB-to-RS-232 adapter, never a 3.3 V USB-to-UART adapter. `none`: virtual target with no physical port. `unknown`: the docs data does not describe the console.",
           ),
         defaultUser: z.string(),
         defaultPasswordNote: z.string(),
@@ -304,6 +308,11 @@ export function registerDebuggingTools(server: McpServer): void {
       out += `# ${chosen} — ${emulatorInstallHint(chosen)}\n`;
       out += "```\n\n";
       out += `**Baud:** ${info.serial.baud}${info.onboardConsole ? ". This board has an onboard USB console, so no adapter is needed. On Linux, prefer the stable name from \`ls /dev/serial/by-id/\`." : ""}\n\n`;
+      if (info.consoleType === "rs232") {
+        out += `**Wiring:** ${CONSOLE_TEXT.rs232}. ${RS232_WARNING}\n\n`;
+      } else if (info.consoleType === "adapter") {
+        out += `**Wiring:** ${ADAPTER_SAFETY}\n\n`;
+      }
       out += `## Bridge setup + usage\n\n`;
       out += "```bash\n" + snippet + "\n```\n\n";
       out += `## Important rules\n\n`;

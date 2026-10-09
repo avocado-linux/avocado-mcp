@@ -241,3 +241,34 @@ test("tmux addressing characters are stripped from a session name", () => {
   assert.match(snip, /-s uart2\b/);
   assert.doesNotMatch(snip, /uart[.:]2/);
 });
+
+test("Pi 4 adapter console: VCC disconnected and TX/RX crossed", () => {
+  const info = getDeviceConnectionInfo("raspberrypi4", DATA);
+  assert.equal(info.consoleType, "adapter");
+  assert.equal(info.serial.voltage, "3.3V");
+  const text = info.caveats.join(" ");
+  assert.match(text, /Leave the adapter's VCC pin disconnected/);
+  assert.match(text, /board TX to adapter RX, and board RX to adapter TX/);
+});
+
+test("FR201: RS-232 console type and warning, no 3.3 V and no TTL", () => {
+  const info = getDeviceConnectionInfo("fr201", DATA);
+  assert.equal(info.consoleType, "rs232");
+  assert.match(info.serial.voltage, /RS-232/);
+  assert.doesNotMatch(info.serial.voltage, /3\.3/);
+  const text = [CONSOLE_TEXT[info.consoleType], ...info.caveats].join(" ");
+  assert.match(text, /terminal block/);
+  assert.match(text, /Do not connect a 3\.3 V USB-to-UART adapter/);
+  assert.doesNotMatch(JSON.stringify(info), /TTL/);
+  assert.doesNotMatch(text, /VCC/);
+});
+
+test("Intel x86-64 and FR201 keep the RS-232 warning without board data", () => {
+  const intel = getDeviceConnectionInfo("intel-x86-64-v2", DATA);
+  assert.equal(intel.consoleType, "unknown");
+  assert.match(intel.caveats.join(" "), /DB9 or RJ45 RS-232 port/);
+  assert.match(
+    getDeviceConnectionInfo("fr201", null).caveats.join(" "),
+    /±12 V/,
+  );
+});
