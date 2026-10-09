@@ -446,7 +446,7 @@ const BUILD_CASES: { label: string; log: string }[] = [
     log: "Error: repos.acme: feed-token request returned 401 Unauthorized — the stored credential was rejected. Run `avocado login` to refresh it.",
   },
   {
-    label: "Connect login missing or expired",
+    label: "Connect signing needs a saved login",
     log: "Error: --connect-sign requires an active Connect session. Run `avocado connect auth login` first.",
   },
   {
@@ -658,4 +658,20 @@ test("the deploy fallback sends stale stamps to the CLI's To fix list", async ()
     /build stamps \(run the commands that the CLI lists under `To fix:`/,
   );
   assert.doesNotMatch(out, /stamps \(run `avocado build`\)/);
+});
+
+test("--connect-sign gets login advice, and only feed auth gets the env var", () => {
+  const sign = diagnoseBuildLog(
+    "Error: --connect-sign requires an active Connect session. Run `avocado connect auth login` first.",
+  );
+  assert.deepEqual(labels(sign), ["Connect signing needs a saved login"]);
+  assert.match(sign[0]!.suggestion, /avocado login --token <token>/);
+  assert.doesNotMatch(sign[0]!.suggestion, /set `AVOCADO_CONNECT_TOKEN`/);
+
+  // avocado-cli src/utils/feeds.rs: the feed path reads the env var.
+  const feed = diagnoseBuildLog(
+    "Error: repos.acme: `org: acme` is a private feed and you are not logged in.\nRun `avocado login`, or set AVOCADO_CONNECT_TOKEN for CI.",
+  );
+  assert.deepEqual(labels(feed), ["Connect login missing or expired"]);
+  assert.match(feed[0]!.suggestion, /AVOCADO_CONNECT_TOKEN/);
 });

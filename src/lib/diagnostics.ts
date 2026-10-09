@@ -237,16 +237,26 @@ const BUILD_PATTERNS: Pattern[] = [
       "Free space on the volume backing your project directory and Docker's data volume.",
   },
   ...STAMP_PATTERNS,
-  // Feed auth: avocado-cli `src/utils/feeds.rs`. The 401 hint and the
-  // `--connect-sign` session error (runtime/deploy.rs) have the same fix.
+  // Feed auth: avocado-cli `src/utils/feeds.rs`. Only the feed code reads
+  // `AVOCADO_CONNECT_TOKEN`.
   {
     label: "Connect login missing or expired",
     match:
-      /is a private feed and you are not logged in|no Connect profile for org '|feed-token request returned 401\b|--connect-sign requires an active Connect session/,
+      /is a private feed and you are not logged in|no Connect profile for org '|feed-token request returned 401\b/,
     cause:
-      "The project reads a private `org:` feed or signs through Connect, and the CLI has no valid Connect credential for it. Either you never logged in, or Connect rejected the stored credential.",
+      "The project reads a private `org:` feed, and the CLI has no valid Connect credential for it. Either you never logged in, or Connect rejected the stored credential.",
     suggestion:
       "Run `avocado login`. If your account is in more than one org, run `avocado login --org <org-id>`. For CI, set `AVOCADO_CONNECT_TOKEN` instead. Then rerun the command that failed. Docs: https://docs.peridio.com/developer-reference/avocado-cli/commands#avocado-login",
+  },
+  // `avocado deploy --connect-sign` reads only the saved Connect profile
+  // (`connect_client::load_config()` in `runtime/deploy.rs`).
+  {
+    label: "Connect signing needs a saved login",
+    match: /--connect-sign requires an active Connect session/,
+    cause:
+      "`--connect-sign` signs through Connect with the saved Connect profile, and there is none. `AVOCADO_CONNECT_TOKEN` has no effect here.",
+    suggestion:
+      "Run `avocado login`. For CI, run `avocado login --token <token>` before the deploy. This saves a profile. Then rerun `avocado deploy` with `--connect-sign`. Docs: https://docs.peridio.com/developer-reference/avocado-cli/commands#avocado-login",
   },
   {
     label: "Not entitled to a private feed",
