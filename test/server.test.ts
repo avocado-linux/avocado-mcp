@@ -14,6 +14,7 @@ import { registerDiagnosticsTools } from "../src/tools/diagnostics.js";
 import { registerDebuggingTools } from "../src/tools/debugging.js";
 import { registerDocsTools } from "../src/tools/docs.js";
 import { registerConnectTools } from "../src/tools/connect.js";
+import { registerHardwareTools } from "../src/tools/hardware.js";
 import { registerSkillResources } from "../src/tools/resources.js";
 import { registerPrompts } from "../src/tools/prompts.js";
 
@@ -33,6 +34,7 @@ async function connect(repoClient = new RepoClient()) {
   registerDebuggingTools(server);
   registerDocsTools(server);
   registerConnectTools(server);
+  registerHardwareTools(server);
 
   const client = new Client({ name: "test-client", version: "1.0.0" });
   const [c, s] = InMemoryTransport.createLinkedPair();
@@ -48,7 +50,7 @@ test("every tool/resource/prompt registers without collision", async () => {
   // Exact counts, not floors: a `>=` below actual lets a small drop pass
   // silently. Bump these deliberately when adding a tool/resource/prompt —
   // the change is the point where you confirm the registration is intended.
-  assert.equal(names.length, 26, `tool count changed: ${names.join(", ")}`);
+  assert.equal(names.length, 28, `tool count changed: ${names.join(", ")}`);
   console.log(`  ${names.length} tools:`, names.join(", "));
 
   const { resources } = await client.listResources();
