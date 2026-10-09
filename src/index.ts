@@ -14,6 +14,7 @@ import { registerDiagnosticsTools } from "./tools/diagnostics.js";
 import { registerDebuggingTools } from "./tools/debugging.js";
 import { registerDocsTools } from "./tools/docs.js";
 import { registerConnectTools } from "./tools/connect.js";
+import { registerHardwareTools } from "./tools/hardware.js";
 import { registerSkillResources } from "./tools/resources.js";
 import { registerPrompts } from "./tools/prompts.js";
 
@@ -133,6 +134,7 @@ registerDiagnosticsTools(server, repoClient);
 registerDebuggingTools(server);
 registerDocsTools(server);
 registerConnectTools(server);
+registerHardwareTools(server);
 
 async function main() {
   const transport = new StdioServerTransport();

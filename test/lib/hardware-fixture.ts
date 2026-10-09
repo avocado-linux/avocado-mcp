@@ -1,5 +1,5 @@
 // Trimmed from peridio/docs src/src/data/hardware/{targets,supported,virtual-environment}.json
-// at e3d361f3, with images and step snippets removed.
+// at e3d361f3, with images removed.
 export const TARGETS = {
   rubikpi3: {
     name: "Thundercomm Rubik Pi 3",
@@ -29,6 +29,17 @@ export const TARGETS = {
           command: "avocado provision -r dev --profile ufs",
           description:
             "Provision the dev runtime to the board's onboard UFS storage. The system image is flashed over the USB-C data connection (port 5) while the device is in EDL mode.",
+          steps: [
+            {
+              type: "text",
+              content:
+                "Provisioning flashes the runtime to UFS over USB. When it completes you'll see:",
+            },
+            {
+              type: "code",
+              content: "[SUCCESS] Successfully provisioned runtime 'dev'",
+            },
+          ],
           recoveryMode: {
             reference: {
               url: "https://www.thundercomm.com/rubik-pi-3/en/docs/rubik-pi-3-user-manual/1.0.0-u/set-up-your-device",
@@ -90,6 +101,17 @@ export const TARGETS = {
           command: "avocado provision -r dev --profile ufs",
           description:
             "Provision the dev runtime to the kit's onboard UFS storage. The system image is flashed over the USB-C data connection while the SoC is in EDL mode. The ufs profile is required: it mounts the host's USB bus into the provisioning container.",
+          steps: [
+            {
+              type: "text",
+              content:
+                "Provisioning flashes the runtime to UFS over USB. When it completes you'll see:",
+            },
+            {
+              type: "code",
+              content: "[SUCCESS] Successfully provisioned runtime 'dev'",
+            },
+          ],
           recoveryMode: {
             reference: {
               url: "https://www.qualcomm.com/developer/hardware/rb3-gen-2-development-kit",
@@ -166,6 +188,25 @@ export const TARGETS = {
           command: "avocado provision -r dev --profile tegraflash",
           description:
             "Provision the dev runtime using the tegraflash profile. This builds the system image and flashes it to the Jetson over USB.",
+          steps: [
+            {
+              type: "text",
+              content: "The procedure advances through several steps:",
+            },
+            {
+              type: "code",
+              content:
+                "== Step 1: Signing binaries ==\n...\n== Step 2: Boot Jetson via RCM ==\n...\n== Step 3: Sending flash sequence commands ==\n...",
+            },
+            {
+              type: "text",
+              content: "When provisioning completes:",
+            },
+            {
+              type: "code",
+              content: "[SUCCESS] Successfully provisioned runtime 'dev'",
+            },
+          ],
           recoveryMode: {
             steps: [
               "With the device powered off, short the FC REC pin to GND using a jumper",
@@ -251,6 +292,25 @@ export const TARGETS = {
           command: "avocado provision -r dev --profile tegraflash",
           description:
             "Provision the dev runtime using the tegraflash profile. This builds the system image and flashes it to the Jetson over USB.",
+          steps: [
+            {
+              type: "text",
+              content: "The procedure advances through several steps:",
+            },
+            {
+              type: "code",
+              content:
+                "== Step 1: Signing binaries ==\n...\n== Step 2: Boot Jetson via RCM ==\n...\n== Step 3: Sending flash sequence commands ==\n...",
+            },
+            {
+              type: "text",
+              content: "When provisioning completes:",
+            },
+            {
+              type: "code",
+              content: "[SUCCESS] Successfully provisioned runtime 'dev'",
+            },
+          ],
           recoveryMode: {
             reference: {
               label: "NVIDIA Jetson AGX Orin Developer Kit hardware layout",
@@ -334,6 +394,13 @@ export const TARGETS = {
           description:
             "Flash the onboard eMMC over USB with the uuu-emmc profile. First put the board into serial download mode: connect the USB-C cable and the micro USB debug port to your host, set SW7 to external, and power on the board with no SD card in the slot — it comes up in serial download (UUU) mode. Then provision:",
           command: "avocado provision -r dev --profile uuu-emmc",
+          steps: [
+            {
+              type: "text",
+              content:
+                "After programming completes, set SW7 back to internal so the board boots from the onboard eMMC.",
+            },
+          ],
           bootInstructions:
             "With SW7 set to internal, power-cycle the board — it boots Avocado OS from the onboard eMMC.",
         },
