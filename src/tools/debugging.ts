@@ -214,7 +214,7 @@ export function registerDebuggingTools(server: McpServer): void {
     {
       title: "Get tmux+UART bridge commands",
       description:
-        "Generate the exact bash commands to bridge a UART serial console to Claude through a detached tmux session. **Requires BOTH `tmux` AND a serial terminal emulator** (`tio`, `picocom`, or `minicom`) — `tmux` alone cannot talk to a serial device. Call `detect-serial-ports` first to confirm which emulators are installed. Returns the `tmux new-session`, `tmux send-keys`, and `tmux capture-pane` snippets pre-filled with the user's port, target's baud rate, and chosen emulator. When the docs data does not describe the board's serial console, it returns the board page and no bridge.",
+        "Generate the exact bash commands to bridge a UART serial console to Claude through a detached tmux session. **Requires BOTH `tmux` AND a serial terminal emulator** (`tio`, `picocom`, or `minicom`). `tmux` alone cannot talk to a serial device. Call `detect-serial-ports` first to confirm which emulators are installed. Returns the `tmux new-session`, `tmux send-keys`, and `tmux capture-pane` snippets pre-filled with the user's port, target's baud rate, and chosen emulator. When the docs data does not describe the board's serial console, it returns the board page and no bridge.",
       inputSchema: {
         portPath: z
           .string()
