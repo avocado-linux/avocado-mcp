@@ -118,6 +118,19 @@ test("a nonzero exit code alone counts as an error", () => {
   assert.equal(extractLogShape("Done\nexit code: 0").hasErrors, false);
 });
 
+test("an HTTP status is not an exit code", () => {
+  for (const log of [
+    "health check returned 200 OK",
+    "GET https://repo.example/x returned 404",
+  ]) {
+    const s = extractLogShape(log);
+    assert.equal(s.exitCode, null, log);
+    assert.equal(s.hasErrors, false, log);
+  }
+  assert.equal(extractLogShape("exited with code 2").exitCode, 2);
+  assert.equal(extractLogShape("returned non-zero exit status 3").exitCode, 3);
+});
+
 test("shape of an empty or clean log is inert", () => {
   for (const log of ["", "Build succeeded in 42s"]) {
     const s = extractLogShape(log);
@@ -582,4 +595,14 @@ test("the QDL wait timeout is not read as missing target storage", () => {
     ),
     ["Qualcomm board not in EDL mode"],
   );
+});
+
+test("a log with no error signals names the command that ran", async () => {
+  const { renderDiagnoses } = await import("../../src/lib/diagnostics.js");
+  const out = renderDiagnoses("deploy", [], undefined, {
+    targets: [],
+    rawLog: "Deploying runtime 'dev'\nStarting HTTP server",
+  });
+  assert.match(out, /`avocado deploy` command actually succeeded/);
+  assert.doesNotMatch(out, /build\/provision/);
 });
