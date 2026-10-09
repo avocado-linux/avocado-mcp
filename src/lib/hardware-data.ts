@@ -150,6 +150,8 @@ export interface TargetInfo {
   board?: string;
   /** `targets.json` entries for the target (only the board's, if given). */
   entries: TargetEntry[];
+  /** True for a QEMU target. Set before a board narrows `entries`. */
+  virtual: boolean;
   /** `supported.json` rows for the target, one per board. */
   devices: SupportedDevice[];
   /** What the caller passed, when it was resolved to another slug ("rpi5"). */
@@ -202,6 +204,7 @@ export function lookupTarget(
     // A board-specific setup (MIC-733 on the AGX Orin target) must not get
     // the dev kit's steps, so a board narrows to the entries for that board.
     entries: b ? (known ? entries.filter((e) => covers(e, b)) : []) : entries,
+    virtual: entries.some((e) => e.category === "virtual"),
     devices,
     requested: slug === target ? undefined : target,
   };
@@ -242,7 +245,7 @@ export function minDiskGB(info: TargetInfo | null): number {
 }
 
 export function isVirtual(info: TargetInfo): boolean {
-  return info.entries.some((e) => e.category === "virtual");
+  return info.virtual;
 }
 
 function docsUrl(path: string | null | undefined): string | undefined {

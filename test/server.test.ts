@@ -186,6 +186,37 @@ test("get-tmux-uart-snippet sends a QEMU board name to the VM console", async ()
   }
 });
 
+test("a QEMU target with a board stays virtual", async () => {
+  const restore = serveHardwareFixture();
+  class StubRepo extends RepoClient {
+    override async getTargetsConfig() {
+      return { "qemux86-64": ["target/x86_64"] };
+    }
+  }
+  try {
+    const { client } = await connect(new StubRepo());
+    const steps = await client.callTool({
+      name: "get-provisioning-steps",
+      arguments: { target: "qemux86-64", board: "anything" },
+    });
+    const stepsText = (steps.content as { text: string }[])[0].text;
+    assert.match(stepsText, /avocado sdk run -iE vm dev/);
+    const snippet = await client.callTool({
+      name: "get-tmux-uart-snippet",
+      arguments: {
+        portPath: "/dev/ttyUSB0",
+        target: "qemux86-64",
+        board: "anything",
+      },
+    });
+    const snippetText = (snippet.content as { text: string }[])[0].text;
+    assert.match(snippetText, /`qemux86-64` is a virtual target/);
+    assert.doesNotMatch(snippetText, /tmux new-session/);
+  } finally {
+    restore();
+  }
+});
+
 test("a flag-like serial port is rejected by the tool's input schema", async () => {
   // The port pattern lives on the zod field, so the SDK rejects it before the
   // handler — the LLM is told the constraint rather than getting a bare throw.
