@@ -20,9 +20,8 @@ import { registerPrompts } from "../src/tools/prompts.js";
 // Validate against the vendored schema: no network in tests.
 process.env.AVOCADO_MCP_SCHEMA_OFFLINE = "1";
 
-async function connect() {
+async function connect(repoClient = new RepoClient()) {
   const server = new McpServer({ name: "avocado-os", version: "test" });
-  const repoClient = new RepoClient();
   registerSkillResources(server);
   registerPrompts(server);
   registerDiscoveryTools(server, repoClient);
@@ -230,6 +229,71 @@ test("init-project from scratch tells the model to run avocado init", async () =
   } finally {
     globalThis.fetch = realFetch;
   }
+});
+
+test("an exact match still lists the feeds the MCP could not read", async () => {
+  // One feed has the package, another enabled feed was not read. It can
+  // serve another version at a higher priority, so the warning stays.
+  class StubRepo extends RepoClient {
+    override async getTargetsConfig() {
+      return { qemuarm64: ["target/armv8a"] };
+    }
+    override async searchPackages() {
+      return {
+        totalMatches: 1,
+        results: [
+          {
+            name: "curl",
+            summary: "",
+            description: "",
+            version: "8.0",
+            release: "r0",
+            arch: "armv8a",
+            repo: "target/armv8a",
+            href: "",
+            feed: "avocado",
+            score: 100,
+          },
+        ],
+        errors: [],
+        notChecked: [
+          { target: "qemuarm64", feed: "acme", reason: "private feed" },
+        ],
+      };
+    }
+  }
+  const { client } = await connect(new StubRepo());
+
+  const described = await client.callTool({
+    name: "describe-package",
+    arguments: { targets: ["qemuarm64"], name: "curl" },
+  });
+  const sc = described.structuredContent as {
+    found: boolean;
+    notChecked?: { feed: string }[];
+  };
+  assert.equal(sc.found, true);
+  assert.deepEqual(
+    sc.notChecked?.map((n) => n.feed),
+    ["acme"],
+  );
+  assert.match(
+    (described.content as { text: string }[])[0].text,
+    /Not checked[\s\S]*`acme` for `qemuarm64`/,
+  );
+
+  const added = await client.callTool({
+    name: "add-package-to-extension",
+    arguments: {
+      yaml: "extensions:\n  app:\n    types: [sysext]\n",
+      extension: "app",
+      packageName: "curl",
+      targets: ["qemuarm64"],
+    },
+  });
+  const text = (added.content as { text: string }[])[0].text;
+  assert.match(text, /Verified `curl`/);
+  assert.match(text, /Not checked[\s\S]*`acme` for `qemuarm64`/);
 });
 
 test("validate-yaml reports ignored keys as warnings, not errors", async () => {

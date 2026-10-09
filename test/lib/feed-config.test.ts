@@ -548,6 +548,37 @@ repos:
   );
 });
 
+test("the built-in avocado-ext feed is part of the distro feed, not a named feed", () => {
+  const base = "distro:\n  release: 2026\n  channel: edge\n";
+  // Default: no entry, nothing to resolve.
+  assert.equal(
+    resolveFeed({ env: {}, target: "qemuarm64", config: cfg(base) }).feeds,
+    undefined,
+  );
+  // A stages-only re-scope is valid. It adds no feed and no unread feed.
+  const scoped = resolveFeed({
+    env: {},
+    target: "qemuarm64",
+    config: cfg(`${base}repos:\n  avocado-ext:\n    stages: [ext]\n`),
+  });
+  assert.deepEqual(
+    scoped.feeds?.map((e) => e.name),
+    ["avocado"],
+  );
+  assert.deepEqual(scoped.notChecked, []);
+  assert.deepEqual(scoped.notes, []);
+  // Listing it in distro.feeds is a config error in the CLI.
+  const listed = resolveFeed({
+    env: {},
+    target: "qemuarm64",
+    config: cfg(
+      `${base}  feeds: [avocado-ext]\nrepos:\n  avocado-ext:\n    stages: [ext]\n`,
+    ),
+  });
+  assert.deepEqual(listed.notChecked, []);
+  assert.match(listed.notes.join("\n"), /built-in `avocado-ext`.*CLI rejects/);
+});
+
 test("an org: feed is reported as not checked, never fetched", () => {
   const f = resolveFeed({
     env: {},

@@ -140,7 +140,7 @@ export function renderNotChecked(
   list: { target: string; feed: string; reason: string }[],
 ): string {
   if (list.length === 0) return "";
-  let out = `\n**Not checked** (a package missing here may be in these feeds):\n`;
+  let out = `\n**Not checked** (they can hold a package missing here, or another version of one found here):\n`;
   for (const n of list) {
     out += `- \`${n.feed}\` for \`${n.target}\`: ${n.reason}\n`;
   }
