@@ -670,6 +670,40 @@ test("list-provision-profiles docs fallback uses the board in avocado.yaml", asy
   }
 });
 
+test("list-provision-profiles docs fallback uses default_target when the CLI is missing", async () => {
+  const restore = serveHardwareFixture();
+  const realBinary = process.env.AVOCADO_BINARY;
+  const realTarget = process.env.AVOCADO_TARGET;
+  delete process.env.AVOCADO_TARGET;
+  const dir = mkdtempSync(join(tmpdir(), "avocado-mcp-target-"));
+  writeFileSync(join(dir, "avocado.yaml"), "default_target: rubikpi3\n");
+  process.env.AVOCADO_BINARY = join(dir, "no-such-avocado");
+  try {
+    const { client } = await connect();
+    const call = async () => {
+      const res = await client.callTool({
+        name: "list-provision-profiles",
+        arguments: { projectDir: dir },
+      });
+      return (res.content as { text: string }[])[0].text;
+    };
+    const text = await call();
+    assert.match(text, /not on PATH/);
+    assert.match(text, /Profiles in the docs data for `rubikpi3`/);
+    assert.doesNotMatch(text, /Pass `target`/);
+    // AVOCADO_TARGET comes before default_target, as in the CLI.
+    process.env.AVOCADO_TARGET = "rb3gen2";
+    assert.match(await call(), /Profiles in the docs data for `rb3gen2`/);
+  } finally {
+    restore();
+    rmSync(dir, { recursive: true, force: true });
+    if (realBinary === undefined) delete process.env.AVOCADO_BINARY;
+    else process.env.AVOCADO_BINARY = realBinary;
+    if (realTarget === undefined) delete process.env.AVOCADO_TARGET;
+    else process.env.AVOCADO_TARGET = realTarget;
+  }
+});
+
 test("environment-check says when the disk check fell back to 8 GB", async () => {
   const realFetch = globalThis.fetch;
   globalThis.fetch = (async () => {
