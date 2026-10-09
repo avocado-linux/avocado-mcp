@@ -102,15 +102,15 @@ export function registerDiagnosticsTools(
   server.registerTool(
     "explain-build-error",
     {
-      title: "Diagnose an avocado build/install log",
+      title: "Diagnose an avocado build, install or deploy log",
       description:
-        "Analyze the output of `avocado build` or `avocado install` for known failure patterns AND actively probe the package feed. When you pass `targets`, the tool extracts any failing package names from the log and looks them up first on the project's configured feeds (with `projectDir`, this includes `repos:` feeds enabled in `distro.feeds`), then on every live stream (2026/next, 2026/edge, 2026/stable, 2024/edge, 2024/next) that carries the target, turning generic 'package not found' advice into a concrete answer (e.g. 'present on 2026/edge only, switch distro.release'). Always pass `targets` if you know them. **When no curated pattern matches**, the tool falls back to a generic log-shape extraction: error-line excerpts, exit code, suggested-file-paths, and explicit next-step routing (`search-docs`, `search-packages`, `Read` mentioned files). Never returns an empty response when the log has errors. If `diagnoses` is empty and `shape.hasErrors` is true, the prose response contains the fallback diagnosis.",
+        "Analyze the output of `avocado build`, `avocado install` or `avocado deploy` for known failure patterns (deploy covers refusals such as extension verity, a missing `root.json` and stamp pre-flight errors) AND actively probe the package feed. When you pass `targets`, the tool extracts any failing package names from the log and looks them up first on the project's configured feeds (with `projectDir`, this includes `repos:` feeds enabled in `distro.feeds`), then on every live stream (2026/next, 2026/edge, 2026/stable, 2024/edge, 2024/next) that carries the target, turning generic 'package not found' advice into a concrete answer (e.g. 'present on 2026/edge only, switch distro.release'). Always pass `targets` if you know them. **When no curated pattern matches**, the tool falls back to a generic log-shape extraction: error-line excerpts, exit code, suggested-file-paths, and explicit next-step routing (`search-docs`, `search-packages`, `Read` mentioned files). Never returns an empty response when the log has errors. If `diagnoses` is empty and `shape.hasErrors` is true, the prose response contains the fallback diagnosis.",
       inputSchema: {
         log: z
           .string()
           .min(1)
           .describe(
-            "Full or partial build/install log output. Paste verbatim — heuristics scan for known error fingerprints and extract failing package names.",
+            "Full or partial build, install or deploy log output. Paste verbatim — heuristics scan for known error fingerprints and extract failing package names.",
           ),
         targets: z
           .array(z.string())
