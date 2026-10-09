@@ -43,6 +43,23 @@ test("an onboard USB console is reported with the by-id hint", () => {
   );
 });
 
+test("a MIC-733 board does not get the NVIDIA dev kit console", () => {
+  const devkit = getDeviceConnectionInfo("jetson-agx-orin-devkit", DATA);
+  assert.equal(devkit.onboardConsole, true);
+  const mic = getDeviceConnectionInfo(
+    "jetson-agx-orin-devkit",
+    DATA,
+    "mic-733-ao5a1",
+  );
+  assert.equal(mic.onboardConsole, false);
+  assert.doesNotMatch(mic.caveats.join(" "), /\/dev\/serial\/by-id/);
+  assert.match(mic.caveats.join(" "), /does not describe a serial console/);
+  assert.equal(
+    mic.docsUrl,
+    "https://docs.peridio.com/hardware/advantech/mic-733-ao",
+  );
+});
+
 test("an adapter board gets its voltage and wiring from the data", () => {
   const info = getDeviceConnectionInfo("jetson-orin-nano-devkit", DATA);
   assert.equal(info.onboardConsole, false);

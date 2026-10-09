@@ -3,6 +3,15 @@ import assert from "node:assert/strict";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import {
+  chmodSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "fs";
+import { tmpdir } from "os";
+import { join, relative } from "path";
 
 import { RepoClient } from "../src/lib/repo-client.js";
 import { registerConfigTools } from "../src/tools/config.js";
@@ -513,4 +522,79 @@ test("check-package-coverage marks a failed feed's misses not checked and counts
     (res.content as { text: string }[])[0].text,
     /Coverage:\*\* 30% confirmed \(3\/10 present\), 7 not checked because 1 feed was not read/,
   );
+});
+
+test("provisioning tools refuse a runtime that would inject into a command", async () => {
+  const { client } = await connect();
+  for (const [name, args] of [
+    ["get-provisioning-steps", { target: "rubikpi3" }],
+    ["list-provision-profiles", { projectDir: "." }],
+  ] as const) {
+    const res = await client.callTool({
+      name,
+      arguments: { ...args, runtime: "dev; rm -rf ~" },
+    });
+    assert.equal(res.isError, true, name);
+    const text = (res.content as { text: string }[])[0].text;
+    assert.match(text, /Invalid runtime/, name);
+  }
+});
+
+test("list-provision-profiles resolves a relative projectDir once", async () => {
+  const realFetch = globalThis.fetch;
+  const realBinary = process.env.AVOCADO_BINARY;
+  globalThis.fetch = (async () => {
+    throw new Error("offline");
+  }) as typeof fetch;
+  const dir = mkdtempSync(join(tmpdir(), "avocado-mcp-list-"));
+  writeFileSync(join(dir, "avocado.yaml"), "default_target: rubikpi3\n");
+  // A fake CLI that reports its working directory and its --config value.
+  const bin = join(dir, "fake-avocado");
+  writeFileSync(
+    bin,
+    `#!/bin/sh\nprintf '{"available":false,"reason":"cwd=%s %s"}\\n' "$(pwd -P)" "$5"\n`,
+  );
+  chmodSync(bin, 0o755);
+  process.env.AVOCADO_BINARY = bin;
+  try {
+    const { client } = await connect();
+    const res = await client.callTool({
+      name: "list-provision-profiles",
+      arguments: { projectDir: relative(process.cwd(), dir) },
+    });
+    const text = (res.content as { text: string }[])[0].text;
+    assert.ok(text.includes(`cwd=${realpathSync(dir)} `), text);
+    assert.ok(text.includes(`--config=${join(dir, "avocado.yaml")}`), text);
+  } finally {
+    globalThis.fetch = realFetch;
+    rmSync(dir, { recursive: true, force: true });
+    if (realBinary === undefined) delete process.env.AVOCADO_BINARY;
+    else process.env.AVOCADO_BINARY = realBinary;
+  }
+});
+
+test("environment-check says when the disk check fell back to 8 GB", async () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => {
+    throw new Error("offline");
+  }) as typeof fetch;
+  try {
+    const { client } = await connect();
+    const res = await client.callTool({
+      name: "environment-check",
+      arguments: { target: "jetson-agx-orin-devkit" },
+    });
+    const text = (res.content as { text: string }[])[0].text;
+    assert.match(
+      text,
+      /\*\*Disk check:\*\* Board data unavailable.*generic 8 GB/,
+    );
+    const s = res.structuredContent as {
+      disk: { minGB: number; note?: string };
+    };
+    assert.equal(s.disk.minGB, 8);
+    assert.match(s.disk.note ?? "", /generic 8 GB/);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
 });

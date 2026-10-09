@@ -22,8 +22,7 @@ import {
 import { probeHostMcp, HOST_MCP_URL } from "../lib/cli-channel.js";
 import {
   getHardwareData,
-  lookupTarget,
-  minDiskGB,
+  diskRequirement,
   DEFAULT_MIN_DISK_GB,
 } from "../lib/hardware-data.js";
 
@@ -327,6 +326,12 @@ export function registerDiscoveryTools(
           ok: z.boolean(),
           freeGB: z.number().describe("Free GB in $HOME"),
           minGB: z.number().describe("Minimum required free GB"),
+          note: z
+            .string()
+            .optional()
+            .describe(
+              "Set when the target's own number was not available and the check used the generic minimum.",
+            ),
         }),
         fixes: z
           .array(z.string())
@@ -345,9 +350,12 @@ export function registerDiscoveryTools(
       const host = { arch: normalizedHostArch(), platform: osPlatform() };
       const feed = feedContextFrom({ projectDir });
       let minGB = DEFAULT_MIN_DISK_GB;
+      let diskNote: string | undefined;
       if (target?.trim()) {
-        const data = await getHardwareData();
-        if (data) minGB = minDiskGB(lookupTarget(data, target.trim()));
+        ({ minGB, note: diskNote } = diskRequirement(
+          await getHardwareData(),
+          target.trim(),
+        ));
       }
       const [cliCheck, docker, disk, delegation] = await Promise.all([
         checkBinary("avocado", ["--version"]),
@@ -382,6 +390,7 @@ export function registerDiscoveryTools(
       out += `| \`avocado\` CLI on PATH | ${cli.ok ? (cli.outdated ? "⚠️" : "✅") : "❌"} | ${cli.detail} |\n`;
       out += `| Container engine | ${docker.ok ? "✅" : "❌"} | ${docker.detail} |\n`;
       out += `| Free disk (\`$HOME\`) | ${disk.ok ? "✅" : "❌"} | ${disk.freeGB.toFixed(1)} GB free (need ≥${minGB}${minGB > DEFAULT_MIN_DISK_GB ? ` for \`${target?.trim()}\`` : ""}) |\n`;
+      if (diskNote) out += `\n**Disk check:** ${diskNote}\n`;
 
       out += `\n## Avocado-CLI execution channel\n\n`;
       if (delegation.available) {
@@ -452,7 +461,7 @@ export function registerDiscoveryTools(
           executionChannel,
           cli,
           docker,
-          disk: { ok: disk.ok, freeGB: disk.freeGB, minGB },
+          disk: { ok: disk.ok, freeGB: disk.freeGB, minGB, note: diskNote },
           fixes,
           feed: feed.structured(),
         },

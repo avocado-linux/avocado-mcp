@@ -4,6 +4,9 @@ import {
   targetInfoText,
   lookupTarget,
   minDiskGB,
+  diskRequirement,
+  provisionCommand,
+  runProvisionCommand,
   getHardwareData,
   clearHardwareDataCache,
   type HardwareData,
@@ -167,4 +170,72 @@ test("option steps from the board page are kept (Variscite SW7 back to internal)
     targetInfoText(DATA, "rubikpi3", undefined),
     /```text\n\[SUCCESS\] Successfully provisioned runtime 'dev'\n```/,
   );
+});
+
+test("a board must match a board name exactly, not text in the YAML", () => {
+  for (const board of ["vision", "r"]) {
+    const info = lookupTarget(DATA, "rb3gen2", board);
+    assert.equal(info?.entries.length, 0, board);
+    const out = targetInfoText(DATA, "rb3gen2", board);
+    assert.match(out, new RegExp(`Board \`${board}\` is not in the docs data`));
+    assert.doesNotMatch(out, /05c6:9008/, board);
+  }
+  assert.equal(
+    lookupTarget(DATA, "rb3gen2", "rb3gen2-vision")?.entries.length,
+    1,
+  );
+});
+
+test("provisionCommand refuses an unsafe runtime or profile", () => {
+  assert.throws(() => provisionCommand("dev; rm -rf ~"));
+  assert.throws(() => provisionCommand("dev", "sd && curl evil"));
+  assert.equal(provisionCommand("dev", null), "avocado provision dev");
+});
+
+test("an unsafe profile from the data is skipped and named", () => {
+  const targets = structuredClone(TARGETS);
+  targets["rubikpi3"].provisioning!.options![0].profile = "ufs; reboot";
+  const out = targetInfoText(
+    { targets, devices: DEVICES },
+    "rubikpi3",
+    undefined,
+  );
+  assert.doesNotMatch(out, /avocado provision dev --profile ufs; reboot/);
+  assert.match(
+    out,
+    /Skipped profile "ufs; reboot": the name is not a safe CLI value/,
+  );
+});
+
+test("the run command counts distinct profiles", () => {
+  // Two entries, both `sd`: the exact profile is known.
+  const ucm = lookupTarget(DATA, "ucm-imx8m-plus")!;
+  assert.equal(ucm.entries.length, 2);
+  assert.equal(
+    runProvisionCommand(ucm, "dev"),
+    "avocado provision dev --profile sd",
+  );
+  // sd and uuu-emmc: the user picks.
+  assert.equal(
+    runProvisionCommand(lookupTarget(DATA, "imx8mp-var-dart")!, "dev"),
+    "avocado provision dev --profile <profile>",
+  );
+  // No options: the CLI default.
+  const none = { ...ucm, entries: [{ ...ucm.entries[0], provisioning: {} }] };
+  assert.equal(runProvisionCommand(none, "dev"), "avocado provision dev");
+});
+
+test("diskRequirement says when it falls back to the generic 8 GB", () => {
+  assert.deepEqual(diskRequirement(DATA, "jetson-agx-orin-devkit"), {
+    minGB: 16,
+  });
+  const unknown = diskRequirement(DATA, "brand-new-board-9000");
+  assert.equal(unknown.minGB, 8);
+  assert.match(
+    unknown.note ?? "",
+    /no provisioning entry for `brand-new-board-9000`.*generic 8 GB/,
+  );
+  const offline = diskRequirement(null, "jetson-agx-orin-devkit");
+  assert.equal(offline.minGB, 8);
+  assert.match(offline.note ?? "", /Board data unavailable.*generic 8 GB/);
 });

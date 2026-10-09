@@ -134,6 +134,12 @@ export function registerDebuggingTools(server: McpServer): void {
           .describe(
             "Target name (e.g. 'raspberrypi5', 'jetson-orin-nano-devkit').",
           ),
+        board: z
+          .string()
+          .optional()
+          .describe(
+            "Board (`default_target_board`), e.g. 'mic-733-ao5a1'. Pass it when the target has several boards, so the console facts are for that board.",
+          ),
       },
       outputSchema: {
         target: z.string(),
@@ -160,8 +166,12 @@ export function registerDebuggingTools(server: McpServer): void {
         openWorldHint: true,
       },
     },
-    async ({ target }) => {
-      const info = getDeviceConnectionInfo(target, await getHardwareData());
+    async ({ target, board }) => {
+      const info = getDeviceConnectionInfo(
+        target,
+        await getHardwareData(),
+        board,
+      );
       let out = `# get-device-connection-info — \`${target}\`\n\n`;
       out += `## Serial parameters\n\n`;
       out += `- **Console:** ${info.onboardConsole ? "onboard USB (no adapter needed)" : "USB-to-UART adapter"}\n`;
@@ -210,6 +220,12 @@ export function registerDebuggingTools(server: McpServer): void {
           .describe(
             "Target name. Used to look up the baud rate and console type in the docs board data.",
           ),
+        board: z
+          .string()
+          .optional()
+          .describe(
+            "Board (`default_target_board`), e.g. 'mic-733-ao5a1'. Pass it when the target has several boards, so the console facts are for that board.",
+          ),
         emulator: z
           .enum(["tio", "picocom", "minicom"])
           .optional()
@@ -231,8 +247,12 @@ export function registerDebuggingTools(server: McpServer): void {
         openWorldHint: true,
       },
     },
-    async ({ portPath, target, emulator, sessionName }) => {
-      const info = getDeviceConnectionInfo(target, await getHardwareData());
+    async ({ portPath, target, board, emulator, sessionName }) => {
+      const info = getDeviceConnectionInfo(
+        target,
+        await getHardwareData(),
+        board,
+      );
       const session = sessionName ?? "avocado-uart";
       const chosen: SerialEmulator = emulator ?? "tio";
 

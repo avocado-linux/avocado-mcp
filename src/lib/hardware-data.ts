@@ -22,6 +22,7 @@ import {
   fetchHardwareFile,
   sameTarget,
 } from "./hardware-support.js";
+import { isSafeSegment } from "./repo-client.js";
 
 export const DOCS_SITE = "https://docs.peridio.com";
 export const HARDWARE_DOCS_URL = `${DOCS_SITE}/hardware/support-matrix`;
@@ -179,13 +180,37 @@ export function lookupTarget(
   );
   if (entries.length === 0 && devices.length === 0) return null;
   const b = board?.trim() || undefined;
+  // Only a board the data lists gets steps. `covers` then picks the entries
+  // that apply to it, so a typo cannot match text in an entry's YAML.
+  const known =
+    b !== undefined &&
+    (entries.some((e) => e.board === b) || devices.some((d) => d.board === b));
   return {
     target: (entries[0] ?? devices[0]).target,
     board: b,
     // A board-specific setup (MIC-733 on the AGX Orin target) must not get
     // the dev kit's steps, so a board narrows to the entries for that board.
-    entries: b ? entries.filter((e) => covers(e, b)) : entries,
+    entries: b ? (known ? entries.filter((e) => covers(e, b)) : []) : entries,
     devices,
+  };
+}
+
+/**
+ * Free disk space in GB for a target, with a note when the docs data could not
+ * give the number for it. The check then uses the generic default.
+ */
+export function diskRequirement(
+  data: HardwareData | null,
+  target: string,
+): { minGB: number; note?: string } {
+  const info = data ? lookupTarget(data, target) : null;
+  if (info && info.entries.length > 0) return { minGB: minDiskGB(info) };
+  const why = data
+    ? `The docs data has no provisioning entry for \`${target}\``
+    : `Board data unavailable for \`${target}\``;
+  return {
+    minGB: DEFAULT_MIN_DISK_GB,
+    note: `${why}, so this check used the generic ${DEFAULT_MIN_DISK_GB} GB. The target can need more. Check ${HARDWARE_DOCS_URL}.`,
   };
 }
 
@@ -224,10 +249,49 @@ export function boardDocsUrl(info: TargetInfo): string | undefined {
   );
 }
 
+/**
+ * True when a profile name can go into a shell command. Profile names come
+ * from the docs data or CLI output. `null` means the CLI default profile.
+ */
+export function isSafeProfile(profile: string | null | undefined): boolean {
+  return !profile || isSafeSegment(profile);
+}
+
+export function skippedProfileText(profile: string): string {
+  return `Skipped profile ${JSON.stringify(profile)}: the name is not a safe CLI value.`;
+}
+
+/**
+ * The command for the "Run it" section. With one profile choice it is exact.
+ * With none it uses the CLI default. With more, the user picks.
+ */
+export function runProvisionCommand(info: TargetInfo, runtime: string): string {
+  const profiles = new Set(
+    info.entries
+      .flatMap((e) => e.provisioning?.options ?? [])
+      .filter((o) => isSafeProfile(o.profile))
+      .map((o) => o.profile ?? null),
+  );
+  if (profiles.size > 1)
+    return `${provisionCommand(runtime)} --profile <profile>`;
+  const [profile] = profiles;
+  return provisionCommand(runtime, profile);
+}
+
+/**
+ * The `avocado provision` command. Callers check the runtime and filter the
+ * profiles first. This throws as a last guard so an unsafe value never
+ * reaches a shell snippet.
+ */
 export function provisionCommand(
   runtime: string,
   profile?: string | null,
 ): string {
+  if (!isSafeSegment(runtime) || !isSafeProfile(profile)) {
+    throw new Error(
+      `Unsafe runtime or profile: ${JSON.stringify(runtime)} ${JSON.stringify(profile)}`,
+    );
+  }
   return `avocado provision ${runtime}${profile ? ` --profile ${profile}` : ""}`;
 }
 
@@ -360,6 +424,9 @@ export function provisioningText(info: TargetInfo, runtime: string): string {
   if (info.entries.length === 0) {
     const page = boardDocsUrl(info);
     out += `## Provisioning\n\n`;
+    if (info.board && !info.devices.some((d) => d.board === info.board)) {
+      out += `Board \`${info.board}\` is not in the docs data for \`${info.target}\`.\n\n`;
+    }
     out += `The docs data has no provisioning details for ${info.board ? `board \`${info.board}\`` : `\`${info.target}\``}. Follow the board page${page ? `: ${page}` : ""}. Without \`--profile\`, the CLI uses the default profile of the target:\n\n`;
     out += `\`\`\`bash\n${provisionCommand(runtime)}\n\`\`\`\n\n`;
     out += `After \`avocado install\`, \`list-provision-profiles\` shows the profiles the target has.\n\n`;
@@ -398,13 +465,18 @@ export function provisioningText(info: TargetInfo, runtime: string): string {
       out += `\`\`\`yaml\ndefault_target: ${entry.target}\ndefault_target_board: ${entry.board}\n\`\`\`\n\n`;
     }
     out += serialSection(entry.serial);
-    const options = entry.provisioning?.options ?? [];
+    const all = entry.provisioning?.options ?? [];
+    const options = all.filter((o) => isSafeProfile(o.profile));
     if (options.length > 1) {
       out += `## Provisioning profiles\n\nThis target has ${options.length} options. Ask the user which one fits.\n\n`;
     } else {
       out += `## Provisioning\n\n`;
     }
     for (const o of options) out += optionSection(o, runtime);
+    for (const o of all) {
+      if (!isSafeProfile(o.profile))
+        out += `${skippedProfileText(o.profile!)}\n\n`;
+    }
   }
   const notes = boardPageNotes(info, runtime);
   if (notes.length > 0) {
@@ -465,9 +537,6 @@ export function targetInfoText(
   const device = info.board
     ? info.devices.find((d) => d.board === info.board)
     : undefined;
-  if (info.board && !device && info.entries.length === 0) {
-    out += `Board \`${info.board}\` is not in the docs data for \`${info.target}\`.\n\n`;
-  }
   out += `**Name:** ${device?.name ?? entry?.name ?? info.devices[0].name}\n`;
   if (info.target !== target)
     out += `**Docs target slug:** \`${info.target}\`\n`;
