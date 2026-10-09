@@ -185,3 +185,57 @@ test("an HTTP error degrades to null", async () => {
   stub({ sup: "500", ve: "500" });
   assert.equal(await getSelectableSlugs(), null);
 });
+
+test("supported targets and name resolution never use the feed's arch entries", async () => {
+  const { supportedTargets, resolveFeedTarget } =
+    await import("../../src/lib/hardware-support.js");
+  stub({
+    sup: {
+      category: "Supported",
+      devices: [
+        { name: "Raspberry Pi 5", target: "raspberrypi5", board: "" },
+        { name: "Intel x86-64 v3", target: "intel-x86-64-v3", board: "" },
+      ],
+    },
+    ve: {
+      category: "Virtual",
+      devices: [{ name: "QEMU x86-64", target: "qemux86-64", board: "" }],
+    },
+  });
+  const feed = [
+    "armv8a",
+    "cortexa53",
+    "noarch",
+    "x86_64_v3",
+    "raspberrypi5",
+    "intel-x86-64-v3",
+    "qemux86-64",
+    "fr202",
+  ];
+  const { targets, fromMatrix } = await supportedTargets(feed);
+  assert.equal(fromMatrix, true);
+  assert.deepEqual(targets.sort(), [
+    "intel-x86-64-v3",
+    "qemux86-64",
+    "raspberrypi5",
+  ]);
+
+  // A user's name resolves against real boards only.
+  const rpi = await resolveFeedTarget("rpi5", feed);
+  assert.equal(rpi.target, "raspberrypi5");
+  const x86 = await resolveFeedTarget("x86", feed);
+  assert.ok(!x86.candidates.includes("x86_64_v3"));
+  // An exact feed slug is still accepted, so a real slug is never blocked.
+  assert.equal((await resolveFeedTarget("fr202", feed)).target, "fr202");
+});
+
+test("supported targets fall back to the whole feed when the matrix is down", async () => {
+  const { supportedTargets } =
+    await import("../../src/lib/hardware-support.js");
+  stub({ sup: "500", ve: "500" });
+  const feed = ["armv8a", "raspberrypi5"];
+  assert.deepEqual(await supportedTargets(feed), {
+    targets: feed,
+    fromMatrix: false,
+  });
+});

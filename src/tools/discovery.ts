@@ -15,10 +15,7 @@ import {
 } from "./feed-args.js";
 import { resolveTarget } from "../lib/target-resolver.js";
 import { isCliOutdated, MIN_CLI_VERSION } from "../lib/cli-version.js";
-import {
-  getSelectableSlugs,
-  filterSelectable,
-} from "../lib/hardware-support.js";
+import { supportedTargets } from "../lib/hardware-support.js";
 import { probeHostMcp, HOST_MCP_URL } from "../lib/cli-channel.js";
 import {
   getHardwareData,
@@ -554,10 +551,8 @@ export function registerDiscoveryTools(
       // to it, but fall back to the full feed if the matrix can't be fetched so
       // a docs outage never hides targets.
       const feedTargets = Object.keys(config);
-      const selectable = await getSelectableSlugs();
-      const allTargets = selectable
-        ? filterSelectable(feedTargets, selectable)
-        : feedTargets;
+      const { targets: allTargets, fromMatrix: selectable } =
+        await supportedTargets(feedTargets);
       const entries = (
         query
           ? resolveTarget(query, allTargets).map(

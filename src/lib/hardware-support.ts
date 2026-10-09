@@ -15,6 +15,8 @@
  * failure we return `null` and callers fall back to the full feed — a docs
  * outage must never hide real targets.
  */
+import { resolveTargetInput, type TargetMatch } from "./target-resolver.js";
+
 export const RAW_BASE =
   "https://raw.githubusercontent.com/peridio/docs/main/src/src/data/hardware";
 const DATA_FILES = ["supported.json", "virtual-environment.json"];
@@ -106,6 +108,42 @@ export function filterSelectable(
     }
     return false;
   });
+}
+
+/**
+ * The feed targets to list or suggest to a user: the ones in the support
+ * matrix (real boards and QEMU). The feed's targets.json also carries
+ * architecture entries (`armv8a`, `cortexa53`, `noarch`), which are not
+ * hardware. Falls back to the whole feed when the matrix cannot be fetched,
+ * so a docs outage never hides targets.
+ */
+export async function supportedTargets(
+  feedTargets: string[],
+): Promise<{ targets: string[]; fromMatrix: boolean }> {
+  const selectable = await getSelectableSlugs();
+  return selectable
+    ? { targets: filterSelectable(feedTargets, selectable), fromMatrix: true }
+    : { targets: feedTargets, fromMatrix: false };
+}
+
+/**
+ * Resolve what a user typed to a feed target. An exact feed slug is always
+ * accepted, so a real slug is never blocked. Any other input ("rpi5") is
+ * resolved against the supported targets only, so it never lands on an
+ * architecture entry.
+ */
+export async function resolveFeedTarget(
+  input: string,
+  feedTargets: string[],
+  aliases: Parameters<typeof resolveTargetInput>[2] = [],
+): Promise<TargetMatch & { supported: string[]; fromMatrix: boolean }> {
+  const { targets: supported, fromMatrix } =
+    await supportedTargets(feedTargets);
+  const q = input.trim();
+  const match = feedTargets.includes(q)
+    ? { target: q, candidates: [q] }
+    : resolveTargetInput(q, supported, aliases);
+  return { ...match, supported, fromMatrix };
 }
 
 /** Test seam: reset the in-memory cache. */
