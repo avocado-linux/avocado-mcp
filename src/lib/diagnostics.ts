@@ -370,7 +370,13 @@ const BUILD_PATTERNS: Pattern[] = [
 ];
 
 export function diagnoseProvisionLog(log: string): Diagnosis[] {
-  return runPatterns(PROVISION_PATTERNS, log);
+  const out = runPatterns(PROVISION_PATTERNS, log);
+  // The generic tegraflash advice (short FC REC to GND) is wrong for boards
+  // such as AGX Thor. The specific RCM diagnosis has the per-board steps.
+  if (out.some((d) => d.label === "Jetson not in recovery mode")) {
+    return out.filter((d) => d.label !== "USB / tegraflash failure");
+  }
+  return out;
 }
 
 export function diagnoseBuildLog(log: string): Diagnosis[] {

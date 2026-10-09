@@ -606,3 +606,15 @@ test("a log with no error signals names the command that ran", async () => {
   assert.match(out, /`avocado deploy` command actually succeeded/);
   assert.doesNotMatch(out, /build\/provision/);
 });
+
+test("a specific RCM diagnosis replaces the generic tegraflash one", () => {
+  const log =
+    "Running tegraflash.py ...\nERROR: Device did not enter RCM mode (waited 60s)";
+  assert.deepEqual(labels(diagnoseProvisionLog(log)), [
+    "Jetson not in recovery mode",
+  ]);
+  // Without the RCM signature, the generic tegraflash diagnosis stays.
+  assert.deepEqual(labels(diagnoseProvisionLog("tegraflash.py failed")), [
+    "USB / tegraflash failure",
+  ]);
+});
