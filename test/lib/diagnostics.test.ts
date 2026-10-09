@@ -93,6 +93,20 @@ test("every phrasing of a missing target device is diagnosed", () => {
   }
 });
 
+test("the tegraflash fix points to the board's own recovery steps", () => {
+  const d = diagnoseProvisionLog(
+    "tegraflash.py: error: failed to read rcm_state",
+  ).find((x) => x.label === "USB / tegraflash failure");
+  assert.ok(d);
+  // Only the Orin Nano dev kit uses the FC REC jumper. AGX Orin and Thor
+  // use buttons, so the fix must not tell every user to short FC REC.
+  assert.doesNotMatch(d.suggestion, /FC REC pin shorted/);
+  assert.match(d.suggestion, /`get-target-info` or `get-provisioning-steps`/);
+  assert.match(d.suggestion, /Orin Nano dev kit uses a jumper/);
+  assert.match(d.suggestion, /AGX Orin dev kit uses the Reset and Force/);
+  assert.match(d.suggestion, /AGX Thor uses a timed button sequence/);
+});
+
 test("every tense of automount is diagnosed", () => {
   for (const log of [
     "automount detected on /dev/sdb",
