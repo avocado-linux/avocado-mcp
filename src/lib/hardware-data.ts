@@ -473,7 +473,9 @@ export function targetInfoText(
     out += `**Docs target slug:** \`${info.target}\`\n`;
   const page = boardDocsUrl(info);
   if (page) out += `**Docs:** ${page}\n`;
-  if (!isVirtual(info)) {
+  // Only targets with a docs entry: a board with no entry (a Jetson-based
+  // MIC-712) may need more than the default, and the data does not say.
+  if (info.entries.length > 0 && !isVirtual(info)) {
     out += `**Free disk space:** ${minDiskGB(info)} GB\n`;
   }
   if (entry?.description) out += `\n${entry.description}\n`;
