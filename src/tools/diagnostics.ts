@@ -18,7 +18,6 @@ import {
   feedSummarySchema,
 } from "./feed-args.js";
 import { qemuArchAdvisory } from "./discovery.js";
-import { resolveTargetInput } from "../lib/target-resolver.js";
 import {
   boardChoiceText,
   getHardwareData,
@@ -34,6 +33,7 @@ import {
   unavailableText,
   unknownTargetText,
 } from "../lib/hardware-data.js";
+import { resolveFeedTarget } from "../lib/hardware-support.js";
 
 export function registerDiagnosticsTools(
   server: McpServer,
@@ -295,10 +295,11 @@ export function registerDiagnosticsTools(
         };
       }
       // Accept what a user types ("rpi5", "Advantech MIC-712-OX"). An
-      // ambiguous name lists the candidates instead of guessing.
+      // ambiguous name lists the candidates (real boards and QEMU only)
+      // instead of guessing.
       const feedTargets = Object.keys(validTargets);
       const data = await getHardwareData();
-      const match = resolveTargetInput(
+      const match = await resolveFeedTarget(
         input,
         feedTargets,
         data ? targetAliases(data, feedTargets) : [],

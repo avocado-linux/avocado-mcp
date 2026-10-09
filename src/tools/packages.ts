@@ -19,10 +19,7 @@ import {
   streamLabel,
 } from "./feed-args.js";
 import { resolveTarget } from "../lib/target-resolver.js";
-import {
-  getSelectableSlugs,
-  filterSelectable,
-} from "../lib/hardware-support.js";
+import { supportedTargets } from "../lib/hardware-support.js";
 
 /**
  * Validate target names against the manifest of the feed the caller will
@@ -50,8 +47,8 @@ async function validateTargets(
   // blocked), but suggestions come from the selectable set (the support matrix)
   // so we never propose an arch/tune pseudo-target. Fall back to the full feed
   // if the matrix can't be fetched.
-  const selectable = await getSelectableSlugs();
-  const suggestFrom = selectable ? filterSelectable(all, selectable) : all;
+  const { targets: suggestFrom, fromMatrix: selectable } =
+    await supportedTargets(all);
   const lines: string[] = [];
   for (const u of unknown) {
     const fuzzy = resolveTarget(u, suggestFrom).slice(0, 3);
@@ -562,7 +559,10 @@ export function registerPackageTools(
         };
       }
       if (!manifest[target]) {
-        const fuzzy = resolveTarget(target, Object.keys(manifest)).slice(0, 3);
+        const { targets: suggestFrom } = await supportedTargets(
+          Object.keys(manifest),
+        );
+        const fuzzy = resolveTarget(target, suggestFrom).slice(0, 3);
         return {
           content: [
             {

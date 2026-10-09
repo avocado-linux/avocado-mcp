@@ -14,10 +14,6 @@ import {
   type ScoredReference,
 } from "../lib/references-client.js";
 import {
-  resolveTargetInput,
-  type TargetMatch,
-} from "../lib/target-resolver.js";
-import {
   boardChoiceText,
   getHardwareData,
   resolvedLine,
@@ -31,6 +27,7 @@ import {
   renderFeedFailures,
   renderNotChecked,
 } from "./feed-args.js";
+import { resolveFeedTarget } from "../lib/hardware-support.js";
 
 export function registerProjectTools(
   server: McpServer,
@@ -159,17 +156,18 @@ export function registerProjectTools(
       }
       // Accept what a user types ("rpi5", "Raspberry Pi 5", "Advantech
       // MIC-712-OX"). An ambiguous name fails with the candidates instead of
-      // a guess.
+      // a guess. Lists and candidates hold only real boards and QEMU, never
+      // the feed's architecture entries.
       const data = validTargets ? await getHardwareData() : null;
-      const match: TargetMatch = validTargets
-        ? resolveTargetInput(
+      const match = validTargets
+        ? await resolveFeedTarget(
             input,
             Object.keys(validTargets),
             data ? targetAliases(data, Object.keys(validTargets)) : [],
           )
-        : { target: input.trim(), candidates: [] };
-      if (validTargets && !match.target) {
-        const allTargets = Object.keys(validTargets);
+        : undefined;
+      if (match && !match.target) {
+        const allTargets = match.supported;
         const fuzzy = match.candidates;
         let body = `# init-project failed\n\n❌ \`${input}\` is **not a supported Avocado OS target**, or it matches more than one. The MCP only operates on targets that exist in the feed.\n\n${feed.describe()}\n`;
         if (match.boards) {
@@ -177,17 +175,17 @@ export function registerProjectTools(
         } else if (fuzzy.length > 0) {
           body += `**Did you mean:** ${fuzzy.map((t) => `\`${t}\``).join(", ")}?\n\n`;
         }
-        body += `**Supported targets (${allTargets.length}):** ${allTargets
+        body += `**${match.fromMatrix ? "Supported targets" : "Targets in the feed"} (${allTargets.length}):** ${allTargets
           .sort()
           .map((t) => `\`${t}\``)
           .join(", ")}\n\n`;
         body += `If the user's hardware isn't on this list, **tell them it's not currently supported** — don't try to substitute a "close enough" target without their explicit confirmation. Use \`list-targets({ query: "..." })\` to search by user-supplied hardware names.`;
         return { content: [{ type: "text", text: body }] };
       }
-      const target = match.target ?? input.trim();
+      const target = match?.target ?? input.trim();
       // A board name ("Advantech MIC-712-OX") gives the board when the
       // caller passed none. It goes into avocado.yaml, so check it too.
-      const resolvedBoard = board ? undefined : match.board;
+      const resolvedBoard = board ? undefined : match?.board;
       board = board ?? resolvedBoard;
       // The feed support check is skipped when targets.json is unreachable,
       // so this check must not depend on it.
