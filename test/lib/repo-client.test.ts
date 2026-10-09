@@ -197,6 +197,26 @@ test("credentials never appear in feed errors or redacted URLs", () => {
   );
 });
 
+test("redactUrl masks query values and the fragment, and keeps parameter names", () => {
+  assert.equal(
+    redactUrl("https://u:p@vendor.test/r?token=s3cr3t&x=1#frag"),
+    "https://***@vendor.test/r?token=***&x=***#***",
+  );
+  assert.equal(
+    redactUrl("https://vendor.test/r?s3cr3t"),
+    "https://vendor.test/r?***",
+  );
+  assert.throws(
+    () =>
+      validateFeed({
+        ...DEFAULT_FEED,
+        baseUrl: "https://vendor.test/r?token=s3cr3t",
+      }),
+    (e: Error) =>
+      /token=\*\*\*/.test(e.message) && !e.message.includes("s3cr3t"),
+  );
+});
+
 test("extra feeds cache per credential, and the key holds no raw password", async () => {
   const calls = stubFeed({ primaryXml: PRIMARY });
   const client = new RepoClient();

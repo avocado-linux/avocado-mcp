@@ -97,7 +97,7 @@ export class FeedHttpError extends Error {
     url: string,
     readonly status: number,
   ) {
-    super(`${url} returned ${status}`);
+    super(`${redactUrl(url)} returned ${status}`);
   }
 }
 
@@ -163,9 +163,20 @@ function isSafeReleasever(p: unknown): p is string {
   );
 }
 
-/** Mask `user:password@` in a URL so credentials never reach tool output. */
+/**
+ * Mask `user:password@`, query values and the fragment in a URL so
+ * credentials never reach tool output. Query parameter names stay visible.
+ * Works on the raw string, so it is safe to call before validation.
+ */
 export function redactUrl(url: string): string {
-  return url.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/?#]*@/i, "$1***@");
+  return url
+    .replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/?#]*@/i, "$1***@")
+    .replace(/\?[^#]*/, (q) =>
+      q.replace(/([?&])([^=&]*)(=?)[^&]*/g, (_, sep, key, eq) =>
+        eq ? `${sep}${key}=***` : key ? `${sep}***` : sep,
+      ),
+    )
+    .replace(/#.*$/s, "#***");
 }
 
 /** Validate a repo URL and return it normalised. Throws on anything unsafe. */
@@ -287,7 +298,7 @@ async function feedFetch(url: string, conn: FeedConn): Promise<Response> {
     const body = Readable.toWeb(res) as unknown as ReadableStream<Uint8Array>;
     return new Response(body, { status });
   }
-  throw new Error(`Too many redirects fetching ${url}`);
+  throw new Error(`Too many redirects fetching ${redactUrl(url)}`);
 }
 
 async function readBounded(
@@ -329,7 +340,7 @@ async function fetchBoundedText(
 ): Promise<string> {
   const res = await feedFetch(url, conn);
   if (!res.ok) throw new FeedHttpError(url, res.status);
-  if (!res.body) throw new Error(`${url} returned no body`);
+  if (!res.body) throw new Error(`${redactUrl(url)} returned no body`);
   const bytes = await readBounded(res.body, maxBytes, label);
   return new TextDecoder("utf-8").decode(bytes);
 }
