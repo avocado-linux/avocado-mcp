@@ -280,6 +280,44 @@ test("get-provisioning-steps resolves a docs board name to its target and board"
   }
 });
 
+test("get-provisioning-steps prints one full command per profile", async () => {
+  const restore = serveHardwareFixture();
+  class StubRepo extends RepoClient {
+    override async getTargetsConfig() {
+      return { "imx8mp-var-dart": ["target/armv8a"] };
+    }
+  }
+  try {
+    const { client } = await connect(new StubRepo());
+    const res = await client.callTool({
+      name: "get-provisioning-steps",
+      arguments: { target: "imx8mp-var-dart" },
+    });
+    const text = (res.content as { text: string }[])[0].text;
+    const run = text.slice(text.indexOf("## Run it"));
+    const blocks = [...run.matchAll(/```bash\n([\s\S]*?)```/g)].map(
+      (m) => m[1],
+    );
+    // `<profile>` in a shell is a redirection, so no block may hold it.
+    assert.ok(blocks.length > 0);
+    for (const b of blocks) assert.doesNotMatch(b, /<profile>/);
+    // Each profile gets its own block, so no block runs two provisions.
+    for (const b of blocks) {
+      assert.ok((b.match(/avocado provision/g) ?? []).length <= 1, b);
+    }
+    for (const p of ["sd", "uuu-emmc"]) {
+      assert.ok(
+        blocks.some((b) =>
+          b.includes(`avocado provision dev --profile ${p} --no-tui\n`),
+        ),
+        p,
+      );
+    }
+  } finally {
+    restore();
+  }
+});
+
 test("a flag-like serial port is rejected by the tool's input schema", async () => {
   // The port pattern lives on the zod field, so the SDK rejects it before the
   // handler — the LLM is told the constraint rather than getting a bare throw.
