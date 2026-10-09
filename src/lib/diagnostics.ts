@@ -23,6 +23,28 @@ interface Pattern {
   suggestion: string;
 }
 
+// Build, provision and deploy all check build stamps before they start, so
+// these fire on either log. Match text is from avocado-cli
+// `src/utils/stamps.rs`.
+const STAMP_PATTERNS: Pattern[] = [
+  {
+    label: "Build step prerequisites not met",
+    match: / - dependencies not satisfied/,
+    cause:
+      "The CLI checks build stamps before each step. A step that this one needs is missing or stale, so the CLI stopped before it did any work.",
+    suggestion:
+      "The log lists each missing or stale step, then prints the exact commands under `To fix:`. Run those commands in the order shown, then retry. In most cases this is `avocado install`, then the step that failed. Docs: https://docs.peridio.com/developer-reference/lockfiles-and-build-stamps",
+  },
+  {
+    label: "Stamps from an older CLI",
+    match: /stamp format changed \(v\d+/,
+    cause:
+      "The CLI was upgraded and its stamp format changed. Every stamp that the older CLI wrote now reads as stale, although `avocado.yaml` did not change.",
+    suggestion:
+      "This is expected after `avocado upgrade`. Your config needs no edit. Run the commands that the CLI prints under `To fix:` (usually `avocado install`, then `avocado build`) to write new stamps. Docs: https://docs.peridio.com/developer-reference/lockfiles-and-build-stamps",
+  },
+];
+
 const PROVISION_PATTERNS: Pattern[] = [
   {
     label: "Non-TTY harness: CLI too old",
@@ -69,7 +91,7 @@ const PROVISION_PATTERNS: Pattern[] = [
     // Phrasing varies by tool: dd/bmaptool say "failed to open", others
     // "cannot open" / "could not open".
     match:
-      /no such device\b|device not found|(?:cannot|could not|couldn't|failed to|unable to) open [^\n]*\/dev\/[^\n]*no such/i,
+      /no such device\b|(?<!QDL )device not found|(?:cannot|could not|couldn't|failed to|unable to) open [^\n]*\/dev\/[^\n]*no such/i,
     cause:
       "The provisioner could not find the target storage device (SD card, USB drive, NVMe).",
     suggestion:
@@ -98,6 +120,27 @@ const PROVISION_PATTERNS: Pattern[] = [
       "The SDK container could not access the target device. Likely missing `--privileged` or a `/dev` bind mount.",
     suggestion:
       "Verify your `avocado.yaml` has `sdk.container_args` including `--privileged`, `-v /dev:/dev`, and `-v /sys:/sys`.",
+  },
+  ...STAMP_PATTERNS,
+  {
+    label: "Qualcomm board not in EDL mode",
+    // meta-avocado `stone-provision-ufs.sh` waits for `05c6:9008`. A board
+    // that shows `05c6:900e` instead is in dload/ramdump mode.
+    match: /QDL device not found after \d+ seconds|\b05c6:900e\b/,
+    cause:
+      "The provisioner waited for a Qualcomm device in EDL mode (USB ID `05c6:9008`) and did not find one. A board that shows `05c6:900e` is in dload/ramdump mode after a failed boot. That mode is not EDL.",
+    suggestion:
+      "Put the board into EDL mode as its docs page shows, then run `lsusb` and look for `05c6:9008`. If you see `05c6:900e`, power-cycle the board and put it into EDL mode again. Then rerun the same `avocado provision` command. Docs: https://docs.peridio.com/hardware/qualcomm/rb3-gen-2 and https://docs.peridio.com/hardware/qualcomm/rubik-pi-3",
+  },
+  {
+    label: "Jetson not in recovery mode",
+    // meta-avocado `stone-provision-tegraflash.sh` and `find-jetson-usb.sh`.
+    match:
+      /Device did not enter RCM mode \(waited \d+s\)|No Jetson device in recovery mode found/,
+    cause:
+      "The provisioner waited for a Jetson in Force Recovery (RCM) mode and did not find one on USB.",
+    suggestion:
+      "Put the board into Force Recovery mode, then rerun the same `avocado provision` command. The steps are different for each board. On AGX Thor, hold the Force Recovery button and the Reset button for 3 seconds. Release Reset only, then release Force Recovery 3 seconds later. For other Jetson boards, follow the recovery steps on the docs page of that board. Docs: https://docs.peridio.com/hardware/nvidia/jetson-agx-thor",
   },
 ];
 
@@ -138,8 +181,10 @@ const BUILD_PATTERNS: Pattern[] = [
   },
   {
     label: "Unresolved dependency",
+    // The lookahead keeps the CLI's `depends_on` closure error out: that one
+    // is about extensions, not DNF packages.
     match:
-      /unresolved deps|conflicting requests|cannot install|nothing provides/i,
+      /unresolved deps|conflicting requests|cannot install(?! with an unresolved dependency closure)|nothing provides/i,
     cause:
       "DNF couldn't satisfy a dependency. Either a versioned constraint is too tight, or two extensions want conflicting versions.",
     suggestion:
@@ -190,6 +235,137 @@ const BUILD_PATTERNS: Pattern[] = [
     cause: "The host filesystem ran out of room while building.",
     suggestion:
       "Free space on the volume backing your project directory and Docker's data volume.",
+  },
+  ...STAMP_PATTERNS,
+  // Feed auth: avocado-cli `src/utils/feeds.rs`. The 401 hint and the
+  // `--connect-sign` session error (runtime/deploy.rs) have the same fix.
+  {
+    label: "Connect login missing or expired",
+    match:
+      /is a private feed and you are not logged in|no Connect profile for org '|feed-token request returned 401\b|--connect-sign requires an active Connect session/,
+    cause:
+      "The project reads a private `org:` feed or signs through Connect, and the CLI has no valid Connect credential for it. Either you never logged in, or Connect rejected the stored credential.",
+    suggestion:
+      "Run `avocado login`. If your account is in more than one org, run `avocado login --org <org-id>`. For CI, set `AVOCADO_CONNECT_TOKEN` instead. Then rerun the command that failed. Docs: https://docs.peridio.com/developer-reference/avocado-cli/commands#avocado-login",
+  },
+  {
+    label: "Not entitled to a private feed",
+    match: /feed-token request returned 403\b/,
+    cause:
+      "You are logged in, but this account has no access to the private feed of the org that `repos:` names.",
+    suggestion:
+      "Check the `org:` value of that entry under `repos:` in `avocado.yaml`. Then log in with an account in that org: `avocado login --org <org-id>`. If the org is correct, ask an admin of that org for access. Docs: https://docs.peridio.com/developer-reference/avocado-cli/commands#avocado-login",
+  },
+  {
+    label: "Connect serves no feed tokens",
+    match: /feed-token request returned 404\b/,
+    cause:
+      "The Connect API that the CLI called does not issue feed tokens. This usually means that the login or `AVOCADO_CONNECT_URL` points at the wrong Connect deployment.",
+    suggestion:
+      "Check `AVOCADO_CONNECT_URL` and the URL of your login. The default is `https://connect.peridio.com`. To log in to a different deployment, run `avocado login --url <url>`. Docs: https://docs.peridio.com/developer-reference/avocado-cli/commands#avocado-login",
+  },
+  // Signing and verity: avocado-cli `src/commands/runtime/build.rs` (FIT
+  // assembly script) and `runtime/deploy.rs`.
+  {
+    label: "Rootfs verity needs a FIT signing key",
+    match: /rootfs\.image\.verity is on, which needs the boot FIT rebuilt/,
+    cause:
+      "`rootfs.image.verity` puts the rootfs root hash into the boot FIT, so the build must rebuild the FIT. The runtime sets neither `signing.fit_key` nor `signing.fit_unsigned`, so the build cannot make the FIT.",
+    suggestion:
+      "Set `runtimes.<name>.signing.fit_key` to an RSA key from the signing-key registry. To make one, run `avocado signing-keys create <key-name> --algorithm rsa2048`. Use `signing.fit_unsigned: true` instead only if the U-Boot of this board enforces no key. Do not set both. Then run `avocado build`. Docs: https://docs.peridio.com/developer-reference/security/verity",
+  },
+  {
+    label: "Feed has no bootloader rekey tool",
+    match:
+      /signing\.fit_key_in_bootloader is on but this feed ships no imx-boot-tools\/rekey-imx-boot\.sh/,
+    cause:
+      "`signing.fit_key_in_bootloader` puts your FIT key into the bootloader. It is on by default when `signing.fit_key` is set. The feed for this target has no tool to do that.",
+    suggestion:
+      "Set `runtimes.<name>.signing.fit_key_in_bootloader: false` to keep the distro bootloader, then run `avocado build`. The FIT is still signed, but U-Boot does not enforce your key. Docs: https://docs.peridio.com/developer-reference/security/boot-signing",
+  },
+  {
+    label: "Deploy refuses extension verity",
+    match: /extensions with image\.verity: true; deploy does not publish/,
+    cause:
+      "`avocado deploy` cannot publish the dm-verity hash trees of extensions yet, so the device would refuse them. Rootfs verity is not affected.",
+    suggestion:
+      "To install this runtime with verity, provision the device: `avocado provision <runtime>`. This erases the target storage, so confirm with the user first. To iterate with deploy, remove `image.verity` from those extensions, run `avocado build`, then `avocado deploy <runtime> -d <device-ip>`. Docs: https://docs.peridio.com/developer-reference/security/verity",
+  },
+  {
+    label: "No root.json in the runtime",
+    match: /No root\.json found at /,
+    cause:
+      "The runtime has no update authority (`root.json`) because no signing key is set for it. Deploy needs one, and `--connect-sign` needs a local signing key for this reason.",
+    suggestion:
+      "Set `runtimes.<name>.signing.key` for the runtime. For a Connect project, also run `avocado connect trust promote-root --key <key-name>`. Then run `avocado build` and deploy again. Docs: https://docs.peridio.com/developer-reference/avocado-cli/commands#avocado-deploy",
+  },
+  // Extension dependencies and the lock: avocado-cli `src/commands/install.rs`,
+  // `src/utils/ext_deps.rs` and `src/commands/ext/fetch.rs`.
+  {
+    label: "Unresolved depends_on closure",
+    match:
+      /unresolved dependency closure|is not defined in `extensions:` and could not be resolved from the target's feed|configuration has not been merged, so its dependencies are unknown/,
+    cause:
+      "An extension lists another extension in `depends_on` that the CLI cannot find. Either the name is not under `extensions:` and not in the feed of the target, or it is a `git` or `package` source that was not fetched yet.",
+    suggestion:
+      "The error names the extension, and `Required by:` shows the chain. Check the spelling in `depends_on`. Define the extension under `extensions:`, or make sure that the feed of the target has it. For a `git` or `package` source, run `avocado ext fetch`. Then run `avocado install`. Docs: https://docs.peridio.com/changelog/august-2026/1.0.0-rc.2",
+  },
+  {
+    label: "avocado.lock drift under --locked",
+    match:
+      /--locked forbids (?:resolving them|updating it)|avocado\.lock pins dependency versions that cannot satisfy/,
+    cause:
+      "`--locked` does not let the CLI change `avocado.lock`. The config or the feed no longer matches the lock, so the command stopped.",
+    suggestion:
+      "This is what `--locked` is for in CI. On a development machine, run `avocado ext fetch` without `--locked` (or `avocado install`) to update the lock. Review the `avocado.lock` diff and commit it. Keep `--locked` in CI. Docs: https://docs.peridio.com/developer-reference/avocado-cli/commands#avocado-ext-fetch",
+  },
+  {
+    label: "Lockfile from another distro release",
+    match: /Lock file was created with distro\.release '/,
+    cause:
+      "`avocado.lock` pins packages from a different `distro.release` than `avocado.yaml` names. Locked pins stay in place until you clear them. The same is true for a version change in `avocado.yaml`.",
+    suggestion:
+      "Run `avocado unlock`, then `avocado install`. To clear only one scope, use `avocado unlock --sdk`, `--rootfs`, `--initramfs`, `--extension <name>` or `--runtime <name>`. Docs: https://docs.peridio.com/developer-reference/lockfiles-and-build-stamps",
+  },
+  // Config checks: avocado-cli `src/utils/config_lint.rs` (warnings, the
+  // build continues), `src/utils/version.rs` and `src/utils/config.rs`.
+  {
+    label: "avocado.yaml keys ignored",
+    match:
+      /\.ya?ml: (?:unknown key '[^'\n]+' is ignored|'[^'\n]+' (?:has no effect|is an old (?:name|spelling)|is no longer read|sets no [^\n]*? fields))/,
+    cause:
+      "The CLI found keys in `avocado.yaml` that it does not read. These are warnings. The command continues, but those settings have no effect.",
+    suggestion:
+      "Each warning names the key path and, when it can, the key it expected (`did you mean ...`). Rename or remove each key. Run `validate-yaml` to list all of them at once. Docs: https://docs.peridio.com/developer-reference/avocado-cli/configuration",
+  },
+  {
+    label: "CLI version does not meet cli_requirement",
+    match:
+      /This project requires avocado CLI version '|Invalid cli_requirement '/,
+    cause:
+      "`cli_requirement` in `avocado.yaml` names CLI versions that do not include the one you run, or the value is not a valid semver requirement.",
+    suggestion:
+      'Run `avocado upgrade`, then retry. If the error says `Invalid cli_requirement`, use a semver requirement such as `">=1.0.0"`. Change the requirement to allow an older CLI only if you know that the project works with it. Docs: https://docs.peridio.com/developer-reference/avocado-cli/commands#avocado-upgrade',
+  },
+  {
+    label: "Encrypted /var config error",
+    match:
+      /var\.hardware: '[^'\n]*' (?:is not one of|needs var\.recovery)|var\.recovery is set but var\.encrypt is not true|(?:sets|opts in to) var\.encrypt (?:but is scoped|for ')|targets is empty - that scopes the runtime to no target/,
+    cause:
+      "The `var` settings of a runtime do not agree. The CLI checks them at config load and before the build, so that `/var` never comes up plaintext when the config asks for encryption.",
+    suggestion:
+      "`var.hardware` takes `auto`, `caam`, `tpm2` or `none`. `none` needs `var.recovery`. `var.recovery` needs `var.encrypt: true`. A runtime with `var.encrypt` and a `targets:` list must list the target you build for. Do not set `targets: []`. Omit the key to mean every target. Fix the key that the error names, then rerun. Docs: https://docs.peridio.com/developer-reference/security/encrypted-var",
+  },
+  {
+    label: "Stale build volume",
+    // avocado-cli `src/commands/rootfs/image.rs`. Older CLIs failed later with
+    // a grep error on the same file, which the docs also describe.
+    match:
+      /is missing \/etc\/passwd\. The build volume looks half-populated or stale|rootfs-work\/etc\/(?:passwd|shadow|group): No such file/,
+    cause:
+      "The Docker volume of this project is stale or half-populated. An install was interrupted, or the project directory was deleted without `avocado clean`, and its old volume is still there.",
+    suggestion:
+      "Reset the build state, then rebuild: `avocado clean`, `avocado prune`, `avocado install`, `avocado build`. `clean` removes the volume of this project. `prune` removes volumes left by deleted projects. Run both. The next install downloads and builds again. Docs: https://docs.peridio.com/developer-reference/getting-started/qemu#troubleshooting-a-stale-build-volume",
   },
 ];
 
