@@ -145,6 +145,21 @@ test("targets that share a slug return every entry", () => {
   assert.equal(info?.devices.length, 2);
 });
 
+test("a device name on a shared target gives that device only", () => {
+  const out = targetInfoText(DATA, "CompuLab IOT-GATE-iMX8PLUS", undefined);
+  assert.match(out, /\*\*Name:\*\* CompuLab IOT-GATE-iMX8PLUS\n/);
+  assert.match(
+    out,
+    /\*\*Docs:\*\* https:\/\/docs\.peridio\.com\/hardware\/compulab\/iot-gate-imx8plus\n/,
+  );
+  assert.doesNotMatch(out, /compulab\/ucm-imx8m-plus/);
+  assert.doesNotMatch(out, /## CompuLab UCM-i\.MX8M-Plus/);
+  assert.equal(
+    lookupTarget(DATA, "CompuLab IOT-GATE-iMX8PLUS")?.entries.length,
+    1,
+  );
+});
+
 test("minDiskGB reads a larger docs number and keeps 8 GB otherwise", () => {
   assert.equal(minDiskGB(lookupTarget(DATA, "jetson-agx-orin-devkit")), 16);
   assert.equal(minDiskGB(lookupTarget(DATA, "rubikpi3")), 8);
