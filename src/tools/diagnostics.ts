@@ -30,6 +30,7 @@ import {
   provisioningText,
   provisionCommand,
   runProvisionCommands,
+  targetFlag,
   unavailableText,
   unknownTargetText,
 } from "../lib/hardware-data.js";
@@ -240,7 +241,7 @@ export function registerDiagnosticsTools(
     {
       title: "Get per-target provisioning steps",
       description:
-        "Return the provisioning steps for a target from the docs board data: the profile, the media, host OS support, recovery mode steps, the exact `avocado provision` command, boot steps, and how to run it from Bash. QEMU targets get the provision-then-run VM flow. Look this up before telling a user how to provision.",
+        "Return the provisioning steps for a target from the docs board data: the profile, the media, host OS support, recovery mode steps, the exact `avocado provision` command, boot steps, and how to run it from Bash. QEMU targets get the provision-then-run VM flow. With `projectDir`, the commands pass `--target`, so they do not fall back to the project's default target. Look this up before telling a user how to provision.",
       inputSchema: {
         target: z
           .string()
@@ -328,19 +329,25 @@ export function registerDiagnosticsTools(
         out += `_${resolvedLine(input, target, resolvedBoard)}_\n\n`;
       }
       const info = data ? lookupTarget(data, target, board) : null;
+      // In a project, the CLI defaults to the project's target, which can
+      // differ. So the printed commands name this target.
+      const cmdTarget = feedArgs.projectDir ? target : undefined;
       if (!info) {
         out += data ? unknownTargetText(target, data) : unavailableText(target);
-        out += `\n${genericSteps(rt)}`;
+        out += `\n${genericSteps(rt, cmdTarget)}`;
       } else {
         const page = boardDocsUrl(info);
         if (page) out += `**Docs:** ${page}\n\n`;
         if (isVirtual(info)) {
           const archWarning = qemuArchAdvisory(target);
           if (archWarning) out += `${archWarning}\n\n`;
-          out += provisioningText(info, rt);
+          out += provisioningText(info, rt, cmdTarget);
         } else {
-          out += provisioningText(info, rt);
-          out += runSection(runProvisionCommands(info, rt));
+          out += provisioningText(info, rt, cmdTarget);
+          out += runSection(
+            runProvisionCommands(info, rt, cmdTarget),
+            cmdTarget,
+          );
         }
       }
       out += feed.describe();
@@ -350,14 +357,15 @@ export function registerDiagnosticsTools(
 }
 
 /** The flow for a target with no docs data. States only what holds for all. */
-function genericSteps(runtime: string): string {
+function genericSteps(runtime: string, target?: string): string {
   let out = `## Generic flow\n\n`;
   out += `Without \`--profile\`, the CLI uses the default profile of the target. After \`avocado install\`, \`list-provision-profiles\` lists the profiles the target has. Check the board page before you flash media.\n\n`;
-  return out + runSection([provisionCommand(runtime)]);
+  return out + runSection([provisionCommand(runtime, null, target)], target);
 }
 
 /** How a human and an LLM run build + provision. */
-function runSection(provisionCmds: string[]): string {
+function runSection(provisionCmds: string[], target?: string): string {
+  const build = `avocado build${targetFlag(target)} --no-tui`;
   // With more than one profile, each provision command gets its own block,
   // so a copied block never runs two provisions.
   const steps = (pre: string[], run: (cmd: string) => string): string => {
@@ -373,13 +381,10 @@ function runSection(provisionCmds: string[]): string {
   };
   let out = `## Run it\n\n`;
   out += `**For a HUMAN running these in their own terminal:**\n\n`;
-  out += steps(["avocado build --no-tui"], (c) => `${c} --no-tui`);
+  out += steps([build], (c) => `${c} --no-tui`);
   out += `**For an LLM running via the Bash tool (NO interactive terminal):** no TTY wrapper is needed. The CLI detects a non-TTY stdin and starts the SDK container without a PTY. Set \`AVOCADO_NONINTERACTIVE=1\` so it never waits for an answer, and write logs to \`.avocado/logs/\` in the project:\n\n`;
   out += steps(
-    [
-      "mkdir -p .avocado/logs",
-      "avocado build --no-tui > .avocado/logs/build.log 2>&1",
-    ],
+    ["mkdir -p .avocado/logs", `${build} > .avocado/logs/build.log 2>&1`],
     (c) =>
       `AVOCADO_NONINTERACTIVE=1 ${c} --no-tui > .avocado/logs/provision.log 2>&1`,
   );

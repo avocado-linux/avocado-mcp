@@ -910,3 +910,86 @@ test("/provision-device keeps the host OS check for QEMU", async () => {
   assert.match(qemu, /skip the serial console, media and device-state checks/);
   assert.match(qemu, /Still check the host OS/);
 });
+
+test("list-provision-profiles commands name an explicit target", async () => {
+  const restore = serveHardwareFixture();
+  const realBinary = process.env.AVOCADO_BINARY;
+  const dir = mkdtempSync(join(tmpdir(), "avocado-mcp-explicit-"));
+  writeFileSync(join(dir, "avocado.yaml"), "default_target: raspberrypi4\n");
+  // A fake CLI for an installed project: the profiles of the target asked.
+  const bin = join(dir, "fake-avocado");
+  writeFileSync(
+    bin,
+    `#!/bin/sh\necho '{"available":true,"target":"rubikpi3","default":"ufs","profiles":[{"name":"ufs"}]}'\n`,
+  );
+  chmodSync(bin, 0o755);
+  process.env.AVOCADO_BINARY = bin;
+  try {
+    const { client } = await connect();
+    const call = async (args: Record<string, string>) => {
+      const res = await client.callTool({
+        name: "list-provision-profiles",
+        arguments: { projectDir: dir, ...args },
+      });
+      return (res.content as { text: string }[])[0].text;
+    };
+    assert.match(
+      await call({ target: "rubikpi3" }),
+      /`avocado provision dev --target rubikpi3 --profile ufs`/,
+    );
+    // No target given: the CLI resolves it, so the command names none.
+    assert.match(await call({}), /`avocado provision dev --profile ufs`/);
+    // The docs fallback, when the CLI is missing.
+    process.env.AVOCADO_BINARY = join(dir, "no-such-avocado");
+    assert.match(
+      await call({ target: "rb3gen2" }),
+      /`avocado provision dev --target rb3gen2 --profile ufs`/,
+    );
+    const bad = await client.callTool({
+      name: "list-provision-profiles",
+      arguments: { projectDir: dir, target: "x; reboot" },
+    });
+    assert.equal(bad.isError, true);
+  } finally {
+    restore();
+    rmSync(dir, { recursive: true, force: true });
+    if (realBinary === undefined) delete process.env.AVOCADO_BINARY;
+    else process.env.AVOCADO_BINARY = realBinary;
+  }
+});
+
+test("get-provisioning-steps names the target in a project", async () => {
+  const restore = serveHardwareFixture();
+  class StubRepo extends RepoClient {
+    override async getTargetsConfig() {
+      return { rubikpi3: ["target/armv8a"], raspberrypi4: ["target/armv8a"] };
+    }
+  }
+  const dir = mkdtempSync(join(tmpdir(), "avocado-mcp-steps-"));
+  writeFileSync(join(dir, "avocado.yaml"), "default_target: raspberrypi4\n");
+  try {
+    const { client } = await connect(new StubRepo());
+    const call = async (args: Record<string, string>) => {
+      const res = await client.callTool({
+        name: "get-provisioning-steps",
+        arguments: { target: "rubikpi3", ...args },
+      });
+      return (res.content as { text: string }[])[0].text;
+    };
+    const text = await call({ projectDir: dir });
+    assert.match(
+      text,
+      /```bash\navocado provision dev --target rubikpi3 --profile ufs\n```/,
+    );
+    assert.match(text, /avocado build --target rubikpi3 --no-tui\n/);
+    assert.match(
+      text,
+      /AVOCADO_NONINTERACTIVE=1 avocado provision dev --target rubikpi3 --profile ufs --no-tui/,
+    );
+    assert.doesNotMatch(text, /avocado provision dev --profile/);
+    assert.doesNotMatch(await call({}), /--target/);
+  } finally {
+    restore();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

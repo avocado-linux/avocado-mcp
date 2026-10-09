@@ -68,6 +68,7 @@ export function parseProvisionList(
 export function renderProvisionList(
   list: ProvisionProfileList,
   runtime: string,
+  target?: string,
 ): string {
   let out = `**Target:** \`${list.target ?? "unknown"}\`\n`;
   if (list.default) out += `**Default profile:** \`${list.default}\`\n`;
@@ -82,7 +83,7 @@ export function renderProvisionList(
     out += `\n| Profile | Command |\n|---|---|\n`;
   }
   for (const p of profiles) {
-    out += `| \`${p.name}\` | \`${provisionCommand(runtime, p.name)}\` |\n`;
+    out += `| \`${p.name}\` | \`${provisionCommand(runtime, p.name, target)}\` |\n`;
   }
   for (const p of profiles) {
     if (!p.fields?.length) continue;
@@ -145,10 +146,15 @@ export function projectTarget(configPath: string): string | undefined {
   return undefined;
 }
 
+/**
+ * The docs profiles for a target. `explicitTarget` is the target the caller
+ * gave, which the printed commands then name.
+ */
 async function docsFallback(
   target: string | undefined,
   runtime: string,
   board: string | undefined,
+  explicitTarget: string | undefined,
 ): Promise<string> {
   if (!target) {
     return `Pass \`target\` to see the docs profiles, or call \`get-target-info\`.\n`;
@@ -166,7 +172,7 @@ async function docsFallback(
   }
   let out = `Profiles in the docs data for ${what} (call \`get-target-info\` for the full steps):\n\n`;
   for (const o of options) {
-    out += `- ${o.label ?? o.id}: \`${provisionCommand(runtime, o.profile)}\`\n`;
+    out += `- ${o.label ?? o.id}: \`${provisionCommand(runtime, o.profile, explicitTarget)}\`\n`;
   }
   for (const o of all) {
     if (!isSafeProfile(o.profile))
@@ -229,7 +235,7 @@ export function registerHardwareTools(server: McpServer): void {
           .string()
           .optional()
           .describe(
-            "Target to list profiles for. Defaults to the CLI resolution: AVOCADO_TARGET, then `default_target` in avocado.yaml.",
+            "Target to list profiles for. Defaults to the CLI resolution: AVOCADO_TARGET, then `default_target` in avocado.yaml. When given, the printed commands pass `--target`.",
           ),
         runtime: z
           .string()
@@ -270,6 +276,20 @@ export function registerHardwareTools(server: McpServer): void {
           isError: true,
         };
       }
+      // An explicit target goes into the printed commands too, since the CLI
+      // otherwise provisions the project's default target.
+      const explicitTarget = target?.trim() || undefined;
+      if (explicitTarget && !isSafeSegment(explicitTarget)) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `# list-provision-profiles failed\n\nInvalid target: ${JSON.stringify(explicitTarget)}. Use a target name such as \`raspberrypi5\`.`,
+            },
+          ],
+          isError: true,
+        };
+      }
       // Resolve once, so the existence check, the cwd and --config all use
       // the same directory when the caller passes a relative path.
       const dir = path.resolve(projectDir);
@@ -293,7 +313,7 @@ export function registerHardwareTools(server: McpServer): void {
         "json",
         `--config=${configPath}`,
       ];
-      if (target?.trim()) args.push(`--target=${target.trim()}`);
+      if (explicitTarget) args.push(`--target=${explicitTarget}`);
 
       let out = `# list-provision-profiles\n\n`;
       let failure: string;
@@ -312,7 +332,10 @@ export function registerHardwareTools(server: McpServer): void {
         if (list?.available) {
           return {
             content: [
-              { type: "text", text: out + renderProvisionList(list, rt) },
+              {
+                type: "text",
+                text: out + renderProvisionList(list, rt, explicitTarget),
+              },
             ],
           };
         }
@@ -333,6 +356,7 @@ export function registerHardwareTools(server: McpServer): void {
         target?.trim() || projectTarget(configPath),
         rt,
         board?.trim() || projectBoard(configPath, rt),
+        explicitTarget,
       );
       return { content: [{ type: "text", text: out }] };
     },
