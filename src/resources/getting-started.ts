@@ -70,7 +70,7 @@ These are NOT interchangeable. Get this wrong and the user wastes 5+ minutes fla
 - bump a package version pin in \`avocado.yaml\`
 - change \`distro.release\` or \`distro.channel\`
 
-If you skip this, \`avocado build\` stops before it does any work. Build stamps detect that the install no longer matches \`avocado.yaml\`, and the CLI prints \`dependencies not satisfied\` with the stale steps and a \`To fix:\` line. After any YAML mutation tool, the usual next command is still \`avocado install && avocado build\`. It skips the failed build.
+If you skip this, \`avocado build\` stops before it does any work. Build stamps detect that the install no longer matches \`avocado.yaml\`, and the CLI prints \`dependencies not satisfied\` with the stale steps and a \`To fix:\` list of commands. After any YAML mutation tool, the usual next command is still \`avocado install && avocado build\`. It skips the failed build.
 
 ## Where things live
 

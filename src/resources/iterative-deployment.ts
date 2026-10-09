@@ -98,10 +98,10 @@ When parsing a failed \`avocado build\` log, these patterns indicate install (no
 - \`no package matching\` / \`package X not found\` — a referenced package isn't in the SDK
 - \`unable to find a match: <name>\` — extension or package missing from the current install
 - \`Error: extension <name> not found\` / similar — extension exists in YAML but isn't installed
-- \`Cannot build ... - dependencies not satisfied\`, with a \`Stale steps:\` or \`Missing steps:\` list and a \`To fix:\` line that names \`avocado install\`. Build stamps catch an install that no longer matches \`avocado.yaml\` before any work starts.
+- \`Cannot build ... - dependencies not satisfied\`, with a \`Stale steps:\` or \`Missing steps:\` list and a \`To fix:\` list of \`avocado ... install\` commands (for example \`avocado sdk install\` or \`avocado ext install <name>\`). Build stamps catch an install that no longer matches \`avocado.yaml\` before any work starts. Run the commands in that \`To fix:\` list, then retry the build.
 - An explicit message from the CLI like "run avocado install first"
 
-Any of those → run \`avocado install --no-tui\`, then retry \`avocado build --no-tui\`. Other build errors (compile failures, hook script errors, OOM, schema errors) are NOT install-fixable. Pass them to \`explain-build-error\` instead.
+Any of those → run \`avocado install --no-tui\` (or the \`To fix:\` commands for the build-stamp error), then retry \`avocado build --no-tui\`. Other build errors (compile failures, hook script errors, OOM, schema errors) are NOT install-fixable. Pass them to \`explain-build-error\` instead.
 
 ## The command
 

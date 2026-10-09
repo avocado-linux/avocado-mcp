@@ -24,6 +24,10 @@ const BANNED: { re: RegExp; why: string }[] = [
     re: /script -q \/dev\/null/,
     why: "the CLI handles a non-TTY stdin since 1.0.0-rc.2",
   },
+  {
+    re: /To fix:[\\`]* (?:line that names [\\`]*)?avocado install/,
+    why: "the stamp error lists per-step commands (`avocado sdk install`, `avocado ext install <name>`), never `avocado install`",
+  },
 ];
 
 // `install -f` erases every extension's built content. It is allowed only on
