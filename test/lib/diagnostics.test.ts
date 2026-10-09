@@ -695,17 +695,26 @@ test("the fallback warning names the command that wrote the log", async () => {
   assert.doesNotMatch(out, /the build is fine/);
 });
 
-test("the deploy fallback sends stale stamps to the CLI's To fix list", async () => {
-  const { renderDiagnoses } = await import("../../src/lib/diagnostics.js");
+test("stale stamps go to avocado install, not the sorted To fix list", async () => {
+  const { renderDiagnoses, diagnoseBuildLog } =
+    await import("../../src/lib/diagnostics.js");
   const out = renderDiagnoses("deploy", [], undefined, {
     targets: [],
     rawLog: "ERROR: something new went wrong",
   });
   assert.match(
     out,
-    /build stamps \(run the commands that the CLI lists under `To fix:`/,
+    /build stamps \(run `avocado install`, then `avocado build`/,
   );
-  assert.doesNotMatch(out, /stamps \(run `avocado build`\)/);
+  // The CLI sorts the To fix list by name (stamps.rs fix_commands), so it is
+  // not an install order. No advice may say to follow it in order.
+  for (const d of diagnoseBuildLog(
+    "[ERROR] Cannot build runtime 'dev' - dependencies not satisfied\nTo fix:\n  avocado ext install app\n  avocado sdk install",
+  )) {
+    assert.doesNotMatch(d.suggestion, /in the order shown|in order\)/);
+    assert.match(d.suggestion, /avocado install/);
+  }
+  assert.doesNotMatch(out, /lists under `To fix:`, in order/);
 });
 
 test("--connect-sign gets login advice, and only feed auth gets the env var", () => {
