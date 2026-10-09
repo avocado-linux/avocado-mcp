@@ -36,6 +36,16 @@ test("Jetson Orin Nano: tegraflash, macOS supported, FC REC jumper, 16 GB", () =
   assert.match(out, /2024: supported, 2026: in-progress/);
 });
 
+test("the FC REC recovery strap is not listed as serial wiring", () => {
+  const out = targetInfoText(DATA, "jetson-orin-nano-devkit", undefined);
+  assert.doesNotMatch(out, /Wire `FC REC`/);
+  assert.match(
+    out,
+    /Recovery mode only, not part of the serial wiring: connect `FC REC` to GND[^\n]*Remove this connection before a normal boot/,
+  );
+  assert.match(out, /Wire `UART TXD` to adapter UART RX/);
+});
+
 test("Jetson AGX Orin uses buttons, not the FC REC jumper", () => {
   const out = targetInfoText(DATA, "jetson-agx-orin-devkit", undefined);
   assert.match(out, /Force Recovery button/);

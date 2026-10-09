@@ -5,7 +5,6 @@ import {
   getSelectableSlugs,
   clearSelectableCache,
 } from "../../src/lib/hardware-support.js";
-import { squash } from "../../src/lib/target-resolver.js";
 import { DEVICES, FEED_2024_EDGE, FEED_2026_NEXT } from "./hardware-fixture.js";
 
 const realFetch = globalThis.fetch;
@@ -14,12 +13,12 @@ afterEach(() => {
   clearSelectableCache();
 });
 
-// Squashed selectable slugs, as getSelectableSlugs would produce them.
+// Selectable slugs, as getSelectableSlugs would produce them.
 const SELECTABLE = new Set([
-  "imx93evk",
-  "imx93frdm",
-  "jetsonorinnanodevkit",
-  "jetsonagxorindevkit",
+  "imx93-evk",
+  "imx93-frdm",
+  "jetson-orin-nano-devkit",
+  "jetson-agx-orin-devkit",
   "qemuarm64",
   "raspberrypi5",
   "fr201",
@@ -63,9 +62,7 @@ test("filterSelectable accepts the 2026 feed names without the -devkit suffix", 
 // The selectable set exactly as getSelectableSlugs builds it from the real
 // supported.json and virtual-environment.json.
 const REAL_SELECTABLE = new Set(
-  DEVICES.flatMap((d) => [d.target, d.board])
-    .filter((s) => s)
-    .map(squash),
+  DEVICES.flatMap((d) => [d.target, d.board]).filter((s): s is string => !!s),
 );
 
 test("filterSelectable on the real docs data and the live 2024/edge feed", () => {
@@ -119,13 +116,28 @@ test("filterSelectable on the real docs data and the live 2026/next feed", () =>
 test("a docs slug that only shares a prefix with a feed slug does not admit it", () => {
   // The old prefix rule kept all of these: a docs `reterminal` admitted any
   // `reterminal*` feed slug, and a short feed slug matched every longer one.
-  const selectable = new Set(["reterminal", "jetsonagxorindevkit", "fr201"]);
+  const selectable = new Set(["reterminal", "jetson-agx-orin-devkit", "fr201"]);
   assert.deepEqual(
     filterSelectable(
       ["reterminal-x", "jetson", "jetson-agx", "fr2010"],
       selectable,
     ),
     [],
+  );
+});
+
+test("the feed and docs slugs must match exactly, except for -devkit", () => {
+  const selectable = new Set(["fr201", "jetson-orin-nano-devkit"]);
+  assert.deepEqual(
+    filterSelectable(
+      ["fr-201", "FR201", "Jetson-Orin-Nano", "jetson-orin-nano-dev-kit"],
+      selectable,
+    ),
+    [],
+  );
+  assert.deepEqual(
+    filterSelectable(["fr201", "jetson-orin-nano"], selectable),
+    ["fr201", "jetson-orin-nano"],
   );
 });
 
@@ -157,7 +169,7 @@ test("getSelectableSlugs parses the {devices:[...]} shape across both files", as
   });
   const set = await getSelectableSlugs();
   assert.ok(set);
-  for (const s of ["imx93evk", "jetsonorinnx", "icam540", "qemuarm64"]) {
+  for (const s of ["imx93-evk", "jetson-orin-nx", "icam-540", "qemuarm64"]) {
     assert.ok(set!.has(s), `missing ${s}`);
   }
 });

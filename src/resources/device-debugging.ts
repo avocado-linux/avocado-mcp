@@ -1,13 +1,13 @@
 export const URI = "avocado://skills/device-debugging";
 export const NAME = "device-debugging";
 export const DESCRIPTION =
-  "How to debug a running Avocado OS device. **UART-over-serial is the default channel** — ALWAYS start here, even if the user has provided an IP. SSH is a fallback only after UART confirms the device booted and is healthy. Serial parameters are canonical: 115200 baud, 8N1, no flow control. Read this BEFORE invoking detect-serial-ports, get-device-connection-info, or get-tmux-uart-snippet.";
+  "How to debug a running Avocado OS device. **UART over serial is the preferred channel when the device has a serial console.** Start there when one is available, even if the user has provided an IP. SSH is the path when the board has no serial console or the user has no adapter, and after UART confirms the device booted and is healthy. Serial parameters are canonical: 115200 baud, 8N1, no flow control. Read this BEFORE invoking detect-serial-ports, get-device-connection-info, or get-tmux-uart-snippet.";
 
 export const CONTENT = `# Debugging an Avocado OS device
 
-Avocado OS gives you two channels into a running device. **UART comes first. Always.**
+Avocado OS gives you two channels into a running device. **Use UART first when a serial console is available. Otherwise, use SSH.**
 
-## The non-negotiable default: UART
+## The preferred channel: UART, when a serial console is available
 
 A serial console is recommended, not required. Some boards have an onboard USB console. Others need a USB-to-UART adapter. \`get-device-connection-info\` says which. When the user has a console, it is:
 

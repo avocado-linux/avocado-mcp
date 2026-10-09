@@ -15,8 +15,6 @@
  * failure we return `null` and callers fall back to the full feed — a docs
  * outage must never hide real targets.
  */
-import { squash } from "./target-resolver.js";
-
 export const RAW_BASE =
   "https://raw.githubusercontent.com/peridio/docs/main/src/src/data/hardware";
 const DATA_FILES = ["supported.json", "virtual-environment.json"];
@@ -54,7 +52,8 @@ async function fetchDevices(file: string): Promise<HardwareDevice[]> {
 }
 
 /**
- * Squashed slugs of every user-selectable target/board from the support matrix.
+ * Slugs of every user-selectable target/board from the support matrix, exactly
+ * as the docs write them.
  * Cached for 30 min. Returns `null` if the docs data can't be fetched — callers
  * must fall back to the full feed rather than hide targets.
  */
@@ -66,7 +65,7 @@ export async function getSelectableSlugs(): Promise<Set<string> | null> {
     const set = new Set<string>();
     for (const d of devices) {
       for (const slug of [d.target, d.board]) {
-        if (slug && slug.trim()) set.add(squash(slug));
+        if (slug && slug.trim()) set.add(slug);
       }
     }
     if (set.size === 0) throw new Error("support matrix parsed no slugs");
@@ -84,17 +83,16 @@ export async function getSelectableSlugs(): Promise<Set<string> | null> {
  * True when a feed slug names the same target as a docs slug. The docs data
  * has no feed-to-docs mapping, so this allows exactly one known difference:
  * the 2026 feed drops the `-devkit` suffix the docs use (feed
- * `jetson-orin-nano`, docs `jetson-orin-nano-devkit`). Any other mismatch is
- * a different board.
+ * `jetson-orin-nano`, docs `jetson-orin-nano-devkit`). The compare is exact.
+ * Any other mismatch, such as case or a separator (`fr-201` and `fr201`), is a
+ * different board.
  */
 export function sameTarget(feedSlug: string, docsSlug: string): boolean {
-  const f = squash(feedSlug);
-  const d = squash(docsSlug);
-  return f === d || d === `${f}devkit`;
+  return feedSlug === docsSlug || docsSlug === `${feedSlug}-devkit`;
 }
 
 /**
- * Narrow the feed's target slugs to the user-selectable set (squashed docs
+ * Narrow the feed's target slugs to the user-selectable set (the docs
  * slugs). A pure function: the caller fetches `selectable` and decides the
  * fallback.
  */
