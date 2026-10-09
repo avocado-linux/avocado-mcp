@@ -158,6 +158,11 @@ export interface TargetInfo {
   requested?: string;
   /** The board taken from the name the caller passed, when it gave none. */
   resolvedBoard?: string;
+  /**
+   * The docs name the caller passed, when it is one device of a target with
+   * no board ("CompuLab IOT-GATE-iMX8PLUS" on `ucm-imx8m-plus`).
+   */
+  name?: string;
 }
 
 /**
@@ -184,7 +189,7 @@ export function lookupTarget(
   // every tool that reads the board data accepts it. The slug compare below
   // stays exact. A board name ("Advantech MIC-712-OX") also gives the board.
   const match = names.some((n) => sameTarget(target, n))
-    ? { target, board: undefined }
+    ? { target, board: undefined, name: undefined }
     : resolveTargetInput(target, names, targetAliases(data, names));
   const slug = match.target;
   if (!slug) return null;
@@ -197,6 +202,10 @@ export function lookupTarget(
   if (entries.length === 0 && devices.length === 0) return null;
   const resolvedBoard = board?.trim() ? undefined : match.board;
   const b = board?.trim() || resolvedBoard;
+  // A name for one device (IOT-GATE) keeps that device's entry only. A slug
+  // keeps every entry of the target.
+  const name = b ? undefined : match.name;
+  const named = entries.filter((e) => e.name === name);
   // Only a board the data lists gets steps. `covers` then picks the entries
   // that apply to it, so a typo cannot match text in an entry's YAML.
   const known =
@@ -207,11 +216,18 @@ export function lookupTarget(
     board: b,
     // A board-specific setup (MIC-733 on the AGX Orin target) must not get
     // the dev kit's steps, so a board narrows to the entries for that board.
-    entries: b ? (known ? entries.filter((e) => covers(e, b)) : []) : entries,
+    entries: b
+      ? known
+        ? entries.filter((e) => covers(e, b))
+        : []
+      : named.length > 0
+        ? named
+        : entries,
     virtual: entries.some((e) => e.category === "virtual"),
     devices,
     requested: slug === target ? undefined : target,
     resolvedBoard,
+    name,
   };
 }
 
@@ -257,11 +273,16 @@ function docsUrl(path: string | null | undefined): string | undefined {
   return path ? `${DOCS_SITE}${path.replace(/\/+$/, "")}` : undefined;
 }
 
+/** The device row for the board or the docs name the caller passed. */
+function matchedDevice(info: TargetInfo): SupportedDevice | undefined {
+  if (info.board) return info.devices.find((d) => d.board === info.board);
+  if (info.name) return info.devices.find((d) => d.name === info.name);
+  return undefined;
+}
+
 /** The board page for a target (or for its board), with no trailing slash. */
 export function boardDocsUrl(info: TargetInfo): string | undefined {
-  const device = info.board
-    ? info.devices.find((d) => d.board === info.board)
-    : undefined;
+  const device = matchedDevice(info);
   return (
     docsUrl(device?.url) ??
     docsUrl(info.entries.find((e) => e.hardwareUrl)?.hardwareUrl) ??
@@ -634,9 +655,7 @@ export function targetInfoText(
   out += resolvedText(info);
 
   const entry = info.entries[0];
-  const device = info.board
-    ? info.devices.find((d) => d.board === info.board)
-    : undefined;
+  const device = matchedDevice(info);
   out += `**Name:** ${device?.name ?? entry?.name ?? info.devices[0].name}\n`;
   if (info.target !== target)
     out += `**Docs target slug:** \`${info.target}\`\n`;

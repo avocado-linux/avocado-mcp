@@ -85,6 +85,11 @@ export interface TargetMatch {
   target?: string;
   /** The board the input names ("Advantech MIC-712-OX"), when it names one. */
   board?: string;
+  /**
+   * The one docs name that matched best ("CompuLab IOT-GATE-iMX8PLUS"), when
+   * only one did. Two devices can share a target with no board.
+   */
+  name?: string;
   /** The best matches, for a "did you mean" list. */
   candidates: string[];
   /**
@@ -144,10 +149,21 @@ export function resolveTargetInput(
     return { candidates: [top.target], boards: [...top.boards].sort() };
   }
   const [board] = top.boards;
-  return board
-    ? { target: top.target, board, candidates }
-    : { target: top.target, candidates };
+  const [name] = top.names.size === 1 ? top.names : [""];
+  return {
+    target: top.target,
+    ...(board ? { board } : {}),
+    ...(name ? { name } : {}),
+    candidates,
+  };
 }
+
+type Scored = {
+  target: string;
+  score: number;
+  boards: Set<string>;
+  names: Set<string>;
+};
 
 /** Score one haystack against the query. */
 function scoreHaystack(
@@ -185,12 +201,13 @@ function scoreHaystack(
  * Score each target by its best name: the slug, or an alias. `boards` holds
  * the board of each name that reached that best score ("" for a name with no
  * board), so a caller can tell when the best names disagree on the board.
+ * `names` holds those names ("" for the slug).
  */
 function scoreTargets(
   query: string,
   allTargets: string[],
   aliases: TargetAlias[] = [],
-): { target: string; score: number; boards: Set<string> }[] {
+): Scored[] {
   const q = query.trim();
   const qLower = q.toLowerCase();
 
@@ -200,23 +217,37 @@ function scoreTargets(
   const qTokens = tokenize(q);
   const qSquash = squash(q);
   if (qTokens.length === 0)
-    return exact ? [{ target: exact, score: 100, boards: new Set([""]) }] : [];
+    return exact
+      ? [
+          {
+            target: exact,
+            score: 100,
+            boards: new Set([""]),
+            names: new Set([""]),
+          },
+        ]
+      : [];
 
-  type Scored = { target: string; score: number; boards: Set<string> };
   const best = new Map<string, Scored>();
-  const add = (target: string, score: number, board: string) => {
+  const add = (target: string, score: number, board: string, name: string) => {
     if (score <= 0) return;
     const cur = best.get(target);
     if (!cur || score > cur.score) {
-      best.set(target, { target, score, boards: new Set([board]) });
+      best.set(target, {
+        target,
+        score,
+        boards: new Set([board]),
+        names: new Set([name]),
+      });
     } else if (score === cur.score) {
       cur.boards.add(board);
+      cur.names.add(name);
     }
   };
   for (const t of allTargets) {
     let score = scoreHaystack(qTokens, qSquash, haystackFor(t), [squash(t)]);
     if (t.toLowerCase() === qLower) score += 100;
-    add(t, score, "");
+    add(t, score, "", "");
   }
   for (const a of aliases) {
     const board = a.board?.trim() ?? "";
@@ -225,7 +256,7 @@ function scoreTargets(
     const score = scoreHaystack(qTokens, qSquash, hay, squashes);
     // Docs names are long ("SolidRun HummingBoard RZ/V2N AIOT"), so a weak
     // substring hit ("board") is noise. An alias counts from a whole word.
-    if (score >= 3) add(a.target, score, board);
+    if (score >= 3) add(a.target, score, board, a.name);
   }
   const scored = [...best.values()];
 
