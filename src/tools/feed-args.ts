@@ -5,7 +5,7 @@
  */
 
 import { z } from "zod";
-import { FeedContext } from "../lib/feed-config.js";
+import { FeedContext, type PackageStage } from "../lib/feed-config.js";
 
 export const feedArgsShape = {
   projectDir: z
@@ -47,13 +47,18 @@ function arg(v: string | undefined): string | undefined {
   return t ? t : undefined;
 }
 
-export function feedContextFrom(args: FeedArgs, yaml?: string): FeedContext {
+export function feedContextFrom(
+  args: FeedArgs,
+  yaml?: string,
+  stage?: PackageStage,
+): FeedContext {
   return FeedContext.load({
     projectDir: arg(args.projectDir),
     yaml,
     release: arg(args.release),
     channel: arg(args.channel),
     repoUrl: arg(args.repoUrl),
+    stage,
   });
 }
 

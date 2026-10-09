@@ -278,3 +278,36 @@ test("investigatePackages drops alternate streams that lack the target and keeps
     { feed: "acme", reason: "private" },
   ]);
 });
+
+test("an unread configured feed makes the package's availability there unknown", async () => {
+  const { renderDiagnoses } = await import("../../src/lib/diagnostics.js");
+  const out = renderDiagnoses(
+    "build",
+    [],
+    [
+      {
+        name: "pkg",
+        streams: [
+          {
+            release: "2026",
+            channel: "edge",
+            configured: true,
+            hits: [],
+            notChecked: [{ feed: "acme", reason: "private" }],
+          },
+          {
+            release: "2026",
+            channel: "next",
+            configured: false,
+            hits: [{ repo: "target/x", version: "1" }],
+          },
+        ],
+      },
+    ],
+    { targets: ["x"] },
+  );
+  assert.match(out, /availability there is unknown/);
+  assert.match(out, /`acme` \(private\)/);
+  assert.doesNotMatch(out, /Not on your configured stream/);
+  assert.doesNotMatch(out, /Set `distro.release`/);
+});

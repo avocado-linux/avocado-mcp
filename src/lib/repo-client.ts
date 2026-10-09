@@ -29,6 +29,8 @@
  * docs.peridio.com/developer-reference/feed-search.
  */
 
+import { createHash } from "crypto";
+
 export interface FeedPackage {
   name: string;
   summary: string;
@@ -537,8 +539,14 @@ export class RepoClient {
     if (extra.path) return readLocalRepo(extra.path, extra.name);
     if (!extra.url) throw new Error(`Feed ${extra.name} has no url or path`);
     const base = validateRepoUrl(extra.url);
-    // Keyed per feed, including TLS and the auth identity (never the secret).
-    const key = `${extra.name}::${base}::${extra.tls?.ca ?? ""}::${extra.tls?.insecure ? 1 : 0}::${extra.auth?.username ?? ""}`;
+    // Keyed per feed, including TLS and a SHA-256 digest of the full
+    // credential. The raw password never goes into the key.
+    const authKey = extra.auth
+      ? createHash("sha256")
+          .update(`${extra.auth.username}\0${extra.auth.password}`)
+          .digest("hex")
+      : "";
+    const key = `${extra.name}::${base}::${extra.tls?.ca ?? ""}::${extra.tls?.insecure ? 1 : 0}::${authKey}`;
     return this.fetchPackagesAt(base, extra, extra.name, extra.name, key);
   }
 

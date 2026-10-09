@@ -562,7 +562,8 @@ export function registerProjectTools(
     },
     async ({ yaml, extension, packageName, version, targets, projectDir }) => {
       // Verify against the feed THIS yaml is configured for.
-      const feed = feedContextFrom({ projectDir }, yaml);
+      // The CLI installs extension packages with `ext`-stage feeds only.
+      const feed = feedContextFrom({ projectDir }, yaml, "ext");
       try {
         // Verify the package exists for the user's targets
         const { results, notChecked } = await repoClient.searchPackages(

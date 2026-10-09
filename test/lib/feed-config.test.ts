@@ -201,6 +201,37 @@ test("explicit releasever disables snapshot pinning (CLI: user owns resolution)"
   assert.equal(f.releasever, "2026/edge");
 });
 
+test("repos: release/channel on the distro feed still takes the snapshot pin", () => {
+  const lock = {
+    targets: {
+      t: {
+        "repo-snapshot": { release: "2026", channel: "edge", snapshot: "s1" },
+      },
+    },
+  };
+  const derived = resolveFeed({
+    env: {},
+    config: cfg(
+      "distro:\n  release: 2026\n  channel: edge\nrepos:\n  avocado:\n    url: https://m.example.com\n    release: 2026\n    channel: edge\n",
+    ),
+    lock,
+    target: "t",
+  });
+  assert.equal(derived.releasever, "2026/edge/snapshots/s1");
+  assert.equal(derived.snapshot, "s1");
+
+  const explicit = resolveFeed({
+    env: {},
+    config: cfg(
+      "distro:\n  release: 2026\n  channel: edge\nrepos:\n  avocado:\n    url: https://m.example.com\n    releasever: 2026/edge\n",
+    ),
+    lock,
+    target: "t",
+  });
+  assert.equal(explicit.releasever, "2026/edge");
+  assert.equal(explicit.snapshot, undefined);
+});
+
 test("TLS: AVOCADO_REPO_CA / AVOCADO_REPO_INSECURE / tls_verify", () => {
   const y = cfg(
     "distro:\n  release: 2024\n  channel: edge\n  repo:\n    ca: certs/ca.pem\n    tls_verify: false\n",
@@ -476,6 +507,45 @@ repos:
     ["extonly"],
   );
   assert.deepEqual(f.notChecked, []);
+});
+
+test("a stage-specific caller drops feeds scoped to the other stage", () => {
+  const config = cfg(`
+distro:
+  release: 2026
+  channel: edge
+  feeds: [rtonly, extonly]
+repos:
+  rtonly:
+    url: https://a.example.com/r
+    stages: [runtime]
+  extonly:
+    url: https://b.example.com/r
+    stages: [ext]
+`);
+  const ext = resolveFeed({
+    env: {},
+    target: "qemuarm64",
+    config,
+    stage: "ext",
+  });
+  assert.deepEqual(
+    ext.extraFeeds?.map((x) => x.name),
+    ["extonly"],
+  );
+  const rt = ext.feeds?.find((e) => e.name === "rtonly");
+  assert.equal(rt?.status, "excluded");
+  assert.match(
+    rt?.reason ?? "",
+    /does not include `ext`, so extension installs/,
+  );
+
+  // No stage: either package stage is enough.
+  const any = resolveFeed({ env: {}, target: "qemuarm64", config });
+  assert.deepEqual(
+    any.extraFeeds?.map((x) => x.name),
+    ["rtonly", "extonly"],
+  );
 });
 
 test("an org: feed is reported as not checked, never fetched", () => {

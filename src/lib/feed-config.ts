@@ -53,11 +53,19 @@ export const DEFAULT_CHANNEL = "edge";
 /** avocado-cli lock files, newest first (`src/utils/lockfile.rs`). */
 const LOCKFILE_PATHS = ["avocado.lock", join(".avocado", "lock.json")];
 
+/** Feed stages that install target packages into extensions and runtimes. */
+export type PackageStage = "ext" | "runtime";
+
 /**
- * Feed stages that install target packages into extensions and runtimes.
- * A feed scoped only to `sdk`, `rootfs` or `initramfs` never serves them.
+ * Stages a package lookup accepts when the caller names none. A feed scoped
+ * only to `sdk`, `rootfs` or `initramfs` never serves them.
  */
-const PACKAGE_STAGES = ["ext", "runtime"];
+const PACKAGE_STAGES: PackageStage[] = ["ext", "runtime"];
+
+const STAGE_INSTALLS: Record<PackageStage, string> = {
+  ext: "extension",
+  runtime: "runtime",
+};
 
 /** dnf priority step between `distro.feeds` entries (avocado-cli). */
 const PRIORITY_STEP = 10;
@@ -133,6 +141,8 @@ export interface ResolveInput {
   projectRoot?: string;
   /** Resolve `repos:` feeds too (needs `target`). Default true. */
   named?: boolean;
+  /** Install stage the caller needs. Default: `ext` or `runtime`. */
+  stage?: PackageStage;
   configPath?: string;
   /** Label for config-derived sources, e.g. "avocado.yaml". */
   configLabel?: string;
@@ -309,12 +319,34 @@ export function resolveFeed(input: ResolveInput): ResolvedFeed {
   const explicitStream = Boolean(ov.release || ov.channel);
 
   const cfgReleasever = cfgString(["distro", "repo", "releasever"]);
+  // An explicit `releasever` on the distro's `repos:` entry turns off the
+  // snapshot pin. A releasever derived from its `release`/`channel` does not
+  // (CLI: snapshot::releasever_is_overridden).
   const defRelease = defString("release");
   const defChannel = defString("channel");
-  const defReleasever =
-    defString("releasever") ??
-    (defRelease && defChannel ? `${defRelease}/${defChannel}` : undefined);
+  const defExplicitReleasever = defString("releasever");
+  const defDerivedReleasever =
+    defRelease && defChannel ? `${defRelease}/${defChannel}` : undefined;
+  const defReleasever = defExplicitReleasever ?? defDerivedReleasever;
   const cfgSdkRepoRelease = cfgString(["sdk", "repo_release"]);
+
+  // Lock-file snapshot pin (CLI: snapshot::resolve_and_apply). The CLI keys
+  // it on distro.release/channel, even when the distro's `repos:` entry sets
+  // its own release/channel.
+  const applyPin = () => {
+    if (!input.target || !release || !channel) return;
+    const pin = readPin(input.lock, input.target);
+    if (!pin) return;
+    if (pin.release === release && pin.channel === channel) {
+      snapshot = pin.snapshot;
+      releasever = `${release}/${channel}/snapshots/${pin.snapshot}`;
+      releaseverSrc = `lock file snapshot pin for \`${input.target}\``;
+    } else {
+      notes.push(
+        `Lock file pins \`${input.target}\` to a snapshot of ${pin.release}/${pin.channel}, but config names ${release}/${channel}. The CLI ignores that stale pin and tracks the live channel head (run \`avocado update\` to re-pin). The MCP does the same.`,
+      );
+    }
+  };
   if (!explicitStream) {
     if (env.AVOCADO_RELEASEVER !== undefined) {
       releasever = env.AVOCADO_RELEASEVER;
@@ -325,13 +357,14 @@ export function resolveFeed(input: ResolveInput): ResolvedFeed {
     } else if (cfgReleasever !== undefined) {
       releasever = cfgReleasever;
       releaseverSrc = `${label} distro.repo.releasever`;
-    } else if (defReleasever !== undefined) {
-      releasever = defReleasever;
-      releaseverSrc = defLabel(
-        getPath(cfg, ["repos", distroName, "releasever"]) !== undefined
-          ? "releasever"
-          : "release/channel",
-      );
+    } else if (defExplicitReleasever !== undefined) {
+      releasever = defExplicitReleasever;
+      releaseverSrc = defLabel("releasever");
+    } else if (defDerivedReleasever !== undefined) {
+      releasever = defDerivedReleasever;
+      releaseverSrc = defLabel("release/channel");
+      // sdk.repo_release still counts as an override for the CLI.
+      if (cfgSdkRepoRelease === undefined) applyPin();
     } else if (cfgSdkRepoRelease !== undefined) {
       releasever = cfgSdkRepoRelease;
       releaseverSrc = `${label} sdk.repo_release (legacy)`;
@@ -369,23 +402,8 @@ export function resolveFeed(input: ResolveInput): ResolvedFeed {
     } else if (release && channel) {
       releasever = `${release}/${channel}`;
       releaseverSrc = "derived {release}/{channel}";
-      // Lock-file snapshot pin (CLI: snapshot::resolve_and_apply). Only
-      // applies when releasever isn't explicitly overridden, which is the
-      // branch we're in.
-      if (input.target) {
-        const pin = readPin(input.lock, input.target);
-        if (pin) {
-          if (pin.release === release && pin.channel === channel) {
-            snapshot = pin.snapshot;
-            releasever = `${release}/${channel}/snapshots/${pin.snapshot}`;
-            releaseverSrc = `lock file snapshot pin for \`${input.target}\``;
-          } else {
-            notes.push(
-              `Lock file pins \`${input.target}\` to a snapshot of ${pin.release}/${pin.channel}, but config names ${release}/${channel}. The CLI ignores that stale pin and tracks the live channel head (run \`avocado update\` to re-pin) — the MCP does the same.`,
-            );
-          }
-        }
-      }
+      // Only reached when no releasever is explicit, so the pin applies.
+      applyPin();
     } else {
       const missing = [
         !release && "distro.release",
@@ -475,6 +493,7 @@ export function resolveFeed(input: ResolveInput): ResolvedFeed {
           distroReleasever: releasever,
           projectRoot: input.projectRoot,
           lock: input.lock,
+          stage: input.stage,
           notes,
         })
       : undefined;
@@ -533,6 +552,7 @@ interface NamedFeedsInput {
   distroReleasever: string;
   projectRoot?: string;
   lock: unknown;
+  stage?: PackageStage;
   notes: string[];
 }
 
@@ -644,10 +664,11 @@ function resolveNamedFeeds(input: NamedFeedsInput):
         `\`targets:\` does not list \`${target}\`, so the CLI does not enable it for this target.`,
       );
     }
-    if (stages && !stages.some((st) => PACKAGE_STAGES.includes(st))) {
+    const want = input.stage ? [input.stage] : PACKAGE_STAGES;
+    if (stages && !stages.some((st) => (want as string[]).includes(st))) {
       return skip(
         "excluded",
-        `\`stages: [${stages.join(", ")}]\` does not include \`ext\` or \`runtime\`, so extension and runtime installs do not use it.`,
+        `\`stages: [${stages.join(", ")}]\` does not include ${want.map((st) => `\`${st}\``).join(" or ")}, so ${want.map((st) => STAGE_INSTALLS[st]).join(" and ")} installs do not use it.`,
       );
     }
     if (kind === "org") {
@@ -750,6 +771,8 @@ export interface FeedContextInput extends FeedOverrides {
   /** avocado.yaml content (used instead of reading projectDir/avocado.yaml). */
   yaml?: string;
   env?: Record<string, string | undefined>;
+  /** Install stage the caller needs. Default: `ext` or `runtime`. */
+  stage?: PackageStage;
 }
 
 /**
@@ -767,6 +790,7 @@ export class FeedContext {
     private readonly loadNotes: string[],
     private readonly projectRoot: string | undefined,
     private readonly named = true,
+    private readonly stage?: PackageStage,
   ) {}
 
   static load(input: FeedContextInput = {}): FeedContext {
@@ -845,6 +869,8 @@ export class FeedContext {
       configPath,
       notes,
       projectRoot,
+      true,
+      input.stage,
     );
   }
 
@@ -863,6 +889,7 @@ export class FeedContext {
       baseDir: this.baseDir,
       projectRoot: this.projectRoot,
       named: this.named,
+      stage: this.stage,
       configPath: this.configPath,
     });
     feed.notes.unshift(...this.loadNotes);
@@ -894,6 +921,7 @@ export class FeedContext {
       this.loadNotes,
       this.projectRoot,
       false,
+      this.stage,
     );
   }
 
