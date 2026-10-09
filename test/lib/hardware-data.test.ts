@@ -105,7 +105,9 @@ test("QEMU: provision writes an image, then sdk run boots it", () => {
   const out = targetInfoText(DATA, "qemux86-64", undefined);
   assert.match(out, /avocado provision dev\navocado sdk run -iE vm dev\n/);
   assert.match(out, /--host-fwd/);
-  assert.match(out, /Linux only/);
+  assert.match(out, /`--host-fwd` on Linux hosts only/);
+  // The VM runs on both host OSes. Only `--host-fwd` is Linux only.
+  assert.match(out, /\*\*Host OS:\*\* macOS, Linux\n/);
   assert.doesNotMatch(out, /brew install qemu/);
   assert.doesNotMatch(out, /Free disk space/);
   assert.match(
