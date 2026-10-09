@@ -121,7 +121,7 @@ export function registerDocsTools(server: McpServer): void {
               mode: "browse" as const,
               section,
               total: all.length,
-              hits: all.map((entry) => ({ entry, score: 0 })),
+              hits: all.map((entry) => ({ entry: hitEntry(entry), score: 0 })),
             },
           };
         }
@@ -164,7 +164,7 @@ export function registerDocsTools(server: McpServer): void {
             section,
             total: hits.length,
             hits: hits.map((h) => ({
-              entry: h.entry,
+              entry: hitEntry(h.entry),
               score: h.score,
               excerpt: h.excerpt,
             })),
@@ -240,6 +240,18 @@ export function registerDocsTools(server: McpServer): void {
       }
     },
   );
+}
+
+/** The entry fields in the output schema. The schema rejects extra keys such as `sha`. */
+function hitEntry(e: DocEntry) {
+  return {
+    title: e.title,
+    url: e.url,
+    sitePath: e.sitePath,
+    repoPath: e.repoPath,
+    section: e.section,
+    description: e.description,
+  };
 }
 
 function renderDoc(entry: DocEntry, content: string): string {
