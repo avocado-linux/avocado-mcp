@@ -278,10 +278,14 @@ const BUILD_PATTERNS: Pattern[] = [
       "Check `AVOCADO_CONNECT_URL` and the URL of your login. The default is `https://connect.peridio.com`. To log in to a different deployment, run `avocado login --url <url>`. Docs: https://docs.peridio.com/developer-reference/avocado-cli/commands#avocado-login",
   },
   // Signing and verity: avocado-cli `src/commands/runtime/build.rs` (FIT
-  // assembly script) and `runtime/deploy.rs`.
+  // assembly script) and `runtime/deploy.rs`. These lines come from `echo` in
+  // a container script, and `--verbose` prints that script. Each match is
+  // anchored to the start of the emitted line, so the echoed source does not
+  // match.
   {
     label: "Rootfs verity needs a FIT signing key",
-    match: /rootfs\.image\.verity is on, which needs the boot FIT rebuilt/,
+    match:
+      /^(?:\S+[ \t]+)?ERROR: rootfs\.image\.verity is on, which needs the boot FIT rebuilt/m,
     cause:
       "`rootfs.image.verity` puts the rootfs root hash into the boot FIT, so the build must rebuild the FIT. The runtime sets neither `signing.fit_key` nor `signing.fit_unsigned`, so the build cannot make the FIT.",
     suggestion:
@@ -290,7 +294,7 @@ const BUILD_PATTERNS: Pattern[] = [
   {
     label: "Feed has no bootloader rekey tool",
     match:
-      /signing\.fit_key_in_bootloader is on but this feed ships no imx-boot-tools\/rekey-imx-boot\.sh/,
+      /^(?:\S+[ \t]+)?ERROR: signing\.fit_key_in_bootloader is on but this feed ships no imx-boot-tools\/rekey-imx-boot\.sh/m,
     cause:
       "`signing.fit_key_in_bootloader` puts your FIT key into the bootloader. It is on by default when `signing.fit_key` is set. The feed for this target has no tool to do that.",
     suggestion:
@@ -298,7 +302,8 @@ const BUILD_PATTERNS: Pattern[] = [
   },
   {
     label: "Deploy refuses extension verity",
-    match: /extensions with image\.verity: true; deploy does not publish/,
+    match:
+      /^(?:\S+[ \t]+)?ERROR: this runtime has extensions with image\.verity: true; deploy does not publish/m,
     cause:
       "`avocado deploy` cannot publish the dm-verity hash trees of extensions yet, so the device would refuse them. Rootfs verity is not affected.",
     suggestion:
@@ -306,7 +311,7 @@ const BUILD_PATTERNS: Pattern[] = [
   },
   {
     label: "No root.json in the runtime",
-    match: /No root\.json found at /,
+    match: /^(?:\S+[ \t]+)?ERROR: No root\.json found at /m,
     cause:
       "The runtime has no update authority (`root.json`) because no signing key is set for it. Deploy needs one, and `--connect-sign` needs a local signing key for this reason.",
     suggestion:
@@ -382,10 +387,11 @@ const BUILD_PATTERNS: Pattern[] = [
   },
   {
     label: "Stale build volume",
-    // avocado-cli `src/commands/rootfs/image.rs`. Older CLIs failed later with
-    // a grep error on the same file, which the docs also describe.
+    // avocado-cli `src/commands/rootfs/image.rs`, anchored like the signing
+    // patterns above. Older CLIs failed later with a grep error on the same
+    // file, which the docs also describe.
     match:
-      /is missing \/etc\/passwd\. The build volume looks half-populated or stale|rootfs-work\/etc\/(?:passwd|shadow|group): No such file/,
+      /^(?:\S+[ \t]+)?ERROR: rootfs staging at [^\n]* is missing \/etc\/passwd\. The build volume looks half-populated or stale|rootfs-work\/etc\/(?:passwd|shadow|group): No such file/m,
     cause:
       "The Docker volume of this project is stale or half-populated. An install was interrupted, or the project directory was deleted without `avocado clean`, and its old volume is still there.",
     suggestion:
