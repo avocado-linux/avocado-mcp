@@ -74,6 +74,13 @@ recommend:
     only raises GitHub API rate limits).
   - `docs.peridio.com` — documentation content.
 
+  These inputs select any HTTP or HTTPS host for the package feed, with or
+  without a project: the `repoUrl` tool argument, `AVOCADO_REPO_URL` and
+  `AVOCADO_SDK_REPO_URL` in the server's environment, and the `yaml` argument
+  of `add-package-to-extension`. The server reads the `distro.repo` and the
+  `repos:` feeds that `distro.feeds` enables from that `yaml`, as it does for
+  a project.
+
   When a tool gets a `projectDir`, the server also reads the package feeds
   that project configures: `distro.repo`, the `repos:` feeds enabled in
   `distro.feeds`, and `AVOCADO_REPO_URL` in the server's environment. These
@@ -84,6 +91,13 @@ recommend:
   during `avocado build`. The server reads only feed metadata from these
   hosts, never sends the project's files, and redacts credentials in feed URLs
   from its output.
+
+  In feed settings, `{{ env.X }}` expands only `AVOCADO_*` variables. The
+  agent decides when to pass `projectDir`, so a project must not be able to
+  make the server send its own secrets, such as `GITHUB_TOKEN`, to a host the
+  project names. A feed whose settings read any other variable is not
+  fetched, and the tools list it as not checked. Text that came from an
+  expansion is masked in every feed URL the tools show.
 
   See the *How it talks to the world* section of the README for details.
 - It is **stdio-only**: there is no hosted endpoint, no listening port, and no

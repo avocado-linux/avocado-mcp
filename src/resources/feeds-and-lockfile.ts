@@ -42,7 +42,10 @@ install stages), \`username\`/\`password\`, \`ca\`, \`tls_verify\`,
 install in the \`ext\` stage and runtime packages in the \`runtime\` stage.
 
 Put credentials in \`username\`/\`password\` with \`{{ env.X }}\` references.
-The CLI refuses credentials inside a URL.
+The CLI refuses credentials inside a URL. The MCP expands only \`AVOCADO_*\`
+variables in feed settings. Give feed variables an \`AVOCADO_\` prefix so the
+package tools can read the feed. With another name, the CLI still reads the
+feed, and the MCP lists it as not checked.
 
 \`\`\`yaml
 distro:
@@ -58,8 +61,8 @@ repos:
     stages: [ext, runtime]
   vendor:
     url: https://rpm.vendor.example/$releasever/target/$target
-    username: "{{ env.VENDOR_USER }}"
-    password: "{{ env.VENDOR_TOKEN }}"
+    username: "{{ env.AVOCADO_VENDOR_USER }}"
+    password: "{{ env.AVOCADO_VENDOR_TOKEN }}"
     targets: [raspberrypi5]
 \`\`\`
 
@@ -114,9 +117,11 @@ longer applies. The CLI tracks the live channel and warns until you run
 
 ### CI
 
-\`avocado ext fetch --locked\` fails instead of writing the lock when an
-extension has no lock entry or its pinned version moved. Use it in CI so a
-build never resolves something new by accident.
+\`--locked\` exists only on \`avocado ext fetch\`, and it covers only the lock
+entries of remote extensions. \`avocado ext fetch --locked\` fails instead of
+writing the lock when a remote extension has no lock entry or its pinned
+version moved. Use it in CI so a remote extension never resolves to
+something new by accident.
 
 ### Resetting state
 

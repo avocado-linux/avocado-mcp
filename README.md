@@ -197,7 +197,15 @@ When you change source files, run `npm run build` again and restart the client (
 
 ## How it talks to the world
 
-Without a project, the server reads only from public HTTPS endpoints. With `projectDir`, the package feeds come from the project's configuration, so they can be any HTTP or HTTPS host or local path the project names, the same feeds `avocado install` reads. Pass `projectDir` only for a project you trust (see `SECURITY.md`).
+Without a project, the server reads from public HTTPS endpoints, except for the package feed inputs below. These select any HTTP or HTTPS host for the package feed, with or without a project:
+
+- the `repoUrl` tool argument
+- `AVOCADO_REPO_URL` and `AVOCADO_SDK_REPO_URL` in the server's environment
+- the `yaml` argument of `add-package-to-extension`. Its `distro.repo` and the `repos:` feeds that its `distro.feeds` enables are read like a project's.
+
+With `projectDir`, the package feeds come from the project's configuration, so they can be any HTTP or HTTPS host or local path the project names, the same feeds `avocado install` reads. Pass `projectDir` only for a project you trust (see `SECURITY.md`).
+
+In feed settings, `{{ env.X }}` expands only `AVOCADO_*` variables. A project or a `yaml` argument cannot make the server send its other environment variables, such as `GITHUB_TOKEN`, to a feed host. A feed whose settings read another variable is listed as not checked, with the variable's name. Text that came from an expansion is masked in feed URLs in tool output.
 
 - **The package feed** — RPM repodata (targets manifest, `repomd.xml`, `primary.xml.gz`). Used by `list-targets`, `search-packages`, `describe-package`, `check-package-coverage`, `add-package-to-extension`, `explain-build-error`, `init-project`, `get-provisioning-steps`, and reported by `environment-check`. Pass `projectDir` and the feed is resolved the same way avocado-cli resolves it (`src/lib/feed-config.ts`):
   - repo URL: `AVOCADO_REPO_URL` > `AVOCADO_SDK_REPO_URL` > `distro.repo.url` > `repos.<distro>.url` > `sdk.repo_url` > `https://repo.avocadolinux.org`
@@ -208,7 +216,7 @@ Without a project, the server reads only from public HTTPS endpoints. With `proj
 
   The package tools also read the extra feeds that `distro.feeds` enables from `repos:` (a `url:` or a local `path:`). Private `org:` feeds need Connect credentials, so the MCP lists them as not checked.
 
-  Explicit `release` / `channel` / `repoUrl` tool arguments override all of the above. Without a project the default is `https://repo.avocadolinux.org` `2024/edge`. Multiple releases (`2024`, `2026`) and channels (`next`, `edge`, `stable`) are published and the target set differs per stream, so target validation is done against the feed being queried. Every result states the effective feed, whether the repo URL is overridden, and where each value came from. Env vars are read from the MCP server's own process environment.
+  Explicit `release` and `channel` tool arguments replace the distro feed's stream and its snapshot pin, and `repoUrl` replaces the distro feed's URL. The `repos:` feeds that `distro.feeds` enables are still queried, and a `$releasever` in their URL takes the new stream. Without a project the default is `https://repo.avocadolinux.org` `2024/edge`. Multiple releases (`2024`, `2026`) and channels (`next`, `edge`, `stable`) are published and the target set differs per stream, so target validation is done against the feed being queried. Every result states the effective feed, whether the repo URL is overridden, and where each value came from. Env vars are read from the MCP server's own process environment.
 - **`github.com/avocado-linux/references`** — full source of every reference project. Used by `get-reference` and `get-reference-file` (fetched via `raw.githubusercontent.com` + GitHub trees API).
 - **`github.com/peridio/docs`** — the Docusaurus source for `docs.peridio.com`. Used by `search-docs` and `get-doc`. Trees API for the manifest (cached 1 h), `raw.githubusercontent.com` for content (cached on disk by blob SHA, no TTL — content-addressable).
 
