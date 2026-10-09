@@ -190,6 +190,24 @@ test("getHardwareData joins the three files", async () => {
   assert.ok(data?.targets.rb3gen2);
 });
 
+test("getHardwareData does not cache when one device file parses empty", async () => {
+  let supported: unknown = { devices: [] };
+  globalThis.fetch = (async (url: RequestInfo | URL) => {
+    const u = String(url);
+    const body = u.endsWith("targets.json")
+      ? TARGETS
+      : u.endsWith("virtual-environment.json")
+        ? { devices: DEVICES.slice(-2) }
+        : supported;
+    return new Response(JSON.stringify(body), { status: 200 });
+  }) as typeof fetch;
+  // Only the QEMU rows: the physical boards are missing, so no data.
+  assert.equal(await getHardwareData(), null);
+  // Nothing was cached, so the next call reads the fixed file.
+  supported = { devices: DEVICES.slice(0, -2) };
+  assert.equal((await getHardwareData())?.devices.length, DEVICES.length);
+});
+
 test("option steps from the board page are kept (Variscite SW7 back to internal)", () => {
   const out = targetInfoText(DATA, "imx8mp-var-dart", undefined);
   assert.match(out, /set SW7 back to internal/);

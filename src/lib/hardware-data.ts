@@ -122,12 +122,20 @@ export async function getHardwareData(): Promise<HardwareData | null> {
     if (!targets || typeof targets !== "object" || Array.isArray(targets)) {
       throw new Error("targets.json is not an object");
     }
+    // Check each file. A `supported.json` that parses empty next to the QEMU
+    // rows would otherwise drop every physical board for the cache lifetime.
+    const boards = devicesOf(supported);
+    const vms = devicesOf(virtual);
+    if (boards.length === 0) throw new Error("supported.json parsed empty");
+    if (vms.length === 0) {
+      throw new Error("virtual-environment.json parsed empty");
+    }
     const data: HardwareData = {
       targets: targets as Record<string, TargetEntry>,
-      devices: [...devicesOf(supported), ...devicesOf(virtual)],
+      devices: [...boards, ...vms],
     };
-    if (Object.keys(data.targets).length === 0 || data.devices.length === 0) {
-      throw new Error("board data parsed empty");
+    if (Object.keys(data.targets).length === 0) {
+      throw new Error("targets.json parsed empty");
     }
     cache = { data, expiresAt: now + CACHE_TTL_MS };
     return data;
