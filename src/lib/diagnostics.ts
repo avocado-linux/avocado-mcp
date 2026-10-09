@@ -63,9 +63,9 @@ const PROVISION_PATTERNS: Pattern[] = [
     match:
       /qemu-system-[a-z0-9_]+ ?: ?(?:command not found|not found|no such file)|cannot find qemu|qemu binary missing/i,
     cause:
-      "The QEMU emulator binary (`qemu-system-<arch>`) is not installed. Required for QEMU-target workflows; not needed for physical-hardware builds.",
+      "A QEMU binary (`qemu-system-<arch>`) was not found. Avocado runs QEMU inside the SDK container, not on the host, so the VM was probably started outside the CLI.",
     suggestion:
-      "Install QEMU: macOS → `brew install qemu`; Debian/Ubuntu → `sudo apt install qemu-system`; Fedora → `sudo dnf install qemu-system-x86 qemu-system-arm`. Then retry. `environment-check` can verify the install.",
+      "Do not install QEMU on the host. Run `avocado provision <runtime>` to write the disk image, then `avocado sdk run -iE vm <runtime>`. If the error comes from inside the SDK container, run `avocado install` and try again. See https://docs.peridio.com/developer-reference/getting-started/qemu.",
   },
   {
     label: "Device auto-mounted by host OS",

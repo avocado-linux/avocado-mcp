@@ -1,7 +1,7 @@
 export const URI = "avocado://skills/hardware-catalog";
 export const NAME = "hardware-catalog";
 export const DESCRIPTION =
-  "Conceptual map of Avocado OS hardware support: vendors, target naming conventions, provisioning profiles, and how targets relate to package feeds. Read this when the user asks about hardware or when picking a target.";
+  "How Avocado OS targets relate to package feeds, and which tools give the board facts (get-target-info, get-provisioning-steps, list-provision-profiles). Read this when the user asks about hardware or when picking a target.";
 
 export const CONTENT = `# Hardware catalog
 
@@ -11,33 +11,19 @@ Avocado OS targets are organized as flat strings (e.g. \`raspberrypi5\`, \`imx8m
 
 **Targets differ per stream.** Feeds are published across releases (\`2024\`, \`2026\`) and channels (\`next\`, \`edge\`, \`stable\`), and the target set is not identical between them — newer hardware may exist only on a newer release (e.g. NVIDIA Thor on \`2026\`, not \`2024\`). Which feed a project uses is set by its \`distro.release\` / \`distro.channel\` / \`distro.repo.url\` (or the \`AVOCADO_REPO_URL\` / \`AVOCADO_DISTRO_RELEASE\` / \`AVOCADO_DISTRO_CHANNEL\` / \`AVOCADO_RELEASEVER\` env overrides).
 
-This MCP exposes the list via the \`list-targets\` tool — **pass \`projectDir\` when working in a project** so it reads the project's configured feed, or \`release\`/\`channel\` to inspect a specific stream. The docs support matrix at https://docs.peridio.com/hardware/support-matrix#supported documents which release each board is supported on. Always consult one of these before assuming a target exists.
+This MCP exposes the list via the \`list-targets\` tool. **Pass \`projectDir\` when working in a project** so it reads the project's configured feed, or \`release\`/\`channel\` to inspect a specific stream. Always check one of these before assuming a target exists.
 
-## Vendor families currently supported
+## Board facts
 
-- **Raspberry Pi** — \`raspberrypi4\`, \`raspberrypi5\`, \`raspberrypi0-2w\`. Microsd-card provisioning. Cortex-A72/A76/A53.
-- **NVIDIA Jetson** — \`jetson-orin-nano-devkit\`, \`jetson-agx-orin-devkit\`. Use the \`tegraflash\` profile, not SD. Linux host only.
-- **NXP i.MX** — \`imx8mp-evk\`, \`imx91-frdm\`, \`imx93-evk\`, \`imx93-frdm\`. SD-card provisioning. Industrial features (EdgeLock, TSN).
-- **Intel x86-64** — \`intel-x86-64-v2\`, \`intel-x86-64-v3\`. USB-drive provisioning. Requires UEFI boot.
-- **Advantech** — \`icam-540\` (Jetson Orin NX inside). Industrial AI camera.
-- **OnLogic** — \`fr201\`. Ruggedized x86 industrial.
-- **Seeed** — \`reterminal\`, \`reterminal-dm\`. Pi-CM4 / RK3588S-based HMI devices.
-- **STMicroelectronics** — \`stm32mp257f-dk\`. SD-card. Cortex-A35 + Cortex-M33 industrial SoC.
-- **Grinn** — \`grinn-astra-1680-sbc\`. Synaptics Astra SL1680, Cortex-A73 quad with 7.9 TOPS NPU.
-- **SolidRun** — \`rzv2n-sr-som\`. Renesas RZ/V2N HummingBoard, Cortex-A55 + DRP-AI3 NPU.
-- **QEMU** — \`qemuarm64\`, \`qemux86-64\`. Virtual targets for development. No physical hardware needed; runs in a VM.
+Do not rely on a fixed list of vendors, boards or profiles. Call \`get-target-info\` for a target. It reads the same data files as the docs hardware pages and returns:
 
-## Provisioning profile cheat sheet
+- the board page URL and the stream status per LTS release,
+- the boards that use the target, and whether \`default_target_board\` is required,
+- host OS support and the free disk space the target needs,
+- the serial console: an onboard USB console or an adapter, with baud and voltage,
+- per provisioning profile: the media, recovery mode steps, the \`avocado provision\` command and the boot steps.
 
-| Profile | What you flash | Targets |
-|---|---|---|
-| \`sd\` | microSD card | Raspberry Pi, NXP boards, STM32MP, Grinn, SolidRun, Seeed |
-| \`usb\` | USB drive | Intel x86-64 |
-| \`tegraflash\` | NVMe over USB (recovery mode) | NVIDIA Jetson |
-| (none, just power) | internal storage on already-provisioned device | Advantech ICAM-540, OnLogic FR201 |
-| (virtual) | no flash — \`avocado sdk run\` boots a VM | QEMU |
-
-Use \`get-provisioning-steps\` for the precise command sequence per target.
+\`get-provisioning-steps\` gives the same steps with the commands to run. After \`avocado install\`, \`list-provision-profiles\` lists the profiles the installed SDK has for the target.
 
 ## How targets relate to packages
 

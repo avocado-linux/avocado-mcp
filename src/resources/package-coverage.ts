@@ -38,7 +38,7 @@ Read it. It's the source of truth — pull the target (\`default_target\` / \`su
 Walk them through selection:
 
 1. **Hardware → target.** Ask what hardware they want to support if they haven't said. Resolve prose to a canonical slug with \`list-targets({ query: "..." })\` and confirm. Never guess or substitute a "close enough" target.
-2. **Which release supports it?** Check the docs support matrix at **https://docs.peridio.com/hardware/support-matrix#supported** (via \`search-docs({ query: "support matrix", section: "hardware" })\` → \`get-doc\`, or \`WebFetch\` the URL) — that table now documents which release each board is supported on. You can corroborate against the feed itself: \`list-targets({ query: "<target>", release: "2026" })\` vs \`release: "2024"\` shows which stream actually carries the target.
+2. **Which release supports it?** Call \`get-target-info({ target: "<target>" })\`. It gives the stream status per LTS release from the docs data. (\`get-doc\` on the support matrix page returns only a component tag, not the table.) You can corroborate against the feed itself: \`list-targets({ query: "<target>", release: "2026" })\` vs \`release: "2024"\` shows which stream has the target.
    - Supported on **only one** release → use it (tell the user).
    - Supported on **both 2024 and 2026** → ask which they'd prefer, but **default to / recommend the newest** (if 2026 is available, suggest 2026).
 3. **Which channel?** **Recommend \`edge\`**, but ask if they'd prefer \`next\`, \`edge\`, or \`stable\`. Explain the tradeoff:
