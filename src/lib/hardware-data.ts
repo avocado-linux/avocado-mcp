@@ -303,20 +303,21 @@ export function skippedProfileText(profile: string): string {
 }
 
 /**
- * The command for the "Run it" section. With one profile choice it is exact.
- * With none it uses the CLI default. With more, the user picks.
+ * The commands for the "Run it" section: one per distinct profile. With no
+ * profile it is the CLI default. With more than one, the user picks one.
  */
-export function runProvisionCommand(info: TargetInfo, runtime: string): string {
+export function runProvisionCommands(
+  info: TargetInfo,
+  runtime: string,
+): string[] {
   const profiles = new Set(
     info.entries
       .flatMap((e) => e.provisioning?.options ?? [])
       .filter((o) => isSafeProfile(o.profile))
       .map((o) => o.profile ?? null),
   );
-  if (profiles.size > 1)
-    return `${provisionCommand(runtime)} --profile <profile>`;
-  const [profile] = profiles;
-  return provisionCommand(runtime, profile);
+  if (profiles.size === 0) return [provisionCommand(runtime)];
+  return [...profiles].map((p) => provisionCommand(runtime, p));
 }
 
 /**

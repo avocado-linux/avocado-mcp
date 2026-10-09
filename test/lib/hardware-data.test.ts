@@ -6,7 +6,7 @@ import {
   minDiskGB,
   diskRequirement,
   provisionCommand,
-  runProvisionCommand,
+  runProvisionCommands,
   getHardwareData,
   clearHardwareDataCache,
   type HardwareData,
@@ -238,18 +238,22 @@ test("the run command counts distinct profiles", () => {
   // Two entries, both `sd`: the exact profile is known.
   const ucm = lookupTarget(DATA, "ucm-imx8m-plus")!;
   assert.equal(ucm.entries.length, 2);
-  assert.equal(
-    runProvisionCommand(ucm, "dev"),
+  assert.deepEqual(runProvisionCommands(ucm, "dev"), [
     "avocado provision dev --profile sd",
-  );
-  // sd and uuu-emmc: the user picks.
-  assert.equal(
-    runProvisionCommand(lookupTarget(DATA, "imx8mp-var-dart")!, "dev"),
-    "avocado provision dev --profile <profile>",
+  ]);
+  // sd and uuu-emmc: one full command per profile, no placeholder.
+  assert.deepEqual(
+    runProvisionCommands(lookupTarget(DATA, "imx8mp-var-dart")!, "dev"),
+    [
+      "avocado provision dev --profile sd",
+      "avocado provision dev --profile uuu-emmc",
+    ],
   );
   // No options: the CLI default.
   const none = { ...ucm, entries: [{ ...ucm.entries[0], provisioning: {} }] };
-  assert.equal(runProvisionCommand(none, "dev"), "avocado provision dev");
+  assert.deepEqual(runProvisionCommands(none, "dev"), [
+    "avocado provision dev",
+  ]);
 });
 
 test("diskRequirement says when it falls back to the generic 8 GB", () => {

@@ -29,7 +29,7 @@ import {
   isVirtual,
   provisioningText,
   provisionCommand,
-  runProvisionCommand,
+  runProvisionCommands,
   unavailableText,
   unknownTargetText,
 } from "../lib/hardware-data.js";
@@ -340,7 +340,7 @@ export function registerDiagnosticsTools(
           out += provisioningText(info, rt);
         } else {
           out += provisioningText(info, rt);
-          out += runSection(runProvisionCommand(info, rt));
+          out += runSection(runProvisionCommands(info, rt));
         }
       }
       out += feed.describe();
@@ -353,23 +353,36 @@ export function registerDiagnosticsTools(
 function genericSteps(runtime: string): string {
   let out = `## Generic flow\n\n`;
   out += `Without \`--profile\`, the CLI uses the default profile of the target. After \`avocado install\`, \`list-provision-profiles\` lists the profiles the target has. Check the board page before you flash media.\n\n`;
-  return out + runSection(provisionCommand(runtime));
+  return out + runSection([provisionCommand(runtime)]);
 }
 
 /** How a human and an LLM run build + provision. */
-function runSection(provisionCmd: string): string {
+function runSection(provisionCmds: string[]): string {
+  // With more than one profile, each provision command gets its own block,
+  // so a copied block never runs two provisions.
+  const steps = (pre: string[], run: (cmd: string) => string): string => {
+    if (provisionCmds.length === 1) {
+      return (
+        "```bash\n" + [...pre, run(provisionCmds[0])].join("\n") + "\n```\n\n"
+      );
+    }
+    let s = "```bash\n" + pre.join("\n") + "\n```\n\n";
+    s += `Then run the provision command for one profile only:\n\n`;
+    for (const c of provisionCmds) s += "```bash\n" + run(c) + "\n```\n\n";
+    return s;
+  };
   let out = `## Run it\n\n`;
   out += `**For a HUMAN running these in their own terminal:**\n\n`;
-  out += "```bash\n";
-  out += `avocado build --no-tui\n`;
-  out += `${provisionCmd} --no-tui\n`;
-  out += "```\n\n";
+  out += steps(["avocado build --no-tui"], (c) => `${c} --no-tui`);
   out += `**For an LLM running via the Bash tool (NO interactive terminal):** no TTY wrapper is needed. The CLI detects a non-TTY stdin and starts the SDK container without a PTY. Set \`AVOCADO_NONINTERACTIVE=1\` so it never waits for an answer, and write logs to \`.avocado/logs/\` in the project:\n\n`;
-  out += "```bash\n";
-  out += `mkdir -p .avocado/logs\n`;
-  out += `avocado build --no-tui > .avocado/logs/build.log 2>&1\n`;
-  out += `AVOCADO_NONINTERACTIVE=1 ${provisionCmd} --no-tui > .avocado/logs/provision.log 2>&1\n`;
-  out += "```\n\n";
+  out += steps(
+    [
+      "mkdir -p .avocado/logs",
+      "avocado build --no-tui > .avocado/logs/build.log 2>&1",
+    ],
+    (c) =>
+      `AVOCADO_NONINTERACTIVE=1 ${c} --no-tui > .avocado/logs/provision.log 2>&1`,
+  );
   out += `If the provision fails with \`the input device is not a TTY\`, the CLI is older than 1.0.0-rc.2. Run \`avocado upgrade\`. On macOS, a host-side SD card write asks for confirmation and cancels with no terminal (\`Operation cancelled.\`). Ask the user to run that provision in their own terminal.\n\n`;
   return out;
 }
