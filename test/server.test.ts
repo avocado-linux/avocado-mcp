@@ -211,6 +211,30 @@ test("get-tmux-uart-snippet gives the wiring rule for the console type", async (
   }
 });
 
+test("get-tmux-uart-snippet gives no bridge for a board with no console data", async () => {
+  const restore = serveHardwareFixture();
+  try {
+    const { client } = await connect();
+    const res = await client.callTool({
+      name: "get-tmux-uart-snippet",
+      arguments: {
+        portPath: "/dev/ttyUSB0",
+        target: "jetson-agx-orin-devkit",
+        board: "mic-733-ao5a1",
+      },
+    });
+    const text = (res.content as { text: string }[])[0].text;
+    assert.match(text, /does not describe a serial console/);
+    assert.match(
+      text,
+      /https:\/\/docs\.peridio\.com\/hardware\/advantech\/mic-733-ao/,
+    );
+    assert.doesNotMatch(text, /tmux new-session|tio -b|115200/);
+  } finally {
+    restore();
+  }
+});
+
 test("serial tools name the resolved target for a docs name", async () => {
   const restore = serveHardwareFixture();
   try {

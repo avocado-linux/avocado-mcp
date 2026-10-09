@@ -15,6 +15,7 @@ import {
 import {
   ADAPTER_SAFETY,
   getHardwareData,
+  HARDWARE_DOCS_URL,
   RS232_WARNING,
 } from "../lib/hardware-data.js";
 
@@ -213,7 +214,7 @@ export function registerDebuggingTools(server: McpServer): void {
     {
       title: "Get tmux+UART bridge commands",
       description:
-        "Generate the exact bash commands to bridge a UART serial console to Claude through a detached tmux session. **Requires BOTH `tmux` AND a serial terminal emulator** (`tio`, `picocom`, or `minicom`) — `tmux` alone cannot talk to a serial device. Call `detect-serial-ports` first to confirm which emulators are installed. Returns the `tmux new-session`, `tmux send-keys`, and `tmux capture-pane` snippets pre-filled with the user's port, target's baud rate, and chosen emulator.",
+        "Generate the exact bash commands to bridge a UART serial console to Claude through a detached tmux session. **Requires BOTH `tmux` AND a serial terminal emulator** (`tio`, `picocom`, or `minicom`) — `tmux` alone cannot talk to a serial device. Call `detect-serial-ports` first to confirm which emulators are installed. Returns the `tmux new-session`, `tmux send-keys`, and `tmux capture-pane` snippets pre-filled with the user's port, target's baud rate, and chosen emulator. When the docs data does not describe the board's serial console, it returns the board page and no bridge.",
       inputSchema: {
         portPath: z
           .string()
@@ -277,6 +278,16 @@ export function registerDebuggingTools(server: McpServer): void {
             },
           ],
         };
+      }
+
+      // No console facts: the baud and even the port are guesses, so give
+      // the board page and no runnable bridge.
+      if (info.consoleType === "unknown") {
+        let text = `# get-tmux-uart-snippet: \`${info.target}\`\n\n`;
+        text += `⚠️  The docs data does not describe a serial console for \`${info.target}\`, so this tool gives no bridge command. Check the board page for the console port, baud rate and voltage before you connect anything: ${info.docsUrl ?? HARDWARE_DOCS_URL}\n\n`;
+        text += `## Notes\n\n`;
+        for (const c of info.caveats) text += `- ${c}\n`;
+        return { content: [{ type: "text", text }] };
       }
 
       let snippet: string;
