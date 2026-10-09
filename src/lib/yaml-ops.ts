@@ -53,19 +53,31 @@ export async function validateAvocadoYaml(
   const errors: { instancePath: string; message: string }[] = ok
     ? []
     : (validate.errors ?? []).map((e) => {
+        const path = e.instancePath || "(root)";
         // The schema uses `false` for keys that exclude each other, such as
         // kernel `cmdline` and `cmdline_extra`.
-        const message =
-          e.keyword === "false schema"
-            ? "must not be set together with another key in this block"
-            : (e.message ?? "(no message)");
+        if (e.keyword === "false schema") {
+          return {
+            instancePath: path,
+            message: "must not be set together with another key in this block",
+          };
+        }
+        // The validator keeps the unknown-key rule only on the one-block
+        // form of rootfs, initramfs, kernel and permissions (schema-client.ts).
+        if (e.keyword === "additionalProperties") {
+          const key = String(e.params?.additionalProperty);
+          return {
+            instancePath: path,
+            message: `is not one block, because '${key}' is not a field. A block that sets a field cannot also hold named entries`,
+          };
+        }
         const params =
           e.params && Object.keys(e.params).length > 0
             ? `: ${JSON.stringify(e.params)}`
             : "";
         return {
-          instancePath: e.instancePath || "(root)",
-          message: message + params,
+          instancePath: path,
+          message: (e.message ?? "(no message)") + params,
         };
       });
 
