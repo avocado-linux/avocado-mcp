@@ -98,7 +98,7 @@ const PROVISION_PATTERNS: Pattern[] = [
     cause:
       "The provisioner could not find the target storage device (SD card, USB drive, NVMe).",
     suggestion:
-      "Verify the device is plugged in and visible (`lsblk` on Linux, `diskutil list` on macOS). For Jetson tegraflash, check the USB-C cable and recovery-mode jumper.",
+      "Verify the device is plugged in and visible (`lsblk` on Linux, `diskutil list` on macOS). For Jetson tegraflash, check the USB-C cable and that the board is in Force Recovery mode.",
   },
   {
     label: "USB / tegraflash failure",
@@ -106,7 +106,7 @@ const PROVISION_PATTERNS: Pattern[] = [
     cause:
       "Tegraflash provisioning hit a USB issue. Common causes: device not in recovery mode, wrong cable, host kernel module missing.",
     suggestion:
-      "Confirm the device is in recovery mode (FC REC pin shorted to GND, USB-C connected). Run `lsusb` and look for `NVIDIA Corp. APX`. Try unplug-replug.",
+      "Put the board in Force Recovery mode with its own steps from `get-target-info` or `get-provisioning-steps`. The steps differ per board: the Jetson Orin Nano dev kit uses a jumper from FC REC to GND, the AGX Orin dev kit uses the Reset and Force Recovery buttons, and the AGX Thor uses a timed button sequence. Connect the USB-C cable, then run `lsusb` and look for `NVIDIA Corp. APX`. Try unplug-replug.",
   },
   {
     label: "Permission denied on /dev",
