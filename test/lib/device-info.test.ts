@@ -12,6 +12,13 @@ import { TARGETS, DEVICES } from "./hardware-fixture.js";
 
 const DATA: HardwareData = { targets: TARGETS, devices: DEVICES };
 
+test("a QEMU name in any case has no physical console without board data", () => {
+  assert.equal(
+    getDeviceConnectionInfo("QEMU x86-64", null).consoleType,
+    "none",
+  );
+});
+
 test("unknown targets fall back to 115200 8N1 and say the data has no entry", () => {
   const info = getDeviceConnectionInfo("brand-new-board-9000", DATA);
   assert.equal(info.serial.baud, 115200);

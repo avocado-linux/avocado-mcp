@@ -262,13 +262,13 @@ export function registerDebuggingTools(server: McpServer): void {
       const session = sessionName ?? "avocado-uart";
       const chosen: SerialEmulator = emulator ?? "tio";
 
-      // Sanity check: warn if the target is QEMU, which has no physical port.
-      if (target.startsWith("qemu")) {
+      // A virtual target (QEMU) has no physical port.
+      if (info.consoleType === "none") {
         return {
           content: [
             {
               type: "text",
-              text: `# get-tmux-uart-snippet\n\n⚠️  \`${target}\` is a virtual target. There is no physical serial port. Run \`avocado provision dev\` to write the disk image, then \`avocado sdk run -iE vm dev\`. The console is the terminal that runs the VM.`,
+              text: `# get-tmux-uart-snippet\n\n⚠️  \`${info.target}\` is a virtual target. There is no physical serial port. Run \`avocado provision dev\` to write the disk image, then \`avocado sdk run -iE vm dev\`. The console is the terminal that runs the VM.`,
             },
           ],
         };

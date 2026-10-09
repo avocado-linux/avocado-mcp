@@ -26,6 +26,8 @@ import { registerConnectTools } from "../src/tools/connect.js";
 import { registerHardwareTools } from "../src/tools/hardware.js";
 import { registerSkillResources } from "../src/tools/resources.js";
 import { registerPrompts } from "../src/tools/prompts.js";
+import { clearHardwareDataCache } from "../src/lib/hardware-data.js";
+import { TARGETS, DEVICES } from "./lib/hardware-fixture.js";
 
 // Validate against the vendored schema: no network in tests.
 process.env.AVOCADO_MCP_SCHEMA_OFFLINE = "1";
@@ -151,6 +153,37 @@ test("an unknown deploy log gets deploy next steps, not build ones", async () =>
   // No package lookup for a deploy log.
   const sc = res.structuredContent as { investigations?: unknown };
   assert.equal(sc.investigations, undefined);
+});
+
+/** Serve the board data fixture in place of the docs site. */
+function serveHardwareFixture(): () => void {
+  const realFetch = globalThis.fetch;
+  clearHardwareDataCache();
+  globalThis.fetch = (async (url: RequestInfo | URL) => {
+    const u = String(url);
+    const body = u.endsWith("targets.json") ? TARGETS : { devices: DEVICES };
+    return new Response(JSON.stringify(body), { status: 200 });
+  }) as typeof fetch;
+  return () => {
+    globalThis.fetch = realFetch;
+    clearHardwareDataCache();
+  };
+}
+
+test("get-tmux-uart-snippet sends a QEMU board name to the VM console", async () => {
+  const restore = serveHardwareFixture();
+  try {
+    const { client } = await connect();
+    const res = await client.callTool({
+      name: "get-tmux-uart-snippet",
+      arguments: { portPath: "/dev/ttyUSB0", target: "QEMU x86-64" },
+    });
+    const text = (res.content as { text: string }[])[0].text;
+    assert.match(text, /`qemux86-64` is a virtual target/);
+    assert.doesNotMatch(text, /tmux new-session/);
+  } finally {
+    restore();
+  }
 });
 
 test("a flag-like serial port is rejected by the tool's input schema", async () => {
