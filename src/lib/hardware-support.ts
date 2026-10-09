@@ -159,13 +159,28 @@ export async function resolveFeedTarget(
   feedTargets: string[],
   aliases: Parameters<typeof resolveTargetInput>[2] = [],
 ): Promise<TargetMatch & { supported: string[]; fromMatrix: boolean }> {
+  // An exact feed slug (in any case) needs no docs data, so it never waits
+  // on the support matrix. `supported` and `fromMatrix` are filled in only
+  // when the input needs resolving, which is the only time callers use them.
+  const q = input.trim();
+  const exact =
+    feedTargets.find((t) => t === q) ??
+    feedTargets.find((t) => t.toLowerCase() === q.toLowerCase());
+  if (exact) {
+    return {
+      target: exact,
+      candidates: [exact],
+      supported: [],
+      fromMatrix: false,
+    };
+  }
   const { targets: supported, fromMatrix } =
     await supportedTargets(feedTargets);
-  const q = input.trim();
-  const match = feedTargets.includes(q)
-    ? { target: q, candidates: [q] }
-    : resolveTargetInput(q, supported, aliases);
-  return { ...match, supported, fromMatrix };
+  return {
+    ...resolveTargetInput(q, supported, aliases),
+    supported,
+    fromMatrix,
+  };
 }
 
 /** Drop every cached docs file, so the next call fetches them again. */

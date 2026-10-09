@@ -438,6 +438,8 @@ test("init-project lists supported targets, or the feed when the docs are down",
       /\*\*Supported targets \(2\):\*\* `qemuarm64`, `raspberrypi5`/,
     );
     assert.doesNotMatch(text, /`armv8a`/);
+    assert.match(text, /This list is the docs support matrix/);
+    assert.doesNotMatch(text, /not currently supported/);
 
     globalThis.fetch = (async () => {
       throw new Error("offline");
@@ -447,6 +449,8 @@ test("init-project lists supported targets, or the feed when the docs are down",
       text,
       /\*\*Targets in the feed \(4\):\*\* `armv8a`, `noarch`, `qemuarm64`, `raspberrypi5`/,
     );
+    assert.match(text, /architecture entries such as `armv8a`/);
+    assert.doesNotMatch(text, /not currently supported/);
   } finally {
     globalThis.fetch = realFetch;
     clearHardwareDataCache();

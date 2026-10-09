@@ -179,7 +179,9 @@ export function registerProjectTools(
           .sort()
           .map((t) => `\`${t}\``)
           .join(", ")}\n\n`;
-        body += `If the user's hardware isn't on this list, **tell them it's not currently supported** — don't try to substitute a "close enough" target without their explicit confirmation. Use \`list-targets({ query: "..." })\` to search by user-supplied hardware names.`;
+        body += match.fromMatrix
+          ? `This list is the docs support matrix: real boards and QEMU. The feed can also have targets the docs do not list yet, and an exact feed slug still works. If the user's hardware is not on this list, ask them for the exact target slug, or search with \`list-targets({ query: "..." })\`. Do not substitute a "close enough" target without their explicit confirmation.`
+          : `The support matrix could not be fetched, so this is every key in the feed, including architecture entries such as \`armv8a\` that are not hardware. Ask the user for the exact target slug, or search with \`list-targets({ query: "..." })\`. Do not substitute a "close enough" target without their explicit confirmation.`;
         return { content: [{ type: "text", text: body }] };
       }
       const target = match?.target ?? input.trim();

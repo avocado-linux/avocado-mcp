@@ -258,3 +258,21 @@ test("a failed or empty docs file is fetched again on the next call", async () =
   stub(ok);
   assert.ok((await getSelectableSlugs())?.has("raspberrypi5"));
 });
+
+test("an exact feed slug resolves without fetching the support matrix", async () => {
+  const { resolveFeedTarget } =
+    await import("../../src/lib/hardware-support.js");
+  let docsFetches = 0;
+  globalThis.fetch = (async () => {
+    docsFetches++;
+    throw new Error("docs must not be fetched");
+  }) as typeof fetch;
+  const feed = ["armv8a", "fr202", "raspberrypi5"];
+  assert.equal(
+    (await resolveFeedTarget("raspberrypi5", feed)).target,
+    "raspberrypi5",
+  );
+  // Any case: an exact feed slug is unambiguous.
+  assert.equal((await resolveFeedTarget("FR202", feed)).target, "fr202");
+  assert.equal(docsFetches, 0);
+});
