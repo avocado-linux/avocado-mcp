@@ -19,6 +19,17 @@ test("a QEMU name in any case has no physical console without board data", () =>
   );
 });
 
+test("with board data, an unknown qemu name is not virtual", () => {
+  const info = getDeviceConnectionInfo("qemu-typo", DATA);
+  // The unknown-target text, not the confident "no physical port" one.
+  assert.equal(info.consoleType, "unknown");
+  assert.match(
+    info.caveats.join(" "),
+    /Did you mean `qemuarm64`, `qemux86-64`\?/,
+  );
+  assert.doesNotMatch(info.caveats.join(" "), /no physical serial port/);
+});
+
 test("unknown targets fall back to 115200 8N1 and say the data has no entry", () => {
   const info = getDeviceConnectionInfo("brand-new-board-9000", DATA);
   assert.equal(info.serial.baud, 115200);
