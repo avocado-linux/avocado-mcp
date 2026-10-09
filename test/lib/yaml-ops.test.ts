@@ -333,6 +333,50 @@ test("an unknown var.hardware value is an error", async () => {
   );
 });
 
+// The CLI reads a block with any field as one block, and every other mapping
+// as named entries (named_or_single_deserializer in config.rs). A bad named
+// entry must not pass as an unknown key of the one-block form.
+for (const [name, yaml, path] of [
+  [
+    "permissions",
+    "permissions:\n  dev:\n    users: [root]\n",
+    "/permissions/dev/users",
+  ],
+  [
+    "rootfs",
+    "rootfs:\n  prod:\n    permissions: 123\n",
+    "/rootfs/prod/permissions",
+  ],
+  ["kernel", "kernel:\n  lts:\n    cmdline: 5\n", "/kernel/lts/cmdline"],
+]) {
+  test(`a bad named ${name} entry is an error`, async () => {
+    const res = await validateAvocadoYaml(yaml);
+    assert.equal(res.ok, false);
+    assert.ok(
+      res.errors.some((e) => e.instancePath === path),
+      JSON.stringify(res.errors),
+    );
+  });
+}
+
+test("an unknown key in a named entry is still a warning", async () => {
+  const res = await validateAvocadoYaml(
+    "permissions:\n  dev:\n    users: { root: {} }\n    colour: blue\nkernel:\n  lts: { package: k, colour: blue }\n",
+  );
+  assert.equal(res.ok, true, JSON.stringify(res.errors));
+  assert.deepEqual(res.warnings, [
+    "unknown key 'permissions.dev.colour' is ignored",
+    "unknown key 'kernel.lts.colour' is ignored",
+  ]);
+});
+
+test("target overrides in a one-block rootfs are not named entries", async () => {
+  const res = await validateAvocadoYaml(
+    "rootfs:\n  packages: {}\n  target-raspberrypi4: { image: { type: kab } }\n",
+  );
+  assert.equal(res.ok, true, JSON.stringify(res.errors));
+});
+
 test("add-extension writes git and path sources and depends_on", async () => {
   let y = addExtension(BASE, {
     name: "app",

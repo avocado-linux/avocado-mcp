@@ -53,7 +53,8 @@ export interface LoadedSchema {
   source: string;
   /**
    * Validator for hard errors. It ignores `additionalProperties: false`,
-   * because the CLI only warns about unknown keys (see config-lint.ts).
+   * because the CLI only warns about unknown keys (see config-lint.ts). The
+   * one exception is where the rule picks a branch (keepSingletonKeys).
    */
   validate: SchemaValidator;
 }
@@ -81,11 +82,78 @@ function compile(schema: Record<string, unknown>): SchemaValidator {
       key === "additionalProperties" && value === false ? undefined : value,
     ),
   );
+  keepSingletonKeys(schema, relaxed);
   const ajv = new Ajv({ allErrors: true, allowUnionTypes: true });
   ajv.addKeyword("x-avocado-warning");
   ajv.addKeyword("x-avocado-target-overrides");
   addFormats(ajv);
   return ajv.compile(relaxed);
+}
+
+type Node = Record<string, unknown>;
+
+function isNode(v: unknown): v is Node {
+  return v !== null && typeof v === "object" && !Array.isArray(v);
+}
+
+/**
+ * Put the unknown-key rule back where it picks the branch. `rootfs`,
+ * `initramfs`, `kernel` and `permissions` take one block or a map of named
+ * blocks. The CLI reads the mapping as one block when a key is a field of
+ * that block, and then every other key is an error, except `target-<name>`
+ * and `kernel-<spec>` overrides (`named_or_single_deserializer` in the CLI
+ * config.rs). Without the rule, the one-block branch accepts any mapping, so
+ * named entries are never checked.
+ *
+ * Only the branch site gets the rule. The named entries themselves stay
+ * relaxed, so their unknown keys are warnings from config-lint.ts.
+ */
+function keepSingletonKeys(original: Node, relaxed: unknown): void {
+  const resolve = (node: Node): Node => {
+    const ref = node.$ref;
+    if (typeof ref !== "string" || !ref.startsWith("#/")) return node;
+    let target: unknown = original;
+    for (const part of ref.slice(2).split("/")) {
+      target = isNode(target) ? target[part] : undefined;
+    }
+    return isNode(target) ? target : node;
+  };
+  const visit = (node: unknown): void => {
+    if (Array.isArray(node)) return node.forEach(visit);
+    if (!isNode(node)) return;
+    for (const value of Object.values(node)) visit(value);
+    const branches = node.anyOf ?? node.oneOf;
+    if (!Array.isArray(branches)) return;
+    // The named-entry form: a map with no fields of its own.
+    const named = branches.some(
+      (b) =>
+        isNode(b) &&
+        !resolve(b).properties &&
+        isNode(resolve(b).additionalProperties),
+    );
+    if (!named) return;
+    branches.forEach((b, i) => {
+      if (!isNode(b)) return;
+      const single = resolve(b);
+      if (!isNode(single.properties) || single.additionalProperties !== false) {
+        return;
+      }
+      const fields = Object.fromEntries(
+        Object.keys(single.properties).map((k) => [k, true]),
+      );
+      branches[i] = {
+        ...b,
+        type: "object",
+        properties: { ...fields, ...(b.properties as Node | undefined) },
+        patternProperties: {
+          "^(target|kernel)-": true,
+          ...(b.patternProperties as Node | undefined),
+        },
+        additionalProperties: false,
+      };
+    });
+  };
+  visit(relaxed);
 }
 
 function diskPath(): string {
