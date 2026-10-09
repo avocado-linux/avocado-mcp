@@ -112,6 +112,12 @@ test("every tense of automount is diagnosed", () => {
 // extractLogShape
 // ---------------------------------------------------------------------------
 
+test("a nonzero exit code alone counts as an error", () => {
+  const log = "Deploying runtime 'dev'\nStarting HTTP server\nexit code: 1";
+  assert.equal(extractLogShape(log).hasErrors, true);
+  assert.equal(extractLogShape("Done\nexit code: 0").hasErrors, false);
+});
+
 test("shape of an empty or clean log is inert", () => {
   for (const log of ["", "Build succeeded in 42s"]) {
     const s = extractLogShape(log);
