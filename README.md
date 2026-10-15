@@ -96,6 +96,7 @@ Background knowledge the LLM reads to ground itself before invoking tools:
 - `avocado://skills/package-coverage`
 - `avocado://skills/container-backend`
 - `avocado://skills/feeds-and-lockfile`
+- `avocado://skills/stone`
 
 ### Prompts
 
