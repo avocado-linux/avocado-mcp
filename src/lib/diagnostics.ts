@@ -48,6 +48,141 @@ const STAMP_PATTERNS: Pattern[] = [
   },
 ];
 
+// stone runs in the SDK container, from the BSP hooks (`stone validate` and
+// `stone create` in `avocado build`, `stone provision` in `avocado provision`)
+// and from the CLI (`stone bundle` in `avocado build`). Match text is from
+// stone 2.5.0 `src/manifest.rs` and `src/commands/stone/*.rs`. stone prints
+// each error as `[ERROR] <message>` (`src/log.rs`), maybe with color codes.
+//
+// With --verbose the CLI prints its build script, and comments in that script
+// (avocado-cli `runtime/var_image.rs`) quote two of these messages. Those two
+// patterns are anchored to a line that starts with stone's `[ERROR]`.
+const STONE_ERROR_LINE = String.raw`^(?:\x1b\[[0-9;]*m)?\[ERROR\](?:\x1b\[[0-9;]*m)?[ \t]+`;
+
+const STONE_LAYOUT_DOCS =
+  "https://docs.peridio.com/developer-reference/stone/usage#partitions";
+
+// Messages from stone steps that run in both build and provision.
+const STONE_SHARED_PATTERNS: Pattern[] = [
+  {
+    label: "stone: partition has no size",
+    match: new RegExp(
+      STONE_ERROR_LINE +
+        "partition '[^'\\n]+' omits size; no --partition-size override was supplied",
+      "m",
+    ),
+    cause:
+      "A partition in the manifest has no `size`, and stone got no `--partition-size` for it. The BSP hooks and the CLI pass a size only for the partition called `var`. On imx95-frdm, the provision hook in meta-avocado `scarthgap` passes no size at all, so a provision with the BSP manifest stops here.",
+    suggestion:
+      'If the partition is not `var`, give it `size` and `size_unit` in your forked manifest (`runtimes.<runtime>.stone_manifest`). Keep `var` as the last partition, with `expand: "true"` and no size. Then run `avocado build` and `avocado provision <runtime>`. If the partition is `var` and you use the BSP manifest, the BSP hook is at fault: report it with the target. Read `avocado://skills/stone`. Docs: ' +
+      STONE_LAYOUT_DOCS,
+  },
+  {
+    label: "stone: invalid partition layout",
+    match:
+      /has invalid partition layout: |partition omits size but has no name to match against overrides/,
+    cause:
+      'The partition list of a stone manifest breaks a layout rule. Only the last partition of a device may omit its size, and only with `expand: "true"` and a `name`. `size` and `size_unit` must be set together.',
+    suggestion:
+      "The message names the device and the partition. Fix that partition in your forked manifest (`runtimes.<runtime>.stone_manifest`), then run `avocado build`. A layout change reaches a device only through `avocado provision <runtime>`, which erases the media, so confirm with the user first. Docs: " +
+      STONE_LAYOUT_DOCS,
+  },
+  {
+    label: "stone: unknown key in build_args",
+    match: /Failed to parse manifest JSON '[^'\n]*': unknown field/,
+    cause:
+      "stone rejects an unknown key inside a `build_args` block of the manifest. Other unknown keys are ignored, but these are not.",
+    suggestion:
+      "The message gives the bad key and the keys that are valid there, for example `file_append` where `files_append` is valid. Fix the key in your forked manifest (`runtimes.<runtime>.stone_manifest`), then run `avocado build`. Docs: https://docs.peridio.com/developer-reference/stone/usage#images",
+  },
+  {
+    label: "stone: two boot files with one output path",
+    match: /Conflicting FAT file entries for output '/,
+    cause:
+      "Two entries of a FAT boot image write the same output path from different input files. The CLI appends compiled device-tree overlays as `overlays/<name>.dtbo`, so an overlay with the same file name as a stock overlay of the board hits this.",
+    suggestion:
+      "Give the new entry a different output path. For a device-tree overlay, change its `name` under `extensions.<ext>.device_tree_overlays` so that `overlays/<name>.dtbo` is not a stock file of the board. Then run `avocado build`. Docs: https://docs.peridio.com/developer-reference/device-tree-overlays",
+  },
+  {
+    label: "stone: fwup template not found",
+    match:
+      /fwup template '[^'\n]+' (?:for (?:device|image) '[^'\n]+' )?not found in any input directory/,
+    cause:
+      "The manifest uses an fwup template (for example `rootdisk.conf`) that is in none of the stone input directories.",
+    suggestion:
+      "Put the template at the path the manifest gives, in a directory listed in `runtimes.<runtime>.stone_include_paths`, or fix the template path in your forked manifest. Then run `avocado build` and `avocado provision <runtime>`. Provision uses what the last build staged. Read `avocado://skills/stone`. Docs: https://docs.peridio.com/developer-reference/stone/commands#stone-provision",
+  },
+];
+
+// `stone provision` messages.
+const STONE_PROVISION_PATTERNS: Pattern[] = [
+  {
+    label: "stone: no staged manifest",
+    match: /Manifest file 'manifest\.json' not found in any input directory\./,
+    cause:
+      "`avocado provision` uses the manifest that the last `avocado build` staged for this runtime and target. There is none: the build did not run for this target, it failed, or the build state was cleaned.",
+    suggestion:
+      "Run `avocado build` for the same runtime and target (add `--target <target>` if it is not the default), then run `avocado provision <runtime>` again. Docs: https://docs.peridio.com/developer-reference/avocado-cli/commands#avocado-provision",
+  },
+  {
+    label: "stone: no provision profile selected",
+    match: /No provision profile specified and no default found\./,
+    cause:
+      "No `--profile` was given, and the manifest has no `runtime.provision_default`. grinn-astra-1680-sbc has no default profile.",
+    suggestion:
+      "Run `avocado provision --list` to see the profiles of the target, then run `avocado provision <runtime> --profile <profile>`. Docs: https://docs.peridio.com/developer-reference/avocado-cli/commands#avocado-provision",
+  },
+  {
+    label: "stone: provision profile not found",
+    match: /Provision profile '[^'\n]+' not found\./,
+    cause:
+      "The profile from `--profile` is not in the staged manifest. Each target has its own profiles. A profile that you added to a forked manifest is staged only after `avocado build`.",
+    suggestion:
+      "Run `avocado provision --list` and use one of the listed profiles with `--profile`. `--list` reads only the BSP manifest. If the project sets `runtimes.<runtime>.stone_manifest`, read the profiles in that file, and run `avocado build` after you add one. Docs: https://docs.peridio.com/developer-reference/stone/usage#provision",
+  },
+  {
+    label: "stone: provision script failed",
+    match: /Provision script '[^'\n]+' failed with exit code -?\d+/,
+    cause:
+      "The script of the selected profile stopped with an error. stone only reports the exit code. The script output above this line has the real error.",
+    suggestion:
+      "Read the lines above this one, and check the other diagnoses for this log. On macOS and Windows hosts, the CLI sets `AVOCADO_USB_PASSTHROUGH=0`, so a profile that writes to USB or SD media from the container cannot reach it. Use the profile the board docs give for your host. Fix the cause, then run the same `avocado provision` command again. Docs: https://docs.peridio.com/developer-reference/stone/commands#stone-provision",
+  },
+  {
+    label: "stone: provision inputs not set",
+    match:
+      /The following environment variables are referenced but not set or empty in the caller's environment: /,
+    warningOnly: true,
+    cause:
+      "The profile reads these variables through `provision.envs`, and they are not set. stone uses an empty value and goes on.",
+    suggestion:
+      "If the device needs one of them, for example `AVOCADO_DEVICE_ID`, pass it: `avocado provision <runtime> --env VAR=value`. Otherwise you can ignore this warning. `avocado provision --list` shows the fields of each profile. Docs: https://docs.peridio.com/developer-reference/stone/provision-fields",
+  },
+];
+
+// `stone validate` and `stone create` run only in the build hook.
+const STONE_BUILD_PATTERNS: Pattern[] = [
+  {
+    label: "stone: manifest input files missing",
+    match: new RegExp(
+      STONE_ERROR_LINE + "Validation failed\\. \\d+ file\\(s\\) not found:",
+      "m",
+    ),
+    cause:
+      "`stone validate` found files that the manifest uses but that are in none of the stone input directories. The lines below the error give the device, the image and the file.",
+    suggestion:
+      "Put each file at the path the manifest gives, in a directory listed in `runtimes.<runtime>.stone_include_paths`, or fix the path in your forked manifest. Then run `avocado build`. Read `avocado://skills/stone`. Docs: https://docs.peridio.com/developer-reference/stone/commands#stone-validate",
+  },
+  {
+    label: "stone: create failed",
+    match: /Create failed with the following errors:/,
+    cause:
+      "`stone create` could not copy one or more inputs into the staged directory. Each `- ` line below the error is one input, for example a profile script, a `provision.files` entry or an fwup template.",
+    suggestion:
+      "Put each file in a directory listed in `runtimes.<runtime>.stone_include_paths`, or fix the path in your forked manifest. Then run `avocado build`. Read `avocado://skills/stone`. Docs: https://docs.peridio.com/developer-reference/stone/commands",
+  },
+];
+
 const PROVISION_PATTERNS: Pattern[] = [
   {
     label: "Non-TTY harness: CLI too old",
@@ -125,6 +260,8 @@ const PROVISION_PATTERNS: Pattern[] = [
       "Verify your `avocado.yaml` has `sdk.container_args` including `--privileged`, `-v /dev:/dev`, and `-v /sys:/sys`.",
   },
   ...STAMP_PATTERNS,
+  ...STONE_SHARED_PATTERNS,
+  ...STONE_PROVISION_PATTERNS,
   {
     label: "Qualcomm board not in EDL mode",
     // meta-avocado `stone-provision-ufs.sh` waits for `05c6:9008`. A board
@@ -240,6 +377,8 @@ const BUILD_PATTERNS: Pattern[] = [
       "Free space on the volume backing your project directory and Docker's data volume.",
   },
   ...STAMP_PATTERNS,
+  ...STONE_SHARED_PATTERNS,
+  ...STONE_BUILD_PATTERNS,
   // Feed auth: avocado-cli `src/utils/feeds.rs`. Only the feed code reads
   // `AVOCADO_CONNECT_TOKEN`.
   {
