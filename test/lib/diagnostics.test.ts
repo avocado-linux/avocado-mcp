@@ -833,3 +833,160 @@ test("a bare 'returned N' below 100 is an exit code", () => {
     assert.equal(extractLogShape(log).exitCode, null, log);
   }
 });
+
+// stone messages, copied from stone 2.5.0 `src/manifest.rs` and
+// `src/commands/stone/*.rs` with the format arguments filled in. stone prints
+// each one through `log_error` (`src/log.rs`) as `[ERROR] <message>`.
+const STONE_SHARED_CASES: { label: string; log: string }[] = [
+  {
+    label: "stone: partition has no size",
+    log: "[ERROR] partition 'data' omits size; no --partition-size override was supplied",
+  },
+  {
+    label: "stone: invalid partition layout",
+    log: "[ERROR] Manifest '/opt/src/stone-custom.json' has invalid partition layout: device 'rootdisk' partition 'data' may only omit size if it is the last partition in the device's partition list",
+  },
+  {
+    label: "stone: invalid partition layout",
+    log: "[ERROR] partition omits size but has no name to match against overrides",
+  },
+  {
+    label: "stone: unknown key in build_args",
+    log: "[ERROR] Failed to parse manifest JSON '/opt/src/stone-custom.json': unknown field `file_append`, expected one of `variant`, `files`, `files_append`, `label` at line 42 column 25",
+  },
+  {
+    label: "stone: two boot files with one output path",
+    log: "[ERROR] Conflicting FAT file entries for output 'overlays/spi0-1cs.dtbo': inputs 'bootfiles/overlays/spi0-1cs.dtbo' and 'dtbo/spi0-1cs.dtbo' differ. A custom overlay must not overwrite an existing boot file; give it a distinct output name.",
+  },
+  {
+    label: "stone: fwup template not found",
+    log: "[ERROR] fwup template 'rootdisk.conf' not found in any input directory",
+  },
+  {
+    label: "stone: fwup template not found",
+    log: "  - fwup template 'rootdisk.conf' for device 'rootdisk' not found in any input directory",
+  },
+];
+
+const STONE_PROVISION_CASES: { label: string; log: string }[] = [
+  {
+    label: "stone: no staged manifest",
+    log: "[ERROR] Manifest file 'manifest.json' not found in any input directory.",
+  },
+  {
+    label: "stone: no provision profile selected",
+    log: "[ERROR] No provision profile specified and no default found.",
+  },
+  {
+    label: "stone: provision profile not found",
+    log: "[ERROR] Provision profile 'factory' not found.",
+  },
+  {
+    label: "stone: provision script failed",
+    log: "[ERROR] Provision script 'stone-provision-sd.sh' failed with exit code 1",
+  },
+  {
+    label: "stone: provision inputs not set",
+    log: "[WARNING] The following environment variables are referenced but not set or empty in the caller's environment: AVOCADO_DEVICE_CERT, AVOCADO_DEVICE_ID",
+  },
+];
+
+const STONE_BUILD_CASES: { label: string; log: string }[] = [
+  {
+    label: "stone: manifest input files missing",
+    log: "[ERROR] Validation failed. 1 file(s) not found:\n  device: rootdisk, image: boot\n    bootfiles/config.txt",
+  },
+  {
+    label: "stone: create failed",
+    log: "[ERROR] Create failed with the following errors:\n  - Failed to copy provision profile script 'stone-provision-factory.sh' for profile 'factory': not found in any input directory",
+  },
+];
+
+test("each stone message gets its diagnosis in the logs it can appear in", () => {
+  for (const { label, log } of STONE_SHARED_CASES) {
+    assert.ok(
+      labels(diagnoseBuildLog(log)).includes(label),
+      `${label}: ${log}`,
+    );
+    assert.ok(
+      labels(diagnoseProvisionLog(log)).includes(label),
+      `${label}: ${log}`,
+    );
+  }
+  for (const { label, log } of STONE_PROVISION_CASES) {
+    assert.ok(
+      labels(diagnoseProvisionLog(log)).includes(label),
+      `${label}: ${log}`,
+    );
+  }
+  for (const { label, log } of STONE_BUILD_CASES) {
+    assert.ok(
+      labels(diagnoseBuildLog(log)).includes(label),
+      `${label}: ${log}`,
+    );
+  }
+});
+
+test("only the env warning from stone is warning-only", () => {
+  for (const { label, log } of [
+    ...STONE_SHARED_CASES,
+    ...STONE_PROVISION_CASES,
+  ]) {
+    const d = diagnoseProvisionLog(log).find((x) => x.label === label)!;
+    assert.equal(
+      d.warningOnly ?? false,
+      label === "stone: provision inputs not set",
+      label,
+    );
+  }
+});
+
+test("a colored stone error line still matches", () => {
+  // simply_colored RED and RESET around the tag, as stone prints to a file.
+  assert.deepEqual(
+    labels(
+      diagnoseBuildLog(
+        "\x1b[31m[ERROR]\x1b[0m partition 'data' omits size; no --partition-size override was supplied",
+      ),
+    ),
+    ["stone: partition has no size"],
+  );
+  assert.deepEqual(
+    labels(
+      diagnoseBuildLog(
+        "\x1b[31m[ERROR]\x1b[0m Validation failed. 2 file(s) not found:",
+      ),
+    ),
+    ["stone: manifest input files missing"],
+  );
+});
+
+test("stone messages quoted in the --verbose build script do not match", () => {
+  // Comments in avocado-cli runtime/var_image.rs, printed with the script.
+  const script = [
+    `# ("partition 'var' omits size; no --partition-size override was supplied").`,
+    `#   [ERROR] Validation failed. 1 file(s) not found:`,
+    `#     device: rootdisk, image: var`,
+  ].join("\n");
+  assert.deepEqual(labels(diagnoseBuildLog(script)), []);
+  assert.deepEqual(labels(diagnoseProvisionLog(script)), []);
+});
+
+test("a clean stone run matches no pattern", () => {
+  const clean = [
+    "\x1b[94m[INFO]\x1b[0m Running stone validate.",
+    "  Manifest:          /opt/_avocado/raspberrypi5/sdk/x86_64/stone/stone-raspberrypi5.json",
+    "[SUCCESS] Validated.",
+    "[INFO] Processing storage device 'rootdisk'.",
+    "[SUCCESS] Created.",
+    "[SUCCESS] OS bundle created: /opt/_avocado/raspberrypi5/output/runtimes/dev/os-bundle.aos",
+    "[INFO] Found manifest in '/opt/_avocado/raspberrypi5/output/runtimes/dev/stone'.",
+    "[INFO] Using provision profile 'img'.",
+    "[INFO] Building storage device 'rootdisk' with fwup template 'rootdisk.conf'.",
+    "[SUCCESS] Built fwup image 'rootdisk.img'.",
+    "[SUCCESS] Provision script 'stone-provision-img.sh' completed successfully.",
+    "[SUCCESS] Provision completed.",
+  ].join("\n");
+  assert.deepEqual(labels(diagnoseBuildLog(clean)), []);
+  assert.deepEqual(labels(diagnoseProvisionLog(clean)), []);
+});
