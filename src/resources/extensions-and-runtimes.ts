@@ -43,6 +43,8 @@ An extension's \`overlay:\` field points to a directory of files that get layere
 
 Overlay paths are relative to the project root.
 
+An overlay never reaches the boot partition. Boot firmware files (\`config.txt\`, U-Boot or GRUB config) are stone inputs. Add them with \`stone_include_paths\`. See \`avocado://skills/stone\`.
+
 ## How it maps to the device
 
 At boot, systemd-sysext merges every sysext into \`/usr/\` (and confext into \`/etc/\`) via OverlayFS. The base rootfs is read-only and atomic. The merged extensions are read-only too. They are signed, and they can have dm-verity for integrity. \`/var\` is the only writable partition. See \`avocado://skills/filesystem-model\`.

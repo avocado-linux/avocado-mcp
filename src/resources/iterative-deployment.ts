@@ -245,7 +245,7 @@ If any of these fail, \`avocado deploy\` errors out clearly and the user falls b
 
 - **Device has never been provisioned.** First-time setup needs \`avocado provision\`, not \`deploy\`. There's no OS to update yet.
 - **Device is not on the network.** No network = no fast path. Use UART to diagnose why first (\`avocado://skills/device-debugging\`).
-- **A new partition layout.** An update cannot add partitions. Provision again.
+- **A new partition layout, or another stone manifest change outside the A/B slot images.** An update cannot add or resize partitions, and it does not apply new provision profiles or rewrite the bootloader or U-Boot env images. The deploy succeeds, but these changes do not reach the device. Run \`avocado build\`, then \`avocado provision\`. A file in an A/B slot image (\`update.os_artifacts\` in the manifest, for example the Raspberry Pi \`boot\` partition with \`config.txt\`) does ship in the OS bundle. See \`avocado://skills/stone\`.
 - **New seeded \`/var\` content** (\`var_files\`, \`docker_images\`). Only provision writes it. See \`avocado://skills/filesystem-model\`.
 - **Turning \`var.encrypt\` off** on a device that has already encrypted \`/var\`. That needs a reprovision. Turning it on works through an update, with an ordering rule. The avocadoctl already on the device applies the update, so ship the current avocadoctl in a plain OS update first. Then turn on \`var.encrypt\` in the next update.
 - **A runtime with extension \`image.verity\`.** Deploy refuses it (see above).

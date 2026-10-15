@@ -22,6 +22,8 @@ If you internalize one thing about Avocado before touching an extension, make it
 
 The rootfs image is signed and (optionally) dm-verity'd. You cannot \`echo > /usr/foo\` and have it stick. Trying to do so at runtime fails with \`Read-only filesystem\`.
 
+The stone manifest of the target sets the partition layout. A new partition or a bigger rootfs partition is a stone change, and it takes effect only at the next provision. Read \`avocado://skills/stone\`.
+
 ## What goes where
 
 | Kind of data | Lives in | How it gets there |

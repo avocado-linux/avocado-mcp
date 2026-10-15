@@ -1008,6 +1008,10 @@ test("/provision-device rechecks the disk for the target and passes the runtime"
     text,
     /call `get-provisioning-steps` with the chosen target and `runtime: "prod"`/,
   );
+  assert.match(
+    text,
+    /different flash target \(eMMC, NVMe, USB\) or a custom flash step.*`avocado:\/\/skills\/stone`/,
+  );
 });
 
 test("/provision-device keeps the host OS check for QEMU", async () => {
