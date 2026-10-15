@@ -658,6 +658,28 @@ test("validate-yaml reports ignored keys as warnings, not errors", async () => {
   ]);
 });
 
+test("validate-yaml checks the stone_manifest file in projectDir", async () => {
+  const { client } = await connect();
+  const dir = mkdtempSync(join(tmpdir(), "avocado-mcp-validate-"));
+  try {
+    const res = await client.callTool({
+      name: "validate-yaml",
+      arguments: {
+        yaml: "runtimes:\n  dev:\n    stone_manifest: stone-custom.json\n",
+        projectDir: dir,
+      },
+    });
+    const s = res.structuredContent as { ok: boolean; warnings: string[] };
+    assert.equal(s.ok, true);
+    assert.ok(
+      s.warnings.some((w) => w.includes("does not exist")),
+      JSON.stringify(s.warnings),
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("add-extension does not write version for a source extension", async () => {
   const { client } = await connect();
   const res = await client.callTool({

@@ -308,9 +308,15 @@ export function registerProjectTools(
     {
       title: "Validate an avocado.yaml",
       description:
-        "Validate an avocado.yaml against the JSON Schema the avocado CLI ships. Returns pass/fail, every schema error with its path, and warnings. Warnings match the CLI: an unknown key is ignored (with a 'did you mean' hint), and some keys are deprecated or have no effect. Warnings do not fail validation, but fix them. Use this before recommending `avocado build` to the user. It catches structural problems early.",
+        "Validate an avocado.yaml against the JSON Schema the avocado CLI ships. Returns pass/fail, every schema error with its path, and warnings. Warnings match the CLI: an unknown key is ignored (with a 'did you mean' hint), and some keys are deprecated or have no effect. Warnings also cover `runtimes.<r>.stone_manifest`: it must be a relative path, and with `projectDir` the file must exist. Warnings do not fail validation, but fix them. Use this before recommending `avocado build` to the user. It catches structural problems early.",
       inputSchema: {
         yaml: z.string().describe("Full avocado.yaml content as a string."),
+        projectDir: z
+          .string()
+          .optional()
+          .describe(
+            "Absolute path to the project directory. When given, the tool checks that the `stone_manifest` file of each runtime exists.",
+          ),
       },
       outputSchema: {
         ok: z.boolean(),
@@ -325,7 +331,7 @@ export function registerProjectTools(
         warnings: z
           .array(z.string())
           .describe(
-            "Keys the CLI ignores or deprecates. The CLI prints a warning for each and keeps going.",
+            "Keys the CLI ignores or deprecates (the CLI prints a warning for each and keeps going), and stone manifest checks.",
           ),
         schemaSource: z.string(),
       },
@@ -337,8 +343,8 @@ export function registerProjectTools(
         openWorldHint: true,
       },
     },
-    async ({ yaml }) => {
-      const result = await validateAvocadoYaml(yaml);
+    async ({ yaml, projectDir }) => {
+      const result = await validateAvocadoYaml(yaml, projectDir);
       let out = `# validate-yaml\n\n**Schema:** ${result.schemaSource}\n\n`;
       if (result.ok) {
         out += `✅ Valid.\n`;
@@ -863,10 +869,10 @@ function renderMutationResult(
   return out;
 }
 
-/** The CLI's ignored-key warnings, as a list the model can act on. */
+/** The validation warnings, as a list the model can act on. */
 function renderWarnings(warnings: string[]): string {
   if (warnings.length === 0) return "";
-  let out = `\n⚠️  ${warnings.length} warning(s). The CLI prints these and keeps going:\n\n`;
+  let out = `\n⚠️  ${warnings.length} warning(s). They do not fail validation:\n\n`;
   for (const w of warnings) out += `- ${w}\n`;
   return out + `\n`;
 }
