@@ -1,13 +1,28 @@
 export const URI = "avocado://skills/stone";
 export const NAME = "stone";
 export const DESCRIPTION =
-  "How Avocado uses stone to make disk images, the OTA bundle and a provisioned device: the manifest sections, what `avocado build` and `avocado provision` run, where the manifest comes from, how to read one, provision profiles and `--env`, and full recipes to replace boot files, fork the manifest, add a profile or change the partition layout. Read this when the user asks what gets flashed, wants a custom profile or partition, or hits a stone error.";
+  "Read this when the user wants to change partitions or partition sizes, make the rootfs or the image bigger, add a data partition, flash to eMMC, NVMe or USB in place of SD, edit boot files (config.txt, U-Boot env, GRUB config), put device certs or IDs on the device at flash time, set up factory provisioning, or asks what gets written to the media. Also read it for a stone error in a build or provision log. Avocado uses stone (a JSON manifest per target) for the disk layout, the boot files, the flash methods (provision profiles) and the OTA bundle. The skill has recipes to replace boot files, fork the manifest, add a profile and change the layout. Kernel arguments, device-tree overlays, rootfs files and more /var space are not stone changes. The skill gives the avocado.yaml key for each.";
 
 export const CONTENT = `# stone: manifests, profiles and disk layout
 
 stone turns a JSON manifest into disk images, the \`.aos\` OS bundle for OTA,
 and a provisioned device. The CLI never runs stone on the host. stone runs in
 the SDK container, through hook scripts that the BSP installs.
+
+## What do you want to do?
+
+| The user wants to | stone? | Do this |
+|---|---|---|
+| Make the rootfs bigger, add a data partition, change partition sizes | Yes | Fork the manifest (recipe D), then provision. A deploy cannot do it. |
+| Edit \`config.txt\`, turn on the UART in the firmware, change the U-Boot env or GRUB config, add boot firmware files | Yes | \`stone_include_paths\` (recipe A) |
+| Flash to eMMC, NVMe or USB in place of SD, or flash over USB | Usually not | Use a profile the target has: \`avocado provision --list\`, then \`--profile <profile>\`. Only a new flashing method needs a custom profile (recipe C). |
+| Put a device cert or ID on the device at flash time, factory provisioning, flash many devices | Yes | \`--env\` values for the profile fields, or a custom profile (recipe C) |
+| Know what gets written to the media, or why the image has this size | Yes | Read the manifest ("Read a manifest by hand") |
+| Turn off A/B updates or change the rollback | Yes, advanced | The \`update\` section of a forked manifest. This is advanced. Tell the user to contact Peridio first. |
+| Add kernel arguments | No | \`kernel.cmdline_extra\` in avocado.yaml |
+| Add a device-tree overlay | No | \`device_tree_overlays\` on an extension |
+| Get more space in /var | No | \`var\` is the last partition. The \`avocado-ext-dev\` extension grows it to fill the disk at boot. |
+| Add files to the root filesystem | No | An extension \`overlay\` |
 
 ## The manifest
 
@@ -146,7 +161,10 @@ the order of the runtime \`extensions:\` list.
 Do not put a file called \`manifest.json\` in an include path. Provision would
 use it in place of the staged manifest. Do not use a space or a colon in a path.
 
-Then run \`avocado build\` and \`avocado provision <runtime>\`.
+Then run \`avocado build\` and \`avocado provision <runtime>\`. A file in an A/B
+slot image (\`update.os_artifacts\`, for example \`boot\` on Raspberry Pi and
+i.MX) is also in the OS bundle, so \`avocado deploy\` ships it after the build.
+A file in another image, such as the U-Boot env, needs a provision.
 
 ### B. Fork the manifest
 
@@ -221,7 +239,8 @@ OTA update never repartition. Run \`avocado build\`, then
 
 - After any change to a manifest or an include path, run \`avocado build\`, then
   \`avocado provision\`. Provision reuses the staged manifest. Stone inputs are
-  not in the build stamp, so the CLI does not see the old build as stale.
+  not in the build stamp, so the CLI does not see the old build as stale. A
+  file in an A/B slot image can also go out with \`avocado deploy\` (recipe A).
 - A partition layout change needs a new provision.
 - \`fields.required\` and \`requires: usb\` are not enforced.
 - stone rejects an unknown key inside \`build_args\`. It ignores other unknown
