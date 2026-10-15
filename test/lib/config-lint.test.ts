@@ -67,6 +67,28 @@ test("flags unknown keys with suggestions", () => {
   );
 });
 
+test("points a stone-like unknown key to the stone skill", () => {
+  const out = warnings(
+    "provision:\n  profiles:\n    emmc:\n      script: flash-emmc.sh\nruntimes:\n  dev:\n    partitions: []\n    rootfs_size: 1G\n    extentions: [app]\n",
+  );
+  const stone = out.filter((w) => w.includes("avocado://skills/stone"));
+  assert.deepEqual(
+    stone.map((w) => w.match(/'([^']+)'/)![1]),
+    [
+      "provision.profiles.emmc",
+      "runtimes.dev.partitions",
+      "runtimes.dev.rootfs_size",
+    ],
+  );
+  // An ordinary typo gets no stone hint.
+  assert.ok(
+    out.includes(
+      "unknown key 'runtimes.dev.extentions' is ignored; did you mean 'extensions'?",
+    ),
+    JSON.stringify(out),
+  );
+});
+
 test("names the replacement for renamed keys", () => {
   assert.deepEqual(
     warnings("ext: {}\nextensions:\n  app: { sysext: true }\n"),
