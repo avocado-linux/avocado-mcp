@@ -16,6 +16,7 @@ import {
   unavailableText,
 } from "../lib/hardware-data.js";
 import { isSafeSegment } from "../lib/repo-client.js";
+import { stoneManifests } from "../lib/yaml-ops.js";
 
 const execFileP = promisify(execFile);
 
@@ -147,6 +148,29 @@ export function projectTarget(configPath: string): string | undefined {
 }
 
 /**
+ * A note for a project that sets `stone_manifest`, for `runtime` or, without
+ * one, for any runtime. `provision --list` reads only the BSP manifest
+ * (avocado-cli `commands/profiles.rs`), and so do the docs.
+ */
+export function customManifestNote(
+  configPath: string,
+  runtime?: string,
+): string {
+  let found: { key: string }[];
+  try {
+    found = stoneManifests(
+      parseYaml(readFileSync(configPath, "utf8")),
+      runtime,
+    );
+  } catch {
+    return "";
+  }
+  if (found.length === 0) return "";
+  const keys = found.map(({ key }) => `\`${key}\``).join(", ");
+  return `**Custom stone manifest:** avocado.yaml sets ${keys}. The profiles below come from the BSP manifest of the target, not from that file. \`avocado provision --list\` does not read \`stone_manifest\`. Read the profiles in the file itself, and run \`avocado build\` before you provision with one of them. See \`avocado://skills/stone\`.\n\n`;
+}
+
+/**
  * The docs profiles for a target. `explicitTarget` is the target the caller
  * gave, which the printed commands then name.
  */
@@ -224,7 +248,7 @@ export function registerHardwareTools(server: McpServer): void {
     {
       title: "List the provisioning profiles of an installed project",
       description:
-        "Run `avocado provision --list --output json` in a project to list the provisioning profiles the installed SDK has for the target, the default profile, and the `--env` settings each profile takes. The project must be installed (`avocado install`). Before install, or if the CLI fails, the tool returns the profiles from the docs data instead. Runs the CLI locally, so it needs the workstation execution channel.",
+        "Run `avocado provision --list --output json` in a project to list the provisioning profiles the installed SDK has for the target, the default profile, and the `--env` settings each profile takes. The project must be installed (`avocado install`). Before install, or if the CLI fails, the tool returns the profiles from the docs data instead. Both sources show the BSP manifest of the target. When avocado.yaml sets `stone_manifest`, the output says so. Runs the CLI locally, so it needs the workstation execution channel.",
       inputSchema: {
         projectDir: z
           .string()
@@ -316,6 +340,7 @@ export function registerHardwareTools(server: McpServer): void {
       if (explicitTarget) args.push(`--target=${explicitTarget}`);
 
       let out = `# list-provision-profiles\n\n`;
+      out += customManifestNote(configPath, runtime?.trim() || undefined);
       let failure: string;
       try {
         const { stdout } = await execFileP(

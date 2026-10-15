@@ -1071,6 +1071,46 @@ test("list-provision-profiles commands name an explicit target", async () => {
   }
 });
 
+test("list-provision-profiles says when the project sets its own stone manifest", async () => {
+  const realBinary = process.env.AVOCADO_BINARY;
+  const dir = mkdtempSync(join(tmpdir(), "avocado-mcp-manifest-"));
+  writeFileSync(
+    join(dir, "avocado.yaml"),
+    "default_target: rzv2n-sr-som\nruntimes:\n  dev:\n    stone_manifest: stone-rzv2n-sr-som.json\n  prod: {}\n",
+  );
+  // A fake CLI for an installed project. It lists the BSP profiles.
+  const bin = join(dir, "fake-avocado");
+  writeFileSync(
+    bin,
+    `#!/bin/sh\necho '{"available":true,"target":"rzv2n-sr-som","default":"sd","profiles":[{"name":"sd"}]}'\n`,
+  );
+  chmodSync(bin, 0o755);
+  process.env.AVOCADO_BINARY = bin;
+  try {
+    const { client } = await connect();
+    const call = async (args: Record<string, string>) => {
+      const res = await client.callTool({
+        name: "list-provision-profiles",
+        arguments: { projectDir: dir, ...args },
+      });
+      return (res.content as { text: string }[])[0].text;
+    };
+    const note =
+      /Custom stone manifest:.*`runtimes\.dev\.stone_manifest`.*come from the BSP manifest/;
+    assert.match(await call({ runtime: "dev" }), note);
+    // No runtime given: any runtime that sets one counts.
+    assert.match(await call({}), note);
+    assert.doesNotMatch(
+      await call({ runtime: "prod" }),
+      /Custom stone manifest/,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    if (realBinary === undefined) delete process.env.AVOCADO_BINARY;
+    else process.env.AVOCADO_BINARY = realBinary;
+  }
+});
+
 test("get-provisioning-steps names the target in a project", async () => {
   const restore = serveHardwareFixture();
   class StubRepo extends RepoClient {
