@@ -7,7 +7,8 @@
  * Document API rather than parse + stringify.
  */
 
-import { readFileSync } from "fs";
+import { existsSync, readFileSync } from "fs";
+import * as path from "path";
 import {
   parseDocument,
   stringify,
@@ -24,13 +25,18 @@ export interface YamlValidationResult {
   /** True when there are no errors. Warnings do not fail validation. */
   ok: boolean;
   errors: { instancePath: string; message: string }[];
-  /** Keys the CLI ignores or deprecates. The CLI warns and keeps going. */
+  /**
+   * Keys the CLI ignores or deprecates (the CLI warns and keeps going), and
+   * the stone checks of `stoneManifestWarnings`.
+   */
   warnings: string[];
   schemaSource: string;
 }
 
 export async function validateAvocadoYaml(
   yamlText: string,
+  /** The project directory. When set, the stone manifest file must exist. */
+  projectDir?: string,
 ): Promise<YamlValidationResult> {
   const { schema, source, validate } = await loadSchema();
 
@@ -84,9 +90,96 @@ export async function validateAvocadoYaml(
   return {
     ok: !!ok,
     errors,
-    warnings: ignoredKeys(schema, parsed),
+    warnings: [
+      ...ignoredKeys(schema, parsed),
+      ...stoneManifestWarnings(parsed, projectDir),
+    ],
     schemaSource: source,
   };
+}
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return v !== null && typeof v === "object" && !Array.isArray(v);
+}
+
+/**
+ * Every `stone_manifest` in the runtimes, with its key path. A target
+ * override (`runtimes.<r>.<target>:`) can set one too. Pass `runtime` to read
+ * only that runtime.
+ */
+export function stoneManifests(
+  doc: unknown,
+  runtime?: string,
+): { key: string; value: unknown }[] {
+  const out: { key: string; value: unknown }[] = [];
+  const runtimes = isRecord(doc) ? doc.runtimes : undefined;
+  if (!isRecord(runtimes)) return out;
+  for (const [name, rt] of Object.entries(runtimes)) {
+    if ((runtime !== undefined && name !== runtime) || !isRecord(rt)) continue;
+    if (Object.hasOwn(rt, "stone_manifest")) {
+      out.push({
+        key: `runtimes.${name}.stone_manifest`,
+        value: rt.stone_manifest,
+      });
+    }
+    for (const [k, sub] of Object.entries(rt)) {
+      if (isRecord(sub) && Object.hasOwn(sub, "stone_manifest")) {
+        out.push({
+          key: `runtimes.${name}.${k}.stone_manifest`,
+          value: sub.stone_manifest,
+        });
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Checks for `runtimes.<r>.stone_manifest`. The CLI passes it to the SDK
+ * container as `/opt/src/<value>` (avocado-cli `get_stone_manifest_for_runtime`),
+ * so it must be relative to the source directory. `provision --list` reads
+ * only the BSP manifest (avocado-cli `commands/profiles.rs`).
+ */
+export function stoneManifestWarnings(
+  doc: unknown,
+  projectDir?: string,
+): string[] {
+  const found = stoneManifests(doc);
+  if (found.length === 0) return [];
+  const warnings: string[] = [];
+  const srcDir = isRecord(doc) ? doc.src_dir : undefined;
+  for (const { key, value } of found) {
+    if (typeof value !== "string") continue;
+    if (path.posix.isAbsolute(value) || path.win32.isAbsolute(value)) {
+      warnings.push(
+        `'${key}' is an absolute path. The CLI puts '/opt/src/' in front of it, so the build cannot find the manifest. Use a path relative to the project directory.`,
+      );
+      continue;
+    }
+    if (path.posix.normalize(value).startsWith("../")) {
+      warnings.push(
+        `'${key}' points outside the project directory. The SDK container sees only the project directory (at '/opt/src'), so the build cannot find the manifest. Copy the manifest into the project.`,
+      );
+      continue;
+    }
+    // A template is resolved by the CLI, so the file name is not known here.
+    if (!projectDir || value.includes("{{")) continue;
+    const base =
+      typeof srcDir === "string" && srcDir && !srcDir.includes("{{")
+        ? path.resolve(projectDir, srcDir)
+        : path.resolve(projectDir);
+    const file = path.resolve(base, value);
+    if (!existsSync(file)) {
+      warnings.push(
+        `'${key}' is '${value}', but ${file} does not exist. The build fails until the file is there.`,
+      );
+    }
+  }
+  const keys = found.map(({ key }) => `'${key}'`).join(", ");
+  warnings.push(
+    `A custom stone manifest is set (${keys}). 'avocado provision --list', the list-provision-profiles tool and the docs board data show the profiles of the BSP manifest, not of this file. Read the profiles in the file itself.`,
+  );
+  return warnings;
 }
 
 const DEFAULT_TEMPLATE = readFileSync(

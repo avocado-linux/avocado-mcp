@@ -1,6 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 import { parse } from "yaml";
 import {
   addExtension,
@@ -9,6 +17,7 @@ import {
   listExtensions,
   buildStarterYaml,
   validateAvocadoYaml,
+  stoneManifests,
 } from "../../src/lib/yaml-ops.js";
 
 // Validate against the vendored schema: no network in tests.
@@ -401,4 +410,82 @@ test("add-extension writes git and path sources and depends_on", async () => {
   const res = await validateAvocadoYaml(y);
   assert.equal(res.ok, true, JSON.stringify(res.errors));
   assert.deepEqual(res.warnings, []);
+});
+
+test("stone_manifest must be a relative path inside the project", async () => {
+  for (const [value, re] of [
+    ["/home/me/stone.json", /is an absolute path/],
+    ["../shared/stone.json", /points outside the project directory/],
+  ] as const) {
+    const res = await validateAvocadoYaml(
+      `runtimes:\n  dev:\n    stone_manifest: ${value}\n`,
+    );
+    assert.equal(res.ok, true);
+    assert.ok(
+      res.warnings.some((w) => re.test(w)),
+      JSON.stringify(res.warnings),
+    );
+  }
+});
+
+test("with a projectDir, a missing stone_manifest file is a warning", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "avocado-mcp-stone-"));
+  try {
+    mkdirSync(join(dir, "src"));
+    writeFileSync(join(dir, "stone-a.json"), "{}");
+    writeFileSync(join(dir, "src", "stone-b.json"), "{}");
+    const missing = (yaml: string, projectDir?: string) =>
+      validateAvocadoYaml(yaml, projectDir).then((r) =>
+        r.warnings.filter((w) => w.includes("does not exist")),
+      );
+    const yaml =
+      "runtimes:\n  dev:\n    stone_manifest: stone-a.json\n  prod:\n    stone_manifest: stone-b.json\n";
+    const out = await missing(yaml, dir);
+    assert.equal(out.length, 1, JSON.stringify(out));
+    assert.match(
+      out[0]!,
+      /'runtimes\.prod\.stone_manifest' is 'stone-b\.json'/,
+    );
+    // Paths are relative to src_dir when it is set.
+    assert.deepEqual(
+      await missing("src_dir: src\n" + yaml.replace("stone-a", "stone-b"), dir),
+      [],
+    );
+    // Without a projectDir, the file is not checked.
+    assert.deepEqual(await missing(yaml), []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a custom stone manifest adds a note about the profile tools", async () => {
+  const note = (yaml: string) =>
+    validateAvocadoYaml(yaml).then((r) =>
+      r.warnings.filter((w) => w.includes("custom stone manifest")),
+    );
+  assert.deepEqual(await note("runtimes:\n  dev:\n    packages: {}\n"), []);
+  const [one] = await note(
+    "runtimes:\n  dev:\n    raspberrypi5:\n      stone_manifest: stone-rpi5.json\n",
+  );
+  assert.match(one!, /'runtimes\.dev\.raspberrypi5\.stone_manifest'/);
+  assert.match(one!, /avocado provision --list/);
+  assert.match(one!, /list-provision-profiles/);
+});
+
+test("stoneManifests reads one runtime or all of them", () => {
+  const doc = parse(
+    "runtimes:\n  dev:\n    stone_manifest: a.json\n  prod:\n    target-imx93-frdm:\n      stone_manifest: b.json\n",
+  );
+  assert.deepEqual(
+    stoneManifests(doc).map((m) => m.key),
+    [
+      "runtimes.dev.stone_manifest",
+      "runtimes.prod.target-imx93-frdm.stone_manifest",
+    ],
+  );
+  assert.deepEqual(
+    stoneManifests(doc, "prod").map((m) => m.value),
+    ["b.json"],
+  );
+  assert.deepEqual(stoneManifests(doc, "test"), []);
 });
