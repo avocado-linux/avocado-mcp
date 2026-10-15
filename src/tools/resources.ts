@@ -17,6 +17,7 @@ import * as upstreamSources from "../resources/upstream-sources.js";
 import * as packageCoverage from "../resources/package-coverage.js";
 import * as containerBackend from "../resources/container-backend.js";
 import * as feedsAndLockfile from "../resources/feeds-and-lockfile.js";
+import * as stone from "../resources/stone.js";
 
 interface Skill {
   uri: string;
@@ -44,6 +45,7 @@ const SKILLS: Skill[] = [
   toSkill(packageCoverage),
   toSkill(containerBackend),
   toSkill(feedsAndLockfile),
+  toSkill(stone),
 ];
 
 function toSkill(mod: {
