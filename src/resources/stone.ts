@@ -75,9 +75,20 @@ avocado sdk run -E bash -c 'stone describe-manifest -m /opt/_avocado/<target>/ou
 avocado sdk run -E bash -c 'cat "$AVOCADO_SDK_PREFIX/stone/stone-<target>.json"'
 \`\`\`
 
-\`describe-manifest\` prints the devices, images, partition sizes and profiles.
-It fails on a unit it does not know, for example \`sectors\` in the
-orangepi-5-plus manifest. Read the raw JSON for that board.
+\`describe-manifest\` prints the devices, images and partition sizes. It does
+not print the provision profiles. It fails on a unit it does not know, for
+example \`sectors\` in the orangepi-5-plus manifest. Read the raw JSON for that
+board.
+
+To read the profiles and the default profile, use \`jq\` in the SDK container.
+The SDK installs \`jq\` with the BSP hooks.
+
+\`\`\`bash
+# The staged manifest (run avocado build first)
+avocado sdk run -E bash -c 'jq "{provision_default: .runtime.provision_default, profiles: .provision.profiles}" /opt/_avocado/<target>/output/runtimes/<runtime>/stone/manifest.json'
+# A forked manifest (the project directory, or src_dir, is /opt/src)
+avocado sdk run -E bash -c 'jq "{provision_default: .runtime.provision_default, profiles: .provision.profiles}" /opt/src/<stone_manifest>'
+\`\`\`
 
 ## Profiles and inputs
 
