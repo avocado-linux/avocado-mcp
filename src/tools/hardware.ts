@@ -13,6 +13,7 @@ import {
   provisionCommand,
   isSafeProfile,
   skippedProfileText,
+  STONE_SKILL_HINT,
   unavailableText,
 } from "../lib/hardware-data.js";
 import { isSafeSegment } from "../lib/repo-client.js";
@@ -359,7 +360,10 @@ export function registerHardwareTools(server: McpServer): void {
             content: [
               {
                 type: "text",
-                text: out + renderProvisionList(list, rt, explicitTarget),
+                text:
+                  out +
+                  renderProvisionList(list, rt, explicitTarget) +
+                  `\n${STONE_SKILL_HINT}`,
               },
             ],
           };
@@ -383,6 +387,7 @@ export function registerHardwareTools(server: McpServer): void {
         board?.trim() || projectBoard(configPath, rt),
         explicitTarget,
       );
+      out += `\n${STONE_SKILL_HINT}`;
       return { content: [{ type: "text", text: out }] };
     },
   );

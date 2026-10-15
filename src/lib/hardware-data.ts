@@ -760,6 +760,10 @@ export function resolvedText(info: TargetInfo): string {
 }
 
 /** The full `get-target-info` report. Pure, so tests need no network. */
+/** Where to go when the BSP profiles and layout are not what the user wants. */
+export const STONE_SKILL_HINT =
+  "For a different flash target, a custom flash step or a different partition layout, read `avocado://skills/stone`.\n";
+
 export function targetInfoText(
   data: HardwareData | null,
   target: string,
@@ -792,5 +796,5 @@ export function targetInfoText(
   out += streamsSection(info);
   out += boardsSection(info);
   out += provisioningText(info, runtime);
-  return out;
+  return out + STONE_SKILL_HINT;
 }

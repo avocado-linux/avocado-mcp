@@ -29,6 +29,7 @@ import {
   provisioningText,
   provisionCommand,
   runProvisionCommands,
+  STONE_SKILL_HINT,
   targetFlag,
   unavailableText,
   unknownTargetText,
@@ -350,6 +351,7 @@ export function registerDiagnosticsTools(
             cmdTarget,
           );
         }
+        out += `${STONE_SKILL_HINT}\n`;
       }
       out += feed.describe();
       return { content: [{ type: "text", text: out }] };
