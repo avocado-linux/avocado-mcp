@@ -1104,10 +1104,9 @@ test("list-provision-profiles says when the project sets its own stone manifest"
     assert.match(await call({ runtime: "dev" }), note);
     // No runtime given: any runtime that sets one counts.
     assert.match(await call({}), note);
-    assert.doesNotMatch(
-      await call({ runtime: "prod" }),
-      /Custom stone manifest/,
-    );
+    const prod = await call({ runtime: "prod" });
+    assert.doesNotMatch(prod, /Custom stone manifest/);
+    assert.match(prod, /different flash target.*`avocado:\/\/skills\/stone`/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
     if (realBinary === undefined) delete process.env.AVOCADO_BINARY;
@@ -1144,6 +1143,7 @@ test("get-provisioning-steps names the target in a project", async () => {
       /AVOCADO_NONINTERACTIVE=1 avocado provision dev --target rubikpi3 --profile ufs --no-tui/,
     );
     assert.doesNotMatch(text, /avocado provision dev --profile/);
+    assert.match(text, /different flash target.*`avocado:\/\/skills\/stone`/);
     assert.doesNotMatch(await call({}), /--target/);
   } finally {
     restore();

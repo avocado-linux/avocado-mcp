@@ -37,6 +37,7 @@ test("Jetson Orin Nano: tegraflash, macOS supported, FC REC jumper, 16 GB", () =
     /https:\/\/docs\.peridio\.com\/hardware\/nvidia\/jetson-orin-nano-developer-kit\n/,
   );
   assert.match(out, /2024: supported, 2026: in-progress/);
+  assert.match(out, /different flash target.*`avocado:\/\/skills\/stone`/);
 });
 
 test("the FC REC recovery strap is not listed as serial wiring", () => {
