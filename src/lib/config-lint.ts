@@ -46,6 +46,32 @@ function own<T>(
   return obj && Object.hasOwn(obj, key) ? obj[key] : undefined;
 }
 
+// Keys a user puts in avocado.yaml when they want a stone manifest change.
+const STONE_KEYS = new Set([
+  "partitions",
+  "partition",
+  "rootfs_size",
+  "image_size",
+  "disk_size",
+  "storage_devices",
+]);
+
+/**
+ * A pointer to the stone skill for an unknown key that looks like a stone
+ * intent. `provision` is the old key for `provision_profiles`, so a stone
+ * `provision.profiles.<p>` block warns on `<p>`.
+ */
+function stoneHint(path: string[]): string {
+  const stone =
+    STONE_KEYS.has(path[path.length - 1] ?? "") ||
+    (path.length === 3 &&
+      (path[0] === "provision" || path[0] === "provision_profiles") &&
+      path[1] === "profiles");
+  return stone
+    ? ". The partition layout and the flash steps are in the stone manifest, not in avocado.yaml. Read `avocado://skills/stone`"
+    : "";
+}
+
 /** Describe every key in `doc` that the CLI ignores, one message per key. */
 export function ignoredKeys(root: object, doc: unknown): string[] {
   const walker = new Walker(root as Spec, doc);
@@ -177,7 +203,9 @@ class Walker {
       ) {
         const s = suggest(key, Object.keys(props ?? {}));
         const hint = s ? `; did you mean '${s}'?` : "";
-        this.warnings.push(`unknown key '${path.join(".")}' is ignored${hint}`);
+        this.warnings.push(
+          `unknown key '${path.join(".")}' is ignored${hint}${stoneHint(path)}`,
+        );
       }
       path.pop();
     }
