@@ -451,6 +451,16 @@ test("with a projectDir, a missing stone_manifest file is a warning", async () =
       await missing("src_dir: src\n" + yaml.replace("stone-a", "stone-b"), dir),
       [],
     );
+    // A templated src_dir is not resolved here, so the file is not checked.
+    // With SOURCE_ROOT=src, the CLI finds src/stone.json.
+    writeFileSync(join(dir, "src", "stone.json"), "{}");
+    assert.deepEqual(
+      await missing(
+        'src_dir: "{{ env.SOURCE_ROOT }}"\nruntimes:\n  dev:\n    stone_manifest: stone.json\n',
+        dir,
+      ),
+      [],
+    );
     // Without a projectDir, the file is not checked.
     assert.deepEqual(await missing(yaml), []);
   } finally {

@@ -162,10 +162,12 @@ export function stoneManifestWarnings(
       );
       continue;
     }
-    // A template is resolved by the CLI, so the file name is not known here.
+    // The CLI resolves a template, so the file path is not known here. This
+    // applies to a templated `src_dir` too.
     if (!projectDir || value.includes("{{")) continue;
+    if (typeof srcDir === "string" && srcDir.includes("{{")) continue;
     const base =
-      typeof srcDir === "string" && srcDir && !srcDir.includes("{{")
+      typeof srcDir === "string" && srcDir
         ? path.resolve(projectDir, srcDir)
         : path.resolve(projectDir);
     const file = path.resolve(base, value);
