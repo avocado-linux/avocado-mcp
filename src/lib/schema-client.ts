@@ -107,6 +107,11 @@ export async function validateWithCli(yaml: string): Promise<CliValidation> {
       timeout: TIMEOUT_MS,
       maxBuffer: MAX_BUFFER,
     });
+    // A CLI that exits before it reads stdin (an old CLI rejects the
+    // arguments at once) makes this write fail with EPIPE. Without a
+    // handler that error is uncaught and stops the server. The exit code and
+    // stderr report the real problem.
+    run.child.stdin?.on("error", () => {});
     run.child.stdin?.end(yaml);
     ({ stdout } = await run);
   } catch (error) {

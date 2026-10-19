@@ -66,3 +66,14 @@ test("a CLI error with no report is an error", async () => {
   process.env.AVOCADO_BINARY = fakeCli("echo boom >&2\nexit 1");
   await assert.rejects(validateWithCli(""), /config validate` failed: boom/);
 });
+
+test("a CLI that exits before it reads the YAML does not stop the server", async () => {
+  // More than a pipe buffer, so the write fails with EPIPE every time.
+  process.env.AVOCADO_BINARY = fakeCli(
+    `echo "error: unexpected argument '-c' found" >&2\nexit 2`,
+  );
+  await assert.rejects(
+    validateWithCli("a: 1\n".repeat(200_000)),
+    /Run `avocado upgrade`/,
+  );
+});
