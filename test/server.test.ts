@@ -29,10 +29,10 @@ import { registerPrompts } from "../src/tools/prompts.js";
 import { clearHardwareDataCache } from "../src/lib/hardware-data.js";
 import { clearSelectableCache } from "../src/lib/hardware-support.js";
 import { TARGETS, DEVICES } from "./lib/hardware-fixture.js";
-import { schemaCli } from "./lib/schema-fixture.js";
+import { fakeAvocado } from "./lib/fake-cli.js";
 
-// Validate against the fixture schema, printed by a fake CLI.
-process.env.AVOCADO_BINARY = schemaCli();
+// A fake CLI for the schema and validation. The CLI tests what it reports.
+process.env.AVOCADO_BINARY = fakeAvocado();
 
 async function connect(repoClient = new RepoClient()) {
   const server = new McpServer({ name: "avocado-os", version: "test" });
@@ -568,7 +568,7 @@ test("init-project from scratch tells the model to run avocado init", async () =
     assert.doesNotMatch(noCli, /avocado init --target/);
     assert.match(noCli, /```yaml\n# yaml-language-server/);
     assert.match(noCli, /default_target_board: mic-712-ox-16gb/);
-    assert.match(noCli, /validates against the schema/);
+    assert.match(noCli, /passes `avocado config validate`/);
 
     const noCliExtra = await call({
       cliAvailable: false,
@@ -646,17 +646,40 @@ test("an exact match still lists the feeds the MCP could not read", async () => 
   assert.match(text, /Not checked[\s\S]*`acme` for `qemuarm64`/);
 });
 
-test("validate-yaml reports ignored keys as warnings, not errors", async () => {
+test("validate-yaml shows the errors and warnings the CLI reports", async () => {
   const { client } = await connect();
-  const res = await client.callTool({
-    name: "validate-yaml",
-    arguments: { yaml: "runtimes:\n  dev:\n    extentions: [app]\n" },
+  process.env.FAKE_AVOCADO_REPORT = JSON.stringify({
+    ok: false,
+    errors: [
+      { path: "/runtimes/dev/extensions", message: '5 is not of type "array"' },
+    ],
+    warnings: ["unknown key 'rutimes' is ignored; did you mean 'runtimes'?"],
   });
-  const s = res.structuredContent as { ok: boolean; warnings: string[] };
-  assert.equal(s.ok, true);
-  assert.deepEqual(s.warnings, [
-    "unknown key 'runtimes.dev.extentions' is ignored; did you mean 'extensions'?",
-  ]);
+  try {
+    const res = await client.callTool({
+      name: "validate-yaml",
+      arguments: {
+        yaml: "rutimes: {}\nruntimes:\n  dev:\n    extensions: 5\n",
+      },
+    });
+    const s = res.structuredContent as {
+      ok: boolean;
+      warnings: string[];
+      schemaSource: string;
+    };
+    assert.equal(s.ok, false);
+    assert.deepEqual(s.warnings, [
+      "unknown key 'rutimes' is ignored; did you mean 'runtimes'?",
+    ]);
+    assert.equal(s.schemaSource, "`avocado config validate`");
+    const text = (res.content as { text: string }[])[0].text;
+    assert.match(
+      text,
+      /`\/runtimes\/dev\/extensions`: 5 is not of type "array"/,
+    );
+  } finally {
+    delete process.env.FAKE_AVOCADO_REPORT;
+  }
 });
 
 test("validate-yaml checks the stone_manifest file in projectDir", async () => {

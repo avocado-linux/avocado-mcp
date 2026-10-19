@@ -1,8 +1,8 @@
 /**
  * avocado.yaml helpers: parse / validate / safe-mutate.
  *
- * Validation uses Ajv against the CLI's JSON Schema (see schema-client.ts),
- * and reports keys the CLI ignores as warnings (see config-lint.ts).
+ * Validation runs the installed CLI (`avocado config validate`, see
+ * schema-client.ts) and adds the stone checks of `stoneManifestWarnings`.
  * Mutations preserve formatting and comments by using the `yaml` package's
  * Document API rather than parse + stringify.
  */
@@ -18,8 +18,7 @@ import {
   YAMLSeq,
   Scalar,
 } from "yaml";
-import { loadSchema } from "./schema-client.js";
-import { ignoredKeys } from "./config-lint.js";
+import { validateWithCli } from "./schema-client.js";
 
 export interface YamlValidationResult {
   /** True when there are no errors. Warnings do not fail validation. */
@@ -38,76 +37,39 @@ export async function validateAvocadoYaml(
   /** The project directory. When set, the stone manifest file must exist. */
   projectDir?: string,
 ): Promise<YamlValidationResult> {
-  let loaded;
+  // The stone checks read the project, which the CLI does not see. A file
+  // that does not parse gets none: the CLI reports the parse error.
+  let stoneWarnings: string[] = [];
   try {
-    loaded = await loadSchema();
+    const doc = parseDocument(yamlText);
+    if (doc.errors.length === 0) {
+      stoneWarnings = stoneManifestWarnings(doc.toJS(), projectDir);
+    }
+  } catch {
+    // The CLI reports it.
+  }
+
+  let report;
+  try {
+    report = await validateWithCli(yamlText);
   } catch (e) {
-    // No CLI to read the schema from. Report it as the result, so the tools
-    // that edit YAML still return the YAML.
+    // No CLI to check with. Report it as the result, so the tools that edit
+    // YAML still return the YAML.
     return {
       ok: false,
       errors: [{ instancePath: "", message: (e as Error).message }],
-      warnings: [],
+      warnings: stoneWarnings,
       schemaSource: "none",
     };
   }
-  const { schema, source, validate } = loaded;
-
-  const fail = (message: string): YamlValidationResult => ({
-    ok: false,
-    errors: [{ instancePath: "", message: `YAML parse error: ${message}` }],
-    warnings: [],
-    schemaSource: source,
-  });
-  let parsed: unknown;
-  try {
-    const doc = parseDocument(yamlText);
-    if (doc.errors.length > 0) return fail(doc.errors[0].message);
-    parsed = doc.toJS();
-  } catch (e) {
-    return fail((e as Error).message);
-  }
-
-  const ok = validate(parsed);
-  const errors: { instancePath: string; message: string }[] = ok
-    ? []
-    : (validate.errors ?? []).map((e) => {
-        const path = e.instancePath || "(root)";
-        // The schema uses `false` for keys that exclude each other, such as
-        // kernel `cmdline` and `cmdline_extra`.
-        if (e.keyword === "false schema") {
-          return {
-            instancePath: path,
-            message: "must not be set together with another key in this block",
-          };
-        }
-        // The validator keeps the unknown-key rule only on the one-block
-        // form of rootfs, initramfs, kernel and permissions (schema-client.ts).
-        if (e.keyword === "additionalProperties") {
-          const key = String(e.params?.additionalProperty);
-          return {
-            instancePath: path,
-            message: `is not one block, because '${key}' is not a field. A block that sets a field cannot also hold named entries`,
-          };
-        }
-        const params =
-          e.params && Object.keys(e.params).length > 0
-            ? `: ${JSON.stringify(e.params)}`
-            : "";
-        return {
-          instancePath: path,
-          message: (e.message ?? "(no message)") + params,
-        };
-      });
-
   return {
-    ok: !!ok,
-    errors,
-    warnings: [
-      ...ignoredKeys(schema, parsed),
-      ...stoneManifestWarnings(parsed, projectDir),
-    ],
-    schemaSource: source,
+    ok: report.ok,
+    errors: report.errors.map((e) => ({
+      instancePath: e.path || "(root)",
+      message: e.message,
+    })),
+    warnings: [...report.warnings, ...stoneWarnings],
+    schemaSource: "`avocado config validate`",
   };
 }
 

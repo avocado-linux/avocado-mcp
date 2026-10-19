@@ -90,7 +90,7 @@ Users and groups go in a top-level \`permissions:\` profile, referenced from \`r
 3. **Every package must be verified — against the project's feed.** Before adding a package to an extension or runtime, call \`search-packages\` (or \`describe-package\`) for the user's target **with \`projectDir\`** and confirm the package exists. Package sets differ between releases/channels, so a hit on the default 2024/edge feed doesn't prove the package exists on the project's feed. Never invent a package name.
 4. **Extension types are constrained.** Only \`sysext\` and \`confext\` are valid. \`sysext\` extends \`/usr\`. \`confext\` extends \`/etc\`. Most apps want both.
 5. **Don't break the \`dev\` runtime.** If the user is just getting started, keep \`avocado-ext-dev\` and \`avocado-ext-sshd-dev\` in their dev runtime — without these, they can't SSH or debug.
-6. **Prefer the helper tools** over hand-edited YAML. \`add-extension\`, \`add-runtime\`, \`add-package-to-extension\` all validate the result against the schema before returning.
+6. **Prefer the helper tools** over hand-edited YAML. \`add-extension\`, \`add-runtime\`, \`add-package-to-extension\` all check the result with \`avocado config validate\` before returning.
 7. **Fix warnings too.** The CLI ignores a key the schema does not describe and prints a warning. \`validate-yaml\` reports the same warnings. A typo such as \`enable_service\` does not fail the build, but the setting has no effect.
 
 ## What's NOT in the schema

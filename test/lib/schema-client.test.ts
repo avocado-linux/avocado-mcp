@@ -1,60 +1,68 @@
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { loadSchema, clearSchemaCache } from "../../src/lib/schema-client.js";
-import { SCHEMA, fakeCli, schemaCli } from "./schema-fixture.js";
+import { loadSchema, validateWithCli } from "../../src/lib/schema-client.js";
+import { FAKE_SCHEMA, fakeAvocado, fakeCli } from "./fake-cli.js";
 
 afterEach(() => {
-  clearSchemaCache();
   delete process.env.AVOCADO_BINARY;
+  delete process.env.FAKE_AVOCADO_REPORT;
 });
 
 test("reads the schema the CLI prints", async () => {
-  process.env.AVOCADO_BINARY = schemaCli();
+  process.env.AVOCADO_BINARY = fakeAvocado();
   const res = await loadSchema();
-  assert.deepEqual(res.schema, SCHEMA);
+  assert.deepEqual(res.schema, FAKE_SCHEMA);
   assert.match(res.source, /config schema/);
-  assert.equal(res.validate({ default_target: "qemux86-64" }), true);
 });
 
-test("compiles again only when the CLI prints a different schema", async () => {
-  const file = join(mkdtempSync(join(tmpdir(), "schema-")), "schema.json");
-  writeFileSync(file, JSON.stringify({ ...SCHEMA, title: "old" }));
-  process.env.AVOCADO_BINARY = schemaCli(file);
-
-  const first = await loadSchema();
-  assert.equal(first.schema.title, "old");
-  assert.equal(await loadSchema(), first);
-
-  // An upgraded CLI is used on the next call.
-  writeFileSync(file, JSON.stringify({ ...SCHEMA, title: "new" }));
-  assert.equal((await loadSchema()).schema.title, "new");
-});
-
-test("a keyword the MCP does not know does not stop validation", async () => {
-  const file = join(mkdtempSync(join(tmpdir(), "schema-")), "schema.json");
-  writeFileSync(file, JSON.stringify({ ...SCHEMA, "x-avocado-new": true }));
-  process.env.AVOCADO_BINARY = schemaCli(file);
-  assert.equal((await loadSchema()).validate({}), true);
+test("returns the CLI report, also when the CLI exits 1", async () => {
+  process.env.AVOCADO_BINARY = fakeAvocado();
+  assert.deepEqual(await validateWithCli("a: 1\n"), {
+    ok: true,
+    errors: [],
+    warnings: [],
+  });
+  const failing = {
+    ok: false,
+    errors: [{ path: "/a", message: "bad" }],
+    warnings: [],
+  };
+  process.env.FAKE_AVOCADO_REPORT = JSON.stringify(failing);
+  assert.deepEqual(await validateWithCli("a: 1\n"), failing);
 });
 
 test("a missing CLI says to install it", async () => {
   process.env.AVOCADO_BINARY = join(tmpdir(), "no-such-avocado");
   await assert.rejects(loadSchema(), /not installed or not on PATH/);
+  await assert.rejects(validateWithCli(""), /not installed or not on PATH/);
 });
 
-test("a CLI without `config schema` says to upgrade", async () => {
+test("a CLI without the config commands says to upgrade", async () => {
   process.env.AVOCADO_BINARY = fakeCli(
-    `echo "error: unrecognized subcommand 'schema'" >&2\nexit 2`,
+    `echo "error: unrecognized subcommand '$2'" >&2\nexit 2`,
   );
-  await assert.rejects(loadSchema(), /avocado upgrade/);
+  await assert.rejects(loadSchema(), /config schema`\. Run `avocado upgrade`/);
+  await assert.rejects(
+    validateWithCli(""),
+    /config validate`\. Run `avocado upgrade`/,
+  );
 });
 
-test("output that is not a schema is an error", async () => {
+test("output that is not a schema or a report is an error", async () => {
   process.env.AVOCADO_BINARY = fakeCli("echo not json");
   await assert.rejects(loadSchema(), /did not print JSON/);
+  await assert.rejects(validateWithCli(""), /did not print JSON/);
   process.env.AVOCADO_BINARY = fakeCli("echo '{}'");
   await assert.rejects(loadSchema(), /did not print an avocado.yaml schema/);
+  await assert.rejects(
+    validateWithCli(""),
+    /did not print a validation report/,
+  );
+});
+
+test("a CLI error with no report is an error", async () => {
+  process.env.AVOCADO_BINARY = fakeCli("echo boom >&2\nexit 1");
+  await assert.rejects(validateWithCli(""), /config validate` failed: boom/);
 });
