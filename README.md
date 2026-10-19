@@ -229,7 +229,7 @@ The CLI still reads these feeds. Text that came from an expansion is masked in f
 - **`github.com/avocado-linux/references`** — full source of every reference project. Used by `get-reference` and `get-reference-file` (fetched via `raw.githubusercontent.com` + GitHub trees API).
 - **`github.com/peridio/docs`** — the Docusaurus source for `docs.peridio.com`. Used by `search-docs` and `get-doc`. Trees API for the manifest (cached 1 h), `raw.githubusercontent.com` for content (cached on disk by blob SHA, no TTL — content-addressable).
 
-The `avocado.yaml` JSON Schema comes from `https://docs.peridio.com/schemas/avocado-config.json` (cached for 1 h in memory and on disk). If the fetch fails, the server uses its copy of `avocado-cli/schemas/avocado-config.json`. Set `AVOCADO_MCP_SCHEMA_OFFLINE=1` to always use that copy. CI fails when the copy differs from the live docs copy. Run `npm run sync-schema` to refresh it.
+The `avocado.yaml` JSON Schema comes from the installed avocado CLI (`avocado config schema`), so `get-config-schema` and `validate-yaml` use the same schema as the CLI. The MCP keeps no copy. Set `AVOCADO_BINARY` to use a CLI that is not `avocado` on PATH. The starter template (`src/lib/schema/default.yaml`) is still a copy of `avocado-cli/configs/default.yaml`. CI fails when it differs from avocado-cli main. Run `npm run sync-schema` to refresh it.
 
 Caches under `~/.cache/avocado-mcp/` (override with `$AVOCADO_MCP_CACHE_DIR` or `$XDG_CACHE_HOME`). Set `GITHUB_TOKEN` for higher GitHub API rate limits if you'll be using the references / docs tools heavily.
 

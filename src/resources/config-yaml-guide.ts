@@ -7,7 +7,7 @@ export const CONTENT = `# Authoring avocado.yaml
 
 \`avocado.yaml\` is the single declarative file that describes an Avocado OS project. The avocado CLI reads it for \`install\`, \`build\`, \`provision\`, \`deploy\`, \`sdk run\` and the other commands.
 
-The source of truth for its structure is the JSON Schema that the avocado CLI ships (\`avocado-cli/schemas/avocado-config.json\`). The docs site serves it at \`https://docs.peridio.com/schemas/avocado-config.json\`. Get it with the \`get-config-schema\` tool before you generate or change YAML.
+The source of truth for its structure is the JSON Schema that the installed avocado CLI prints with \`avocado config schema\`. The docs site serves a copy for editors at \`https://docs.peridio.com/schemas/avocado-config.json\`. Get it with the \`get-config-schema\` tool before you generate or change YAML.
 
 ## Start a project with \`avocado init\`
 

@@ -38,7 +38,20 @@ export async function validateAvocadoYaml(
   /** The project directory. When set, the stone manifest file must exist. */
   projectDir?: string,
 ): Promise<YamlValidationResult> {
-  const { schema, source, validate } = await loadSchema();
+  let loaded;
+  try {
+    loaded = await loadSchema();
+  } catch (e) {
+    // No CLI to read the schema from. Report it as the result, so the tools
+    // that edit YAML still return the YAML.
+    return {
+      ok: false,
+      errors: [{ instancePath: "", message: (e as Error).message }],
+      warnings: [],
+      schemaSource: "none",
+    };
+  }
+  const { schema, source, validate } = loaded;
 
   const fail = (message: string): YamlValidationResult => ({
     ok: false,
@@ -191,7 +204,7 @@ const DEFAULT_TEMPLATE = readFileSync(
 
 /**
  * Starter avocado.yaml for when the avocado CLI is not available. It is the
- * CLI's own `configs/default.yaml` (vendored next to the schema), with the
+ * CLI's own `configs/default.yaml` (vendored in `src/lib/schema/`), with the
  * caller's values written into the template text at the place of each node.
  * Re-serializing the whole document would move the template's comments, so
  * only the edited values are written, each quoted by the `yaml` package.

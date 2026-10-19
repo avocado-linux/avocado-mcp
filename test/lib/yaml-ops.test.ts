@@ -19,9 +19,10 @@ import {
   validateAvocadoYaml,
   stoneManifests,
 } from "../../src/lib/yaml-ops.js";
+import { schemaCli } from "./schema-fixture.js";
 
-// Validate against the vendored schema: no network in tests.
-process.env.AVOCADO_MCP_SCHEMA_OFFLINE = "1";
+// Validate against the fixture schema, printed by a fake CLI.
+process.env.AVOCADO_BINARY = schemaCli();
 
 const WITH_COMMENTS = `# my avocado project
 sdk:
@@ -498,4 +499,40 @@ test("stoneManifests reads one runtime or all of them", () => {
     ["b.json"],
   );
   assert.deepEqual(stoneManifests(doc, "test"), []);
+});
+
+// ENG-2767 rules, read from the CLI's schema (ENG-2775). The var rules sit
+// next to a `$ref`, which the 2020-12 validator applies.
+test("fit_key with fit_unsigned: true is an error", async () => {
+  const res = await validateAvocadoYaml(
+    "runtimes:\n  dev:\n    signing: {fit_key: a, fit_unsigned: true}\n",
+  );
+  assert.equal(res.ok, false);
+});
+
+test("var recovery without encrypt: true is an error", async () => {
+  const res = await validateAvocadoYaml(
+    "runtimes:\n  dev:\n    var: {recovery: master}\n",
+  );
+  assert.equal(res.ok, false);
+});
+
+test("a target override may set var hardware: none under an encrypted base", async () => {
+  const res = await validateAvocadoYaml(
+    "runtimes:\n  dev:\n    var: {encrypt: true, recovery: master}\n    target-qemux86-64:\n      var: {hardware: none}\n",
+  );
+  assert.equal(res.ok, true, JSON.stringify(res.errors));
+});
+
+test("without a CLI, validation reports why and still returns", async () => {
+  const real = process.env.AVOCADO_BINARY;
+  process.env.AVOCADO_BINARY = join(tmpdir(), "no-such-avocado");
+  try {
+    const res = await validateAvocadoYaml("runtimes: {}\n");
+    assert.equal(res.ok, false);
+    assert.equal(res.schemaSource, "none");
+    assert.match(res.errors[0].message, /not installed or not on PATH/);
+  } finally {
+    process.env.AVOCADO_BINARY = real;
+  }
 });

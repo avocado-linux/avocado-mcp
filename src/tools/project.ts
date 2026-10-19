@@ -258,6 +258,8 @@ export function registerProjectTools(
         const validation = await validateAvocadoYaml(yaml);
         if (validation.ok) {
           out += `✅ This YAML is the avocado CLI template (\`configs/default.yaml\`) and validates against the schema.\n\n`;
+        } else if (validation.schemaSource === "none") {
+          out += `This YAML is the avocado CLI template (\`configs/default.yaml\`). It was not validated: ${validation.errors[0].message}\n\n`;
         } else {
           out += `⚠️  Generated YAML did NOT validate. Schema may have moved; please report this.\n`;
           out += validation.errors

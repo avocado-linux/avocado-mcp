@@ -1,31 +1,22 @@
 /**
- * The JSON Schema for `avocado.yaml`, as the avocado CLI ships it.
+ * The JSON Schema for `avocado.yaml`, read from the installed avocado CLI
+ * with `avocado config schema`. The MCP keeps no copy of it. Users of the MCP
+ * must have the CLI installed, and the schema the CLI prints is the one it
+ * applies, so a schema change in the CLI needs no change here.
  *
- * Source of truth: `avocado-cli/schemas/avocado-config.json`. The docs site
- * serves the same file at SCHEMA_URL. We fetch it from there, cache it in
- * memory and on disk under getCacheDir()/schema, and fall back to the copy
- * vendored in `src/lib/schema/` when the fetch fails or the fetched schema
- * does not compile. The fallback is kept in memory for five minutes, then
- * the live schema is tried again. The schema-drift workflow fails when the
- * vendored copy drifts from the live one (`npm run sync-schema` refreshes it).
+ * The CLI runs on every call, so an upgraded CLI is used at once. The
+ * validator is compiled again only when the printed schema changes.
  *
- * Set AVOCADO_MCP_SCHEMA_OFFLINE=1 to skip the network and use the vendored
- * copy (air-gapped hosts, and the test suite).
+ * Set AVOCADO_BINARY to use a CLI that is not `avocado` on PATH.
  */
 
-import * as path from "path";
-import { promises as fs, readFileSync } from "fs";
+import { execFile } from "child_process";
 import { createRequire } from "module";
-import { getCacheDir } from "./cache.js";
+import { promisify } from "util";
 
-export const SCHEMA_URL =
-  "https://docs.peridio.com/schemas/avocado-config.json";
-const TTL_MS = 60 * 60 * 1000;
-const FALLBACK_TTL_MS = 5 * 60 * 1000;
-const FETCH_TIMEOUT_MS = 5000;
-const USER_AGENT = "avocado-mcp-server";
-const VENDORED_SOURCE =
-  "vendored copy of avocado-cli/schemas/avocado-config.json";
+const execFileP = promisify(execFile);
+const SCHEMA_ARGS = ["config", "schema"];
+const TIMEOUT_MS = 15000;
 
 // Ajv 8 / ajv-formats are CJS modules; reach for them via createRequire to
 // avoid TypeScript Node16-ESM default-interop awkwardness.
@@ -61,22 +52,14 @@ export interface LoadedSchema {
   validate: SchemaValidator;
 }
 
-let memory: (LoadedSchema & { expiresAt: number }) | null = null;
-let vendored: LoadedSchema | null = null;
-
-function vendoredSchema(): LoadedSchema {
-  if (!vendored) {
-    const file = new URL("./schema/avocado-config.json", import.meta.url);
-    const schema = JSON.parse(readFileSync(file, "utf8"));
-    vendored = { schema, source: VENDORED_SOURCE, validate: compile(schema) };
-  }
-  return vendored;
-}
+let loaded: (LoadedSchema & { text: string }) | null = null;
 
 /**
  * Compile the schema with the unknown-key rule removed. The draft is 2020-12.
- * Strict mode stays on, so the two CLI keywords are declared, and union types
- * (`type: [string, array]`) are allowed because the schema uses them.
+ * Unknown keywords are ignored, because the schema comes from whichever CLI
+ * is installed, and a keyword added in a newer CLI must not stop validation.
+ * Union types (`type: [string, array]`) are allowed because the schema uses
+ * them.
  */
 function compile(schema: Record<string, unknown>): SchemaValidator {
   const relaxed = JSON.parse(
@@ -85,9 +68,11 @@ function compile(schema: Record<string, unknown>): SchemaValidator {
     ),
   );
   keepSingletonKeys(schema, relaxed);
-  const ajv = new Ajv({ allErrors: true, allowUnionTypes: true });
-  ajv.addKeyword("x-avocado-warning");
-  ajv.addKeyword("x-avocado-target-overrides");
+  const ajv = new Ajv({
+    allErrors: true,
+    allowUnionTypes: true,
+    strictSchema: false,
+  });
   addFormats(ajv);
   return ajv.compile(relaxed);
 }
@@ -158,91 +143,64 @@ function keepSingletonKeys(original: Node, relaxed: unknown): void {
   visit(relaxed);
 }
 
-function diskPath(): string {
-  return path.join(getCacheDir(), "schema", "avocado-config.json");
-}
-
-async function readDisk(): Promise<{
-  schema: Record<string, unknown>;
-  fetchedAt: number;
-} | null> {
-  try {
-    const raw = JSON.parse(await fs.readFile(diskPath(), "utf8"));
-    if (Date.now() - raw.fetchedAt < TTL_MS) {
-      return { schema: raw.schema, fetchedAt: raw.fetchedAt };
-    }
-  } catch {
-    // Missing or unreadable; fetch instead.
+/** Turn a failed `avocado config schema` into an error the user can act on. */
+function cliError(binary: string, error: unknown): Error {
+  const e = error as { code?: string; stderr?: string; message?: string };
+  if (e.code === "ENOENT") {
+    return new Error(
+      `The avocado CLI (\`${binary}\`) is not installed or not on PATH. ` +
+        "The MCP reads the avocado.yaml schema from the CLI. Install the avocado CLI and try again.",
+    );
   }
-  return null;
-}
-
-async function fetchRemote(): Promise<Record<string, unknown>> {
-  const res = await fetch(SCHEMA_URL, {
-    headers: { "User-Agent": USER_AGENT },
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-  });
-  if (!res.ok) throw new Error(`${SCHEMA_URL} returned HTTP ${res.status}`);
-  const schema: unknown = await res.json();
-  if (!schema || typeof schema !== "object" || !("properties" in schema)) {
-    throw new Error(`${SCHEMA_URL} is not an avocado.yaml schema`);
+  const detail = (e.stderr ?? "").trim() || e.message || "unknown error";
+  if (/unrecognized subcommand/i.test(detail)) {
+    return new Error(
+      "Your avocado CLI is too old to print its avocado.yaml schema " +
+        "(`avocado config schema`). Run `avocado upgrade` and try again.",
+    );
   }
-  return schema as Record<string, unknown>;
+  return new Error(`\`${binary} config schema\` failed: ${detail}`);
 }
 
 /**
- * Return the current schema and a compiled validator. Never throws: any
- * failure on the live path gives the vendored copy.
+ * Return the schema the installed CLI uses and a compiled validator. Throws
+ * when the CLI is missing, too old, or prints something that is not a schema.
  */
 export async function loadSchema(): Promise<LoadedSchema> {
-  if (process.env.AVOCADO_MCP_SCHEMA_OFFLINE === "1") return vendoredSchema();
-  if (memory && Date.now() < memory.expiresAt) return memory;
+  const binary = process.env.AVOCADO_BINARY ?? "avocado";
+  let text: string;
   try {
-    const cached = await readDisk();
-    const schema = cached?.schema ?? (await fetchRemote());
-    // A disk entry keeps its own age, so the schema refreshes one hour after
-    // it was fetched, not one hour after this process read it.
-    const fetchedAt = cached?.fetchedAt ?? Date.now();
-    // Compile before caching, so a schema that does not compile never
-    // reaches the disk cache and the next call fetches again.
-    const validate = compile(schema);
-    if (!cached) {
-      // Best effort: a read-only or full cache dir must not throw away a
-      // schema that was fetched and compiled.
-      try {
-        await fs.mkdir(path.dirname(diskPath()), { recursive: true });
-        await fs.writeFile(
-          diskPath(),
-          JSON.stringify({ fetchedAt, schema }),
-          "utf8",
-        );
-      } catch (error) {
-        console.error(
-          "[schema-client] could not cache the schema:",
-          (error as Error).message,
-        );
-      }
-    }
-    memory = {
-      schema,
-      source: SCHEMA_URL,
-      validate,
-      expiresAt: fetchedAt + TTL_MS,
-    };
-    return memory;
+    ({ stdout: text } = await execFileP(binary, SCHEMA_ARGS, {
+      timeout: TIMEOUT_MS,
+      maxBuffer: 8 * 1024 * 1024,
+    }));
   } catch (error) {
-    // Keep the fallback for a short time, so a slow or broken live schema
-    // does not cost every call the full fetch timeout. Retry after that.
-    console.error(
-      "[schema-client] using the vendored schema:",
-      (error as Error).message,
-    );
-    memory = { ...vendoredSchema(), expiresAt: Date.now() + FALLBACK_TTL_MS };
-    return memory;
+    throw cliError(binary, error);
   }
+  if (loaded?.text === text) return loaded;
+  let schema: unknown;
+  try {
+    schema = JSON.parse(text);
+  } catch (error) {
+    throw new Error(
+      `\`${binary} config schema\` did not print JSON: ${(error as Error).message}`,
+    );
+  }
+  if (!isNode(schema) || !("properties" in schema)) {
+    throw new Error(
+      `\`${binary} config schema\` did not print an avocado.yaml schema`,
+    );
+  }
+  loaded = {
+    text,
+    schema,
+    source: `\`${binary} config schema\``,
+    validate: compile(schema),
+  };
+  return loaded;
 }
 
-/** Test seam: reset the in-memory cache. */
+/** Test seam: forget the compiled schema. */
 export function clearSchemaCache(): void {
-  memory = null;
+  loaded = null;
 }

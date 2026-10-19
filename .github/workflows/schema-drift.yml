@@ -1,8 +1,9 @@
 name: Schema drift
 
-# Compares the vendored schema with the live upstream copy. Upstream can
+# Compares the vendored starter template with avocado-cli main. Upstream can
 # change at any time, so this runs on a schedule and only on PRs that touch
-# the vendored files, not on every PR.
+# the vendored files, not on every PR. The schema is not vendored: the MCP
+# reads it from the installed CLI.
 on:
   schedule:
     - cron: '0 6 * * *'
@@ -17,7 +18,7 @@ on:
 
 jobs:
   schema-drift:
-    name: Vendored schema matches the live copy
+    name: Vendored template matches avocado-cli main
     runs-on: ubuntu-latest
 
     steps:
@@ -26,5 +27,5 @@ jobs:
         with:
           node-version: '22.x'
 
-      - name: Compare with docs.peridio.com and avocado-cli main
+      - name: Compare with avocado-cli main
         run: node scripts/sync-schema.mjs --check

@@ -29,9 +29,10 @@ import { registerPrompts } from "../src/tools/prompts.js";
 import { clearHardwareDataCache } from "../src/lib/hardware-data.js";
 import { clearSelectableCache } from "../src/lib/hardware-support.js";
 import { TARGETS, DEVICES } from "./lib/hardware-fixture.js";
+import { schemaCli } from "./lib/schema-fixture.js";
 
-// Validate against the vendored schema: no network in tests.
-process.env.AVOCADO_MCP_SCHEMA_OFFLINE = "1";
+// Validate against the fixture schema, printed by a fake CLI.
+process.env.AVOCADO_BINARY = schemaCli();
 
 async function connect(repoClient = new RepoClient()) {
   const server = new McpServer({ name: "avocado-os", version: "test" });

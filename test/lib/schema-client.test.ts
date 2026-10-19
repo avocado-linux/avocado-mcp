@@ -1,154 +1,60 @@
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import {
-  mkdtempSync,
-  mkdirSync,
-  existsSync,
-  readFileSync,
-  writeFileSync,
-} from "fs";
+import { mkdtempSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import {
-  loadSchema,
-  clearSchemaCache,
-  SCHEMA_URL,
-} from "../../src/lib/schema-client.js";
-
-const realFetch = globalThis.fetch;
-const VENDORED = JSON.parse(
-  readFileSync(
-    new URL("../../src/lib/schema/avocado-config.json", import.meta.url),
-    "utf8",
-  ),
-);
+import { loadSchema, clearSchemaCache } from "../../src/lib/schema-client.js";
+import { SCHEMA, fakeCli, schemaCli } from "./schema-fixture.js";
 
 afterEach(() => {
-  globalThis.fetch = realFetch;
   clearSchemaCache();
-  delete process.env.AVOCADO_MCP_SCHEMA_OFFLINE;
+  delete process.env.AVOCADO_BINARY;
 });
 
-/** A fresh cache dir, and a fetch stub that counts its calls. */
-function setup(respond: () => Response | Promise<Response>) {
-  process.env.AVOCADO_MCP_CACHE_DIR = mkdtempSync(join(tmpdir(), "schema-"));
-  const calls: string[] = [];
-  globalThis.fetch = (async (url: RequestInfo | URL) => {
-    calls.push(String(url));
-    return respond();
-  }) as typeof fetch;
-  return calls;
-}
+test("reads the schema the CLI prints", async () => {
+  process.env.AVOCADO_BINARY = schemaCli();
+  const res = await loadSchema();
+  assert.deepEqual(res.schema, SCHEMA);
+  assert.match(res.source, /config schema/);
+  assert.equal(res.validate({ default_target: "qemux86-64" }), true);
+});
 
-test("fetches the docs schema once, then serves it from the disk cache", async () => {
-  const live = { ...VENDORED, title: "live" };
-  const calls = setup(() => new Response(JSON.stringify(live)));
+test("compiles again only when the CLI prints a different schema", async () => {
+  const file = join(mkdtempSync(join(tmpdir(), "schema-")), "schema.json");
+  writeFileSync(file, JSON.stringify({ ...SCHEMA, title: "old" }));
+  process.env.AVOCADO_BINARY = schemaCli(file);
 
   const first = await loadSchema();
-  assert.equal(first.source, SCHEMA_URL);
-  assert.equal(first.schema.title, "live");
-  assert.deepEqual(calls, [SCHEMA_URL]);
-  assert.ok(
-    existsSync(
-      join(process.env.AVOCADO_MCP_CACHE_DIR!, "schema", "avocado-config.json"),
-    ),
+  assert.equal(first.schema.title, "old");
+  assert.equal(await loadSchema(), first);
+
+  // An upgraded CLI is used on the next call.
+  writeFileSync(file, JSON.stringify({ ...SCHEMA, title: "new" }));
+  assert.equal((await loadSchema()).schema.title, "new");
+});
+
+test("a keyword the MCP does not know does not stop validation", async () => {
+  const file = join(mkdtempSync(join(tmpdir(), "schema-")), "schema.json");
+  writeFileSync(file, JSON.stringify({ ...SCHEMA, "x-avocado-new": true }));
+  process.env.AVOCADO_BINARY = schemaCli(file);
+  assert.equal((await loadSchema()).validate({}), true);
+});
+
+test("a missing CLI says to install it", async () => {
+  process.env.AVOCADO_BINARY = join(tmpdir(), "no-such-avocado");
+  await assert.rejects(loadSchema(), /not installed or not on PATH/);
+});
+
+test("a CLI without `config schema` says to upgrade", async () => {
+  process.env.AVOCADO_BINARY = fakeCli(
+    `echo "error: unrecognized subcommand 'schema'" >&2\nexit 2`,
   );
-
-  clearSchemaCache(); // a new process: memory is empty, disk is warm
-  const second = await loadSchema();
-  assert.equal(second.schema.title, "live");
-  assert.equal(calls.length, 1, "a warm disk cache must not refetch");
+  await assert.rejects(loadSchema(), /avocado upgrade/);
 });
 
-test("a failed fetch falls back to the vendored schema", async () => {
-  setup(() => new Response("", { status: 503 }));
-  const res = await loadSchema();
-  assert.match(res.source, /vendored/);
-  assert.equal(res.validate({ distro: { release: 2024 } }), true);
-});
-
-test("a response that is not a schema falls back to the vendored schema", async () => {
-  setup(() => new Response(JSON.stringify({ hello: "world" })));
-  assert.match((await loadSchema()).source, /vendored/);
-});
-
-test("a fetched schema that does not compile falls back and is not cached", async () => {
-  const calls = setup(
-    () =>
-      new Response(
-        JSON.stringify({ properties: { a: { $ref: "#/nowhere" } } }),
-      ),
-  );
-  assert.match((await loadSchema()).source, /vendored/);
-  assert.ok(
-    !existsSync(
-      join(process.env.AVOCADO_MCP_CACHE_DIR!, "schema", "avocado-config.json"),
-    ),
-  );
-  clearSchemaCache();
-  await loadSchema();
-  assert.equal(calls.length, 2, "the next call must fetch again");
-});
-
-test("a cache dir that cannot be written still serves the fetched schema", async () => {
-  const live = { ...VENDORED, title: "live" };
-  setup(() => new Response(JSON.stringify(live)));
-  // A file where the cache dir must be: mkdir fails.
-  const blocker = join(process.env.AVOCADO_MCP_CACHE_DIR!, "blocker");
-  writeFileSync(blocker, "");
-  process.env.AVOCADO_MCP_CACHE_DIR = blocker;
-  const res = await loadSchema();
-  assert.equal(res.source, SCHEMA_URL);
-  assert.equal(res.schema.title, "live");
-});
-
-test("a disk entry keeps its age when it is loaded into memory", async () => {
-  const live = { ...VENDORED, title: "live" };
-  const calls = setup(() => new Response(JSON.stringify(live)));
-  const file = join(
-    process.env.AVOCADO_MCP_CACHE_DIR!,
-    "schema",
-    "avocado-config.json",
-  );
-  mkdirSync(join(process.env.AVOCADO_MCP_CACHE_DIR!, "schema"));
-  // Fetched almost one hour ago: 100 ms of life left.
-  writeFileSync(
-    file,
-    JSON.stringify({
-      fetchedAt: Date.now() - 60 * 60 * 1000 + 100,
-      schema: { ...VENDORED, title: "old" },
-    }),
-  );
-  assert.equal((await loadSchema()).schema.title, "old");
-  assert.equal(calls.length, 0);
-  await new Promise((r) => setTimeout(r, 200));
-  // Same process, no cache reset: the entry expired, so it fetches again.
-  assert.equal((await loadSchema()).schema.title, "live");
-  assert.equal(calls.length, 1);
-});
-
-test("the fallback is kept for five minutes, then the live schema is retried", async () => {
-  const calls = setup(() => new Response("", { status: 503 }));
-  const realNow = Date.now;
-  let now = realNow();
-  Date.now = () => now;
-  try {
-    assert.match((await loadSchema()).source, /vendored/);
-    assert.match((await loadSchema()).source, /vendored/);
-    assert.equal(calls.length, 1, "a fresh fallback must not refetch");
-    now += 5 * 60 * 1000 + 1;
-    await loadSchema();
-    assert.equal(calls.length, 2, "an expired fallback must fetch again");
-  } finally {
-    Date.now = realNow;
-  }
-});
-
-test("AVOCADO_MCP_SCHEMA_OFFLINE=1 never touches the network", async () => {
-  const calls = setup(() => {
-    throw new Error("network");
-  });
-  process.env.AVOCADO_MCP_SCHEMA_OFFLINE = "1";
-  assert.match((await loadSchema()).source, /vendored/);
-  assert.deepEqual(calls, []);
+test("output that is not a schema is an error", async () => {
+  process.env.AVOCADO_BINARY = fakeCli("echo not json");
+  await assert.rejects(loadSchema(), /did not print JSON/);
+  process.env.AVOCADO_BINARY = fakeCli("echo '{}'");
+  await assert.rejects(loadSchema(), /did not print an avocado.yaml schema/);
 });

@@ -3,16 +3,10 @@ import assert from "node:assert/strict";
 import { readFileSync } from "fs";
 import { parse } from "yaml";
 import { ignoredKeys } from "../../src/lib/config-lint.js";
+import { SCHEMA } from "./schema-fixture.js";
 
-// The vendored schema, so these tests never touch the network. The cases are
-// the tests of avocado-cli/src/utils/config_lint.rs, so the MCP warns exactly
-// where the CLI does.
-const SCHEMA = JSON.parse(
-  readFileSync(
-    new URL("../../src/lib/schema/avocado-config.json", import.meta.url),
-    "utf8",
-  ),
-);
+// The cases are the tests of avocado-cli/src/utils/config_lint.rs, so the MCP
+// warns exactly where the CLI does.
 const warnings = (yaml: string) => ignoredKeys(SCHEMA, parse(yaml));
 
 test("the CLI template has no warnings", () => {
