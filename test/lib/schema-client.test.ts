@@ -33,6 +33,17 @@ test("returns the CLI report, also when the CLI exits 1", async () => {
   assert.deepEqual(await validateWithCli("a: 1\n"), failing);
 });
 
+test("a message with a newline in it reaches the result unchanged", async () => {
+  process.env.AVOCADO_BINARY = fakeAvocado();
+  const report = {
+    ok: false,
+    errors: [{ path: "", message: "line one\\nline two" }],
+    warnings: [],
+  };
+  process.env.FAKE_AVOCADO_REPORT = JSON.stringify(report);
+  assert.deepEqual(await validateWithCli(""), report);
+});
+
 test("a missing CLI says to install it", async () => {
   process.env.AVOCADO_BINARY = join(tmpdir(), "no-such-avocado");
   await assert.rejects(loadSchema(), /not installed or not on PATH/);

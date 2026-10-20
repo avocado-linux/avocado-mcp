@@ -31,7 +31,9 @@ export function fakeAvocado(): string {
       `"config validate")`,
       `  cat > "$(dirname "$0")/stdin.yaml"`,
       `  report=\${FAKE_AVOCADO_REPORT:-'{"ok":true,"errors":[],"warnings":[]}'}`,
-      `  echo "$report"`,
+      // printf, not echo: dash's echo turns a `\\n` in a message into a
+      // newline, which breaks the JSON.
+      `  printf '%s\\n' "$report"`,
       `  case "$report" in *'"ok":false'*) exit 1 ;; esac ;;`,
       `*) echo "error: unrecognized subcommand '$2'" >&2; exit 2 ;;`,
       `esac`,
