@@ -7,14 +7,14 @@ export function registerConfigTools(server: McpServer): void {
     {
       title: "Get the avocado.yaml JSON schema",
       description:
-        "REQUIRED: Get the JSON schema for avocado.yaml. It is the schema the avocado CLI ships, served at https://docs.peridio.com/schemas/avocado-config.json (cached for an hour, with a bundled copy as the offline fallback). Read it before you generate or edit any avocado.yaml.",
+        "REQUIRED: Get the JSON schema for avocado.yaml. It is the schema the installed avocado CLI uses, read with `avocado config schema`, so the avocado CLI must be installed. Read it before you generate or edit any avocado.yaml.",
       inputSchema: {},
       annotations: {
         title: "Get the avocado.yaml JSON schema",
         readOnlyHint: true,
         destructiveHint: false,
         idempotentHint: true,
-        openWorldHint: true,
+        openWorldHint: false,
       },
     },
     async () => {

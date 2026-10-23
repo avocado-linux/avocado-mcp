@@ -257,7 +257,9 @@ export function registerProjectTools(
         });
         const validation = await validateAvocadoYaml(yaml);
         if (validation.ok) {
-          out += `✅ This YAML is the avocado CLI template (\`configs/default.yaml\`) and validates against the schema.\n\n`;
+          out += `✅ This YAML is the avocado CLI template (\`configs/default.yaml\`) and passes \`avocado config validate\`.\n\n`;
+        } else if (validation.schemaSource === "none") {
+          out += `This YAML is the avocado CLI template (\`configs/default.yaml\`). It was not validated: ${validation.errors[0].message}\n\n`;
         } else {
           out += `⚠️  Generated YAML did NOT validate. Schema may have moved; please report this.\n`;
           out += validation.errors
@@ -308,7 +310,7 @@ export function registerProjectTools(
     {
       title: "Validate an avocado.yaml",
       description:
-        "Validate an avocado.yaml against the JSON Schema the avocado CLI ships. Returns pass/fail, every schema error with its path, and warnings. Warnings match the CLI: an unknown key is ignored (with a 'did you mean' hint), and some keys are deprecated or have no effect. Warnings also cover `runtimes.<r>.stone_manifest`: it must be a relative path, and with `projectDir` the file must exist. Warnings do not fail validation, but fix them. Use this before recommending `avocado build` to the user. It catches structural problems early.",
+        "Validate an avocado.yaml with the installed avocado CLI (`avocado config validate`), so the result is what the CLI reports. Returns pass/fail, every error with its path (YAML parse, schema, and the CLI's own checks), and warnings. Warnings come from the CLI: an unknown key is ignored (with a 'did you mean' hint), and some keys are deprecated or have no effect. Warnings also cover `runtimes.<r>.stone_manifest`: it must be a relative path, and with `projectDir` the file must exist. Warnings do not fail validation, but fix them. Use this before recommending `avocado build` to the user. It catches structural problems early.",
       inputSchema: {
         yaml: z.string().describe("Full avocado.yaml content as a string."),
         projectDir: z
@@ -854,7 +856,7 @@ function renderMutationResult(
   let out = `# ${toolName}\n\n`;
   if (prefixNote) out += `${prefixNote}\n\n`;
   if (validation.ok) {
-    out += `✅ Modified YAML validates against the schema.\n\n`;
+    out += `✅ Modified YAML passes \`avocado config validate\`.\n\n`;
   } else {
     out += `⚠️  Modified YAML did NOT validate:\n`;
     for (const e of validation.errors) {

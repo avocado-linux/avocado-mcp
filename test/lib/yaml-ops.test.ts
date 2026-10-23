@@ -8,7 +8,7 @@ import {
   writeFileSync,
 } from "fs";
 import { tmpdir } from "os";
-import { join } from "path";
+import { dirname, join } from "path";
 import { parse } from "yaml";
 import {
   addExtension,
@@ -19,9 +19,10 @@ import {
   validateAvocadoYaml,
   stoneManifests,
 } from "../../src/lib/yaml-ops.js";
+import { fakeAvocado, withReport } from "./fake-cli.js";
 
-// Validate against the vendored schema: no network in tests.
-process.env.AVOCADO_MCP_SCHEMA_OFFLINE = "1";
+// A fake CLI for the schema and validation. The CLI tests what it reports.
+process.env.AVOCADO_BINARY = fakeAvocado();
 
 const WITH_COMMENTS = `# my avocado project
 sdk:
@@ -166,23 +167,6 @@ test("listExtensions surfaces malformed YAML instead of reporting zero extension
   );
 });
 
-// ---------------------------------------------------------------------------
-// The generated starter must satisfy the schema we validate against. If these
-// two ever drift, init-project hands the user a file its own validator rejects.
-// ---------------------------------------------------------------------------
-
-test("every starter YAML validates against the bundled schema", async () => {
-  for (const target of [
-    "raspberrypi5",
-    "qemux86-64",
-    "jetson-orin-nano-devkit",
-  ]) {
-    const res = await validateAvocadoYaml(buildStarterYaml({ target }));
-    assert.equal(res.ok, true, `${target}: ${JSON.stringify(res.errors)}`);
-    assert.deepEqual(res.warnings, [], target);
-  }
-});
-
 const TEMPLATE = readFileSync(
   new URL("../../src/lib/schema/default.yaml", import.meta.url),
   "utf8",
@@ -204,7 +188,7 @@ test("the default starter is the CLI template with the target filled in", () => 
   assert.match(out, /\n\n##\n## Images\n##\n\nrootfs:/);
 });
 
-test("starter options land where the CLI reads them", async () => {
+test("starter options land where the CLI reads them", () => {
   const out = buildStarterYaml({
     target: "jetson-orin-nx",
     board: "mic-712-ox-16gb",
@@ -231,8 +215,6 @@ test("starter options land where the CLI reads them", async () => {
     repo: { url: "https://mirror.example/avocado" },
   });
   assert.deepEqual(comments(out), comments(TEMPLATE));
-  const res = await validateAvocadoYaml(out);
-  assert.equal(res.ok, true, JSON.stringify(res.errors));
 });
 
 test("a starter value with YAML syntax stays one string", () => {
@@ -244,152 +226,10 @@ test("a starter value with YAML syntax stays one string", () => {
   assert.deepEqual(Object.keys(y.runtimes), ["dev"]);
 });
 
-test("validation of the starter makes no network call", async () => {
-  const real = globalThis.fetch;
-  globalThis.fetch = (async () => {
-    throw new Error("network access during validate-yaml");
-  }) as typeof fetch;
-  try {
-    assert.equal(
-      (await validateAvocadoYaml(buildStarterYaml({ target: "raspberrypi5" })))
-        .ok,
-      true,
-    );
-  } finally {
-    globalThis.fetch = real;
-  }
-});
-
-test("a YAML parse error is returned as a result, not thrown", async () => {
-  const res = await validateAvocadoYaml(
-    "extensions:\n  app:\n   - [unclosed\n",
-  );
-  assert.equal(res.ok, false);
-  assert.match(res.errors[0]!.message, /YAML parse error/);
-});
-
-test("schema errors carry an instancePath the model can act on", async () => {
-  const res = await validateAvocadoYaml(
-    "extensions:\n  app:\n    types: not-a-list\n",
-  );
-  assert.equal(res.ok, false);
-  assert.ok(
-    res.errors.every(
-      (e) => typeof e.instancePath === "string" && e.instancePath.length,
-    ),
-  );
-});
-
-// ---------------------------------------------------------------------------
-// The CLI schema. These configs come from the audit probe: the old
-// hand-written schema got each of them wrong.
-// ---------------------------------------------------------------------------
-
 const BASE =
   "distro: {release: 2024, channel: edge}\nruntimes:\n  dev:\n    extensions: [app]\n";
 
-for (const [name, yaml] of Object.entries({
-  "git source": `${BASE}extensions:\n  app:\n    source: {type: git, url: https://x/y.git, ref: main}\n`,
-  "path source": `${BASE}extensions:\n  app:\n    source: {type: path, path: ../app}\n`,
-  "version from a file": `${BASE}extensions:\n  app:\n    types: [sysext]\n    version: {file: Cargo.toml, key: package.version, format: toml}\n`,
-  "runtime extension in object form":
-    "distro: {release: 2024, channel: edge}\nruntimes:\n  dev:\n    extensions:\n      - app: {enabled: false}\n",
-  "distro.repo as a repos: name":
-    "distro: {release: 2024, channel: edge, repo: mirror, feeds: [acme]}\nrepos:\n  mirror: {url: https://m}\n  acme: {org: acme}\nruntimes: {dev: {extensions: [a]}}\n",
-  "extension-only config":
-    "supported_targets: '*'\nextensions:\n  foo: {types: [sysext], version: \"1.0.0\"}\n",
-  "new keys (depends_on, verity, var encryption, cmdline_extra)":
-    'distro: {release: 2024, channel: edge}\nkernel: {cmdline_extra: earlycon}\nextensions:\n  app:\n    types: [sysext]\n    version: "1"\n    depends_on: [base]\n    image: {verity: true}\nruntimes:\n  dev:\n    extensions: [app]\n    var: {encrypt: true, hardware: tpm2, recovery: rk}\n    signing: {fit_key: fk}\n',
-})) {
-  test(`valid: ${name}`, async () => {
-    const res = await validateAvocadoYaml(yaml);
-    assert.equal(res.ok, true, JSON.stringify(res.errors));
-    assert.deepEqual(res.warnings, []);
-  });
-}
-
-test("a typo key is a warning, as in the CLI, not an error", async () => {
-  const res = await validateAvocadoYaml(
-    `${BASE}extensions:\n  app:\n    types: [sysext]\n    version: "1"\n    enable_service: [x.service]\nrutimes: {}\n`,
-  );
-  assert.equal(res.ok, true, JSON.stringify(res.errors));
-  assert.deepEqual(res.warnings, [
-    "unknown key 'extensions.app.enable_service' is ignored; did you mean 'enable_services'?",
-    "unknown key 'rutimes' is ignored; did you mean 'runtimes'?",
-  ]);
-});
-
-test("kernel cmdline with cmdline_extra is an error", async () => {
-  const res = await validateAvocadoYaml(
-    "kernel: {cmdline: a, cmdline_extra: b}\n",
-  );
-  assert.equal(res.ok, false);
-  assert.ok(
-    res.errors.some(
-      (e) =>
-        e.instancePath === "/kernel/cmdline_extra" &&
-        /must not be set together/.test(e.message),
-    ),
-    JSON.stringify(res.errors),
-  );
-});
-
-test("an unknown var.hardware value is an error", async () => {
-  const res = await validateAvocadoYaml(
-    "runtimes:\n  dev:\n    extensions: [a]\n    var: {encrypt: true, hardware: bogus}\n",
-  );
-  assert.equal(res.ok, false);
-  assert.ok(
-    res.errors.some((e) => e.instancePath === "/runtimes/dev/var/hardware"),
-    JSON.stringify(res.errors),
-  );
-});
-
-// The CLI reads a block with any field as one block, and every other mapping
-// as named entries (named_or_single_deserializer in config.rs). A bad named
-// entry must not pass as an unknown key of the one-block form.
-for (const [name, yaml, path] of [
-  [
-    "permissions",
-    "permissions:\n  dev:\n    users: [root]\n",
-    "/permissions/dev/users",
-  ],
-  [
-    "rootfs",
-    "rootfs:\n  prod:\n    permissions: 123\n",
-    "/rootfs/prod/permissions",
-  ],
-  ["kernel", "kernel:\n  lts:\n    cmdline: 5\n", "/kernel/lts/cmdline"],
-]) {
-  test(`a bad named ${name} entry is an error`, async () => {
-    const res = await validateAvocadoYaml(yaml);
-    assert.equal(res.ok, false);
-    assert.ok(
-      res.errors.some((e) => e.instancePath === path),
-      JSON.stringify(res.errors),
-    );
-  });
-}
-
-test("an unknown key in a named entry is still a warning", async () => {
-  const res = await validateAvocadoYaml(
-    "permissions:\n  dev:\n    users: { root: {} }\n    colour: blue\nkernel:\n  lts: { package: k, colour: blue }\n",
-  );
-  assert.equal(res.ok, true, JSON.stringify(res.errors));
-  assert.deepEqual(res.warnings, [
-    "unknown key 'permissions.dev.colour' is ignored",
-    "unknown key 'kernel.lts.colour' is ignored",
-  ]);
-});
-
-test("target overrides in a one-block rootfs are not named entries", async () => {
-  const res = await validateAvocadoYaml(
-    "rootfs:\n  packages: {}\n  target-raspberrypi4: { image: { type: kab } }\n",
-  );
-  assert.equal(res.ok, true, JSON.stringify(res.errors));
-});
-
-test("add-extension writes git and path sources and depends_on", async () => {
+test("add-extension writes git and path sources and depends_on", () => {
   let y = addExtension(BASE, {
     name: "app",
     source: { type: "git", url: "https://x/y.git", ref: "main" },
@@ -407,9 +247,6 @@ test("add-extension writes git and path sources and depends_on", async () => {
   assert.deepEqual(parsed.extensions.base, {
     source: { type: "path", path: "../base" },
   });
-  const res = await validateAvocadoYaml(y);
-  assert.equal(res.ok, true, JSON.stringify(res.errors));
-  assert.deepEqual(res.warnings, []);
 });
 
 test("stone_manifest must be a relative path inside the project", async () => {
@@ -498,4 +335,73 @@ test("stoneManifests reads one runtime or all of them", () => {
     ["b.json"],
   );
   assert.deepEqual(stoneManifests(doc, "test"), []);
+});
+
+test("without a CLI, validation reports why and still returns", async () => {
+  const real = process.env.AVOCADO_BINARY;
+  process.env.AVOCADO_BINARY = join(tmpdir(), "no-such-avocado");
+  try {
+    const res = await validateAvocadoYaml("runtimes: {}\n");
+    assert.equal(res.ok, false);
+    assert.equal(res.schemaSource, "none");
+    assert.match(res.errors[0].message, /not installed or not on PATH/);
+  } finally {
+    process.env.AVOCADO_BINARY = real;
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Validation is the CLI's (`avocado config validate`). The MCP passes the YAML
+// through, shows the report, and adds the stone checks.
+// ---------------------------------------------------------------------------
+
+test("the YAML goes to the CLI unchanged on stdin", async () => {
+  const yaml = "# keep me\nruntimes:\n  dev: {}\n";
+  await validateAvocadoYaml(yaml);
+  const stdin = join(dirname(process.env.AVOCADO_BINARY!), "stdin.yaml");
+  assert.equal(readFileSync(stdin, "utf8"), yaml);
+});
+
+test("the CLI report is the result, with the stone checks added", async () => {
+  const res = await withReport(
+    {
+      ok: false,
+      errors: [
+        {
+          path: "/runtimes/dev/extensions",
+          message: '5 is not of type "array"',
+        },
+        { path: "", message: "YAML parse error: bad" },
+      ],
+      warnings: ["unknown key 'rutimes' is ignored; did you mean 'runtimes'?"],
+    },
+    () =>
+      validateAvocadoYaml("runtimes:\n  dev:\n    stone_manifest: /abs.json\n"),
+  );
+  assert.equal(res.ok, false);
+  assert.deepEqual(res.errors, [
+    {
+      instancePath: "/runtimes/dev/extensions",
+      message: '5 is not of type "array"',
+    },
+    { instancePath: "(root)", message: "YAML parse error: bad" },
+  ]);
+  assert.equal(
+    res.warnings[0],
+    "unknown key 'rutimes' is ignored; did you mean 'runtimes'?",
+  );
+  assert.ok(
+    res.warnings.some((w) => /is an absolute path/.test(w)),
+    JSON.stringify(res.warnings),
+  );
+  assert.equal(res.schemaSource, "`avocado config validate`");
+});
+
+test("an env template not passed to the CLI is a warning", async () => {
+  const res = await validateAvocadoYaml(
+    'distro:\n  release: "{{ env.AVOCADO_RELEASE }}"\n  channel: "{{ env.HOME }}"\n',
+  );
+  assert.equal(res.ok, true);
+  assert.equal(res.warnings.length, 1, JSON.stringify(res.warnings));
+  assert.match(res.warnings[0], /^'AVOCADO_RELEASE' is empty in this check/);
 });

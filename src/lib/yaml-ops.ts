@@ -1,8 +1,8 @@
 /**
  * avocado.yaml helpers: parse / validate / safe-mutate.
  *
- * Validation uses Ajv against the CLI's JSON Schema (see schema-client.ts),
- * and reports keys the CLI ignores as warnings (see config-lint.ts).
+ * Validation runs the installed CLI (`avocado config validate`, see
+ * schema-client.ts) and adds the stone checks of `stoneManifestWarnings`.
  * Mutations preserve formatting and comments by using the `yaml` package's
  * Document API rather than parse + stringify.
  */
@@ -18,8 +18,7 @@ import {
   YAMLSeq,
   Scalar,
 } from "yaml";
-import { loadSchema } from "./schema-client.js";
-import { ignoredKeys } from "./config-lint.js";
+import { CLI_ENV_KEYS, validateWithCli } from "./schema-client.js";
 
 export interface YamlValidationResult {
   /** True when there are no errors. Warnings do not fail validation. */
@@ -38,64 +37,61 @@ export async function validateAvocadoYaml(
   /** The project directory. When set, the stone manifest file must exist. */
   projectDir?: string,
 ): Promise<YamlValidationResult> {
-  const { schema, source, validate } = await loadSchema();
-
-  const fail = (message: string): YamlValidationResult => ({
-    ok: false,
-    errors: [{ instancePath: "", message: `YAML parse error: ${message}` }],
-    warnings: [],
-    schemaSource: source,
-  });
-  let parsed: unknown;
+  // The stone checks read the project, which the CLI does not see. A file
+  // that does not parse gets none: the CLI reports the parse error.
+  let stoneWarnings: string[] = [];
   try {
     const doc = parseDocument(yamlText);
-    if (doc.errors.length > 0) return fail(doc.errors[0].message);
-    parsed = doc.toJS();
-  } catch (e) {
-    return fail((e as Error).message);
+    if (doc.errors.length === 0) {
+      stoneWarnings = stoneManifestWarnings(doc.toJS(), projectDir);
+    }
+  } catch {
+    // The CLI reports it.
   }
 
-  const ok = validate(parsed);
-  const errors: { instancePath: string; message: string }[] = ok
-    ? []
-    : (validate.errors ?? []).map((e) => {
-        const path = e.instancePath || "(root)";
-        // The schema uses `false` for keys that exclude each other, such as
-        // kernel `cmdline` and `cmdline_extra`.
-        if (e.keyword === "false schema") {
-          return {
-            instancePath: path,
-            message: "must not be set together with another key in this block",
-          };
-        }
-        // The validator keeps the unknown-key rule only on the one-block
-        // form of rootfs, initramfs, kernel and permissions (schema-client.ts).
-        if (e.keyword === "additionalProperties") {
-          const key = String(e.params?.additionalProperty);
-          return {
-            instancePath: path,
-            message: `is not one block, because '${key}' is not a field. A block that sets a field cannot also hold named entries`,
-          };
-        }
-        const params =
-          e.params && Object.keys(e.params).length > 0
-            ? `: ${JSON.stringify(e.params)}`
-            : "";
-        return {
-          instancePath: path,
-          message: (e.message ?? "(no message)") + params,
-        };
-      });
+  const envWarnings = unpassedEnvWarnings(yamlText);
 
+  let report;
+  try {
+    report = await validateWithCli(yamlText);
+  } catch (e) {
+    // No CLI to check with. Report it as the result, so the tools that edit
+    // YAML still return the YAML.
+    return {
+      ok: false,
+      errors: [{ instancePath: "", message: (e as Error).message }],
+      warnings: [...envWarnings, ...stoneWarnings],
+      schemaSource: "none",
+    };
+  }
   return {
-    ok: !!ok,
-    errors,
-    warnings: [
-      ...ignoredKeys(schema, parsed),
-      ...stoneManifestWarnings(parsed, projectDir),
-    ],
-    schemaSource: source,
+    ok: report.ok,
+    errors: report.errors.map((e) => ({
+      instancePath: e.path || "(root)",
+      message: e.message,
+    })),
+    warnings: [...report.warnings, ...envWarnings, ...stoneWarnings],
+    schemaSource: "`avocado config validate`",
   };
+}
+
+/**
+ * The CLI runs without the server's environment (see `cliEnv`), so a
+ * `{{ env.X }}` template is empty while it validates. Say so, so that an
+ * error from an empty value is not taken for a problem in the file.
+ */
+function unpassedEnvWarnings(yamlText: string): string[] {
+  const names = new Set<string>();
+  for (const m of yamlText.matchAll(
+    /\{\{\s*env\.([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/g,
+  )) {
+    if (!CLI_ENV_KEYS.includes(m[1])) names.add(m[1]);
+  }
+  if (names.size === 0) return [];
+  const list = [...names].map((n) => `'${n}'`).join(", ");
+  return [
+    `${list} ${names.size === 1 ? "is" : "are"} empty in this check: the MCP does not pass its environment to the CLI, so that no credential can appear in the result. To check the file with those values, run \`avocado config validate\` in a shell that sets them.`,
+  ];
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -191,7 +187,7 @@ const DEFAULT_TEMPLATE = readFileSync(
 
 /**
  * Starter avocado.yaml for when the avocado CLI is not available. It is the
- * CLI's own `configs/default.yaml` (vendored next to the schema), with the
+ * CLI's own `configs/default.yaml` (vendored in `src/lib/schema/`), with the
  * caller's values written into the template text at the place of each node.
  * Re-serializing the whole document would move the template's comments, so
  * only the edited values are written, each quoted by the `yaml` package.

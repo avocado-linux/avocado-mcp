@@ -29,9 +29,10 @@ import { registerPrompts } from "../src/tools/prompts.js";
 import { clearHardwareDataCache } from "../src/lib/hardware-data.js";
 import { clearSelectableCache } from "../src/lib/hardware-support.js";
 import { TARGETS, DEVICES } from "./lib/hardware-fixture.js";
+import { fakeAvocado, fakeCli, setReport } from "./lib/fake-cli.js";
 
-// Validate against the vendored schema: no network in tests.
-process.env.AVOCADO_MCP_SCHEMA_OFFLINE = "1";
+// A fake CLI for the schema and validation. The CLI tests what it reports.
+process.env.AVOCADO_BINARY = fakeAvocado();
 
 async function connect(repoClient = new RepoClient()) {
   const server = new McpServer({ name: "avocado-os", version: "test" });
@@ -567,7 +568,7 @@ test("init-project from scratch tells the model to run avocado init", async () =
     assert.doesNotMatch(noCli, /avocado init --target/);
     assert.match(noCli, /```yaml\n# yaml-language-server/);
     assert.match(noCli, /default_target_board: mic-712-ox-16gb/);
-    assert.match(noCli, /validates against the schema/);
+    assert.match(noCli, /passes `avocado config validate`/);
 
     const noCliExtra = await call({
       cliAvailable: false,
@@ -645,17 +646,74 @@ test("an exact match still lists the feeds the MCP could not read", async () => 
   assert.match(text, /Not checked[\s\S]*`acme` for `qemuarm64`/);
 });
 
-test("validate-yaml reports ignored keys as warnings, not errors", async () => {
+test("validate-yaml shows the errors and warnings the CLI reports", async () => {
   const { client } = await connect();
-  const res = await client.callTool({
-    name: "validate-yaml",
-    arguments: { yaml: "runtimes:\n  dev:\n    extentions: [app]\n" },
+  setReport({
+    ok: false,
+    errors: [
+      { path: "/runtimes/dev/extensions", message: '5 is not of type "array"' },
+    ],
+    warnings: ["unknown key 'rutimes' is ignored; did you mean 'runtimes'?"],
   });
-  const s = res.structuredContent as { ok: boolean; warnings: string[] };
-  assert.equal(s.ok, true);
-  assert.deepEqual(s.warnings, [
-    "unknown key 'runtimes.dev.extentions' is ignored; did you mean 'extensions'?",
-  ]);
+  try {
+    const res = await client.callTool({
+      name: "validate-yaml",
+      arguments: {
+        yaml: "rutimes: {}\nruntimes:\n  dev:\n    extensions: 5\n",
+      },
+    });
+    const s = res.structuredContent as {
+      ok: boolean;
+      warnings: string[];
+      schemaSource: string;
+    };
+    assert.equal(s.ok, false);
+    assert.deepEqual(s.warnings, [
+      "unknown key 'rutimes' is ignored; did you mean 'runtimes'?",
+    ]);
+    assert.equal(s.schemaSource, "`avocado config validate`");
+    const text = (res.content as { text: string }[])[0].text;
+    assert.match(
+      text,
+      /`\/runtimes\/dev\/extensions`: 5 is not of type "array"/,
+    );
+  } finally {
+    setReport(null);
+  }
+});
+
+test("validate-yaml never returns a server credential", async () => {
+  // The CLI interpolates `{{ env.X }}` before it validates, and the value can
+  // land in an error path or message. Here the fake CLI does the same with
+  // what it was given: the secret must not be among it.
+  const realBinary = process.env.AVOCADO_BINARY;
+  process.env.AVOCADO_BINARY = fakeCli(
+    `printf '{"ok":false,"errors":[{"path":"/runtimes/%s/extensions","message":"%s is not of type array"}],"warnings":["%s"]}\\n' "$GITHUB_TOKEN" "$GITHUB_TOKEN" "$GITHUB_TOKEN"\nexit 1`,
+  );
+  process.env.GITHUB_TOKEN = "dummy-pr25-secret";
+  try {
+    const { client } = await connect();
+    const res = await client.callTool({
+      name: "validate-yaml",
+      arguments: {
+        yaml: 'runtimes: {"{{ env.GITHUB_TOKEN }}": {extensions: 5}}\n',
+      },
+    });
+    const all = JSON.stringify(res);
+    assert.ok(!all.includes("dummy-pr25-secret"), all);
+    const s = res.structuredContent as {
+      errors: { instancePath: string }[];
+      warnings: string[];
+    };
+    assert.equal(s.errors[0].instancePath, "/runtimes//extensions");
+    assert.match(
+      s.warnings.join("\n"),
+      /'GITHUB_TOKEN' is empty in this check/,
+    );
+  } finally {
+    delete process.env.GITHUB_TOKEN;
+    process.env.AVOCADO_BINARY = realBinary;
+  }
 });
 
 test("validate-yaml checks the stone_manifest file in projectDir", async () => {
