@@ -19,7 +19,7 @@ import {
   validateAvocadoYaml,
   stoneManifests,
 } from "../../src/lib/yaml-ops.js";
-import { fakeAvocado } from "./fake-cli.js";
+import { fakeAvocado, withReport } from "./fake-cli.js";
 
 // A fake CLI for the schema and validation. The CLI tests what it reports.
 process.env.AVOCADO_BINARY = fakeAvocado();
@@ -355,16 +355,6 @@ test("without a CLI, validation reports why and still returns", async () => {
 // through, shows the report, and adds the stone checks.
 // ---------------------------------------------------------------------------
 
-/** Run `fn` with the fake CLI printing `report`. */
-async function withReport<T>(report: object, fn: () => Promise<T>) {
-  process.env.FAKE_AVOCADO_REPORT = JSON.stringify(report);
-  try {
-    return await fn();
-  } finally {
-    delete process.env.FAKE_AVOCADO_REPORT;
-  }
-}
-
 test("the YAML goes to the CLI unchanged on stdin", async () => {
   const yaml = "# keep me\nruntimes:\n  dev: {}\n";
   await validateAvocadoYaml(yaml);
@@ -405,4 +395,13 @@ test("the CLI report is the result, with the stone checks added", async () => {
     JSON.stringify(res.warnings),
   );
   assert.equal(res.schemaSource, "`avocado config validate`");
+});
+
+test("an env template not passed to the CLI is a warning", async () => {
+  const res = await validateAvocadoYaml(
+    'distro:\n  release: "{{ env.AVOCADO_RELEASE }}"\n  channel: "{{ env.HOME }}"\n',
+  );
+  assert.equal(res.ok, true);
+  assert.equal(res.warnings.length, 1, JSON.stringify(res.warnings));
+  assert.match(res.warnings[0], /^'AVOCADO_RELEASE' is empty in this check/);
 });

@@ -3,11 +3,10 @@ import assert from "node:assert/strict";
 import { tmpdir } from "os";
 import { join } from "path";
 import { loadSchema, validateWithCli } from "../../src/lib/schema-client.js";
-import { FAKE_SCHEMA, fakeAvocado, fakeCli } from "./fake-cli.js";
+import { FAKE_SCHEMA, fakeAvocado, fakeCli, setReport } from "./fake-cli.js";
 
 afterEach(() => {
   delete process.env.AVOCADO_BINARY;
-  delete process.env.FAKE_AVOCADO_REPORT;
 });
 
 test("reads the schema the CLI prints", async () => {
@@ -29,7 +28,7 @@ test("returns the CLI report, also when the CLI exits 1", async () => {
     errors: [{ path: "/a", message: "bad" }],
     warnings: [],
   };
-  process.env.FAKE_AVOCADO_REPORT = JSON.stringify(failing);
+  setReport(failing);
   assert.deepEqual(await validateWithCli("a: 1\n"), failing);
 });
 
@@ -40,7 +39,7 @@ test("a message with a newline in it reaches the result unchanged", async () => 
     errors: [{ path: "", message: "line one\\nline two" }],
     warnings: [],
   };
-  process.env.FAKE_AVOCADO_REPORT = JSON.stringify(report);
+  setReport(report);
   assert.deepEqual(await validateWithCli(""), report);
 });
 
@@ -87,4 +86,19 @@ test("a CLI that exits before it reads the YAML does not stop the server", async
     validateWithCli("a: 1\n".repeat(200_000)),
     /Run `avocado upgrade`/,
   );
+});
+
+test("the CLI gets no server variables but the ones it needs to start", async () => {
+  process.env.AVOCADO_BINARY = fakeCli(
+    `printf '{"ok":true,"errors":[],"warnings":["%s|%s|%s|%s"]}\\n' "$PATH" "$AVOCADO_NO_UPDATE_CHECK" "$GITHUB_TOKEN" "$AVOCADO_CONNECT_TOKEN"`,
+  );
+  process.env.GITHUB_TOKEN = "dummy-gh-secret";
+  process.env.AVOCADO_CONNECT_TOKEN = "dummy-connect-secret";
+  try {
+    const { warnings } = await validateWithCli("");
+    assert.deepEqual(warnings, [`${process.env.PATH}|1||`]);
+  } finally {
+    delete process.env.GITHUB_TOKEN;
+    delete process.env.AVOCADO_CONNECT_TOKEN;
+  }
 });

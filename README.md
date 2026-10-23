@@ -5,7 +5,7 @@ MCP server that turns an AI assistant into a working Avocado OS co-pilot. It hel
 - Pick the right hardware target
 - Scaffold a project — reference-first when one matches the user's task, or a minimal `avocado.yaml` when none does
 - Search and describe packages in the live RPM feed; feed-first is the default for adding any library
-- Author and validate `avocado.yaml` against a bundled JSON Schema (no schema-version drift)
+- Author and validate `avocado.yaml` with the installed avocado CLI (`avocado config schema`, `avocado config validate`), so the MCP reports what the CLI reports
 - Browse, read, and copy from reference projects (full source — `avocado.yaml`, app code, overlays, build hooks)
 - First-time provision a device, then push iterative updates via `avocado deploy` — no reflash required
 - Diagnose `avocado build` / `avocado provision` failures; honest fallback when no pattern matches (no empty diagnoses)
@@ -14,7 +14,7 @@ MCP server that turns an AI assistant into a working Avocado OS co-pilot. It hel
 - Run closed-loop debugging: read logs, edit code or extensions to add logging, redeploy, re-verify
 
 Stdio-only over npm. No hosted endpoint, no API key. All data sources are public:
-`repo.avocadolinux.org`, `github.com/avocado-linux/references`, `docs.peridio.com`. The `avocado.yaml` schema ships bundled with the server.
+`repo.avocadolinux.org`, `github.com/avocado-linux/references`, `docs.peridio.com`. The `avocado.yaml` schema and validation come from the installed avocado CLI.
 
 > **Safety:** this server lets an AI assistant run real operations on your
 > behalf — editing project files and running `avocado` commands that can flash

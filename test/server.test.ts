@@ -29,7 +29,7 @@ import { registerPrompts } from "../src/tools/prompts.js";
 import { clearHardwareDataCache } from "../src/lib/hardware-data.js";
 import { clearSelectableCache } from "../src/lib/hardware-support.js";
 import { TARGETS, DEVICES } from "./lib/hardware-fixture.js";
-import { fakeAvocado } from "./lib/fake-cli.js";
+import { fakeAvocado, fakeCli, setReport } from "./lib/fake-cli.js";
 
 // A fake CLI for the schema and validation. The CLI tests what it reports.
 process.env.AVOCADO_BINARY = fakeAvocado();
@@ -648,7 +648,7 @@ test("an exact match still lists the feeds the MCP could not read", async () => 
 
 test("validate-yaml shows the errors and warnings the CLI reports", async () => {
   const { client } = await connect();
-  process.env.FAKE_AVOCADO_REPORT = JSON.stringify({
+  setReport({
     ok: false,
     errors: [
       { path: "/runtimes/dev/extensions", message: '5 is not of type "array"' },
@@ -678,7 +678,41 @@ test("validate-yaml shows the errors and warnings the CLI reports", async () => 
       /`\/runtimes\/dev\/extensions`: 5 is not of type "array"/,
     );
   } finally {
-    delete process.env.FAKE_AVOCADO_REPORT;
+    setReport(null);
+  }
+});
+
+test("validate-yaml never returns a server credential", async () => {
+  // The CLI interpolates `{{ env.X }}` before it validates, and the value can
+  // land in an error path or message. Here the fake CLI does the same with
+  // what it was given: the secret must not be among it.
+  const realBinary = process.env.AVOCADO_BINARY;
+  process.env.AVOCADO_BINARY = fakeCli(
+    `printf '{"ok":false,"errors":[{"path":"/runtimes/%s/extensions","message":"%s is not of type array"}],"warnings":["%s"]}\\n' "$GITHUB_TOKEN" "$GITHUB_TOKEN" "$GITHUB_TOKEN"\nexit 1`,
+  );
+  process.env.GITHUB_TOKEN = "dummy-pr25-secret";
+  try {
+    const { client } = await connect();
+    const res = await client.callTool({
+      name: "validate-yaml",
+      arguments: {
+        yaml: 'runtimes: {"{{ env.GITHUB_TOKEN }}": {extensions: 5}}\n',
+      },
+    });
+    const all = JSON.stringify(res);
+    assert.ok(!all.includes("dummy-pr25-secret"), all);
+    const s = res.structuredContent as {
+      errors: { instancePath: string }[];
+      warnings: string[];
+    };
+    assert.equal(s.errors[0].instancePath, "/runtimes//extensions");
+    assert.match(
+      s.warnings.join("\n"),
+      /'GITHUB_TOKEN' is empty in this check/,
+    );
+  } finally {
+    delete process.env.GITHUB_TOKEN;
+    process.env.AVOCADO_BINARY = realBinary;
   }
 });
 

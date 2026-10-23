@@ -18,7 +18,7 @@ import {
   YAMLSeq,
   Scalar,
 } from "yaml";
-import { validateWithCli } from "./schema-client.js";
+import { CLI_ENV_KEYS, validateWithCli } from "./schema-client.js";
 
 export interface YamlValidationResult {
   /** True when there are no errors. Warnings do not fail validation. */
@@ -49,6 +49,8 @@ export async function validateAvocadoYaml(
     // The CLI reports it.
   }
 
+  const envWarnings = unpassedEnvWarnings(yamlText);
+
   let report;
   try {
     report = await validateWithCli(yamlText);
@@ -58,7 +60,7 @@ export async function validateAvocadoYaml(
     return {
       ok: false,
       errors: [{ instancePath: "", message: (e as Error).message }],
-      warnings: stoneWarnings,
+      warnings: [...envWarnings, ...stoneWarnings],
       schemaSource: "none",
     };
   }
@@ -68,9 +70,28 @@ export async function validateAvocadoYaml(
       instancePath: e.path || "(root)",
       message: e.message,
     })),
-    warnings: [...report.warnings, ...stoneWarnings],
+    warnings: [...report.warnings, ...envWarnings, ...stoneWarnings],
     schemaSource: "`avocado config validate`",
   };
+}
+
+/**
+ * The CLI runs without the server's environment (see `cliEnv`), so a
+ * `{{ env.X }}` template is empty while it validates. Say so, so that an
+ * error from an empty value is not taken for a problem in the file.
+ */
+function unpassedEnvWarnings(yamlText: string): string[] {
+  const names = new Set<string>();
+  for (const m of yamlText.matchAll(
+    /\{\{\s*env\.([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/g,
+  )) {
+    if (!CLI_ENV_KEYS.includes(m[1])) names.add(m[1]);
+  }
+  if (names.size === 0) return [];
+  const list = [...names].map((n) => `'${n}'`).join(", ");
+  return [
+    `${list} ${names.size === 1 ? "is" : "are"} empty in this check: the MCP does not pass its environment to the CLI, so that no credential can appear in the result. To check the file with those values, run \`avocado config validate\` in a shell that sets them.`,
+  ];
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {

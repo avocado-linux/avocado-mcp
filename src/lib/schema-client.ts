@@ -7,7 +7,8 @@
  * - `loadSchema`: `avocado config schema`
  * - `validateWithCli`: `avocado config validate -c - --output json`
  *
- * Set AVOCADO_BINARY to use a CLI that is not `avocado` on PATH.
+ * Set AVOCADO_BINARY to use a CLI that is not `avocado` on PATH. The CLI
+ * runs with only the variables in CLI_ENV_KEYS.
  */
 
 import { execFile } from "child_process";
@@ -33,6 +34,40 @@ export interface CliValidation {
 
 function binary(): string {
   return process.env.AVOCADO_BINARY ?? "avocado";
+}
+
+/**
+ * Server variables the CLI runs with: what a process needs to start on
+ * macOS, Linux and Windows, and no credentials. Every variable the CLI gets
+ * is readable through `{{ env.X }}` in the YAML, and the CLI can put the
+ * value in an error message or path, which the tools return. So the server
+ * environment (GITHUB_TOKEN, AVOCADO_CONNECT_TOKEN, ...) is not passed.
+ */
+export const CLI_ENV_KEYS = [
+  "PATH",
+  "PATHEXT",
+  "HOME",
+  "TMPDIR",
+  "TMP",
+  "TEMP",
+  "LANG",
+  "LC_ALL",
+  "LC_CTYPE",
+  "XDG_CACHE_HOME",
+  "XDG_CONFIG_HOME",
+  "SystemRoot",
+  "USERPROFILE",
+  "APPDATA",
+  "LOCALAPPDATA",
+];
+
+/** The environment for the CLI. The update check is off: it is not needed here. */
+export function cliEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { AVOCADO_NO_UPDATE_CHECK: "1" };
+  for (const key of CLI_ENV_KEYS) {
+    if (process.env[key] !== undefined) env[key] = process.env[key];
+  }
+  return env;
 }
 
 type ExecError = {
@@ -69,6 +104,7 @@ export async function loadSchema(): Promise<LoadedSchema> {
   let stdout: string;
   try {
     ({ stdout } = await execFileP(binary(), ["config", "schema"], {
+      env: cliEnv(),
       timeout: TIMEOUT_MS,
       maxBuffer: MAX_BUFFER,
     }));
@@ -104,6 +140,7 @@ export async function validateWithCli(yaml: string): Promise<CliValidation> {
   let stdout: string;
   try {
     const run = execFileP(binary(), args, {
+      env: cliEnv(),
       timeout: TIMEOUT_MS,
       maxBuffer: MAX_BUFFER,
     });
