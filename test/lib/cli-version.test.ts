@@ -46,20 +46,22 @@ test("compares semver with numeric prerelease identifiers", () => {
   assert.ok(compareVersions("1.0.0-1", "1.0.0-rc") < 0);
 });
 
-test("flags CLIs older than 1.0.0-rc.4 and nothing else", () => {
+test("flags CLIs older than 1.0.0 and nothing else", () => {
   for (const out of [
     "avocado 0.41.0",
     "avocado 0.99.9 (abc1234 2026-01-01)",
     "avocado 1.0.0-rc.3",
     "avocado 1.0.0-beta.9",
+    "avocado 1.0.0-rc.4",
+    "avocado 1.0.0-rc.5 (abc1234 2026-03-05)",
+    "avocado 1.0.0-rc.10",
   ]) {
     assert.equal(isCliOutdated(out), true, out);
   }
   for (const out of [
-    "avocado 1.0.0-rc.4",
-    "avocado 1.0.0-rc.5 (abc1234 2026-03-05)",
-    "avocado 1.0.0-rc.10",
     "avocado 1.0.0",
+    "avocado 1.0.0 (343c137 2026-10-28)",
+    "avocado 1.0.1",
     "avocado 2.3.1",
     "unparseable",
   ]) {

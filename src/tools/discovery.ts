@@ -408,7 +408,7 @@ export function registerDiscoveryTools(
 
       if (cli.outdated && !delegation.available) {
         out += `\n## ⚠️ Upgrade the avocado CLI\n\n`;
-        out += `This CLI is older than ${MIN_CLI_VERSION}. The commands this MCP gives assume ${MIN_CLI_VERSION} or later. Older CLIs can prompt during install or need a TTY for provision. Run \`avocado upgrade\` to move to the latest release, or \`avocado upgrade --version <version>\` for a specific one.\n`;
+        out += `This CLI is older than ${MIN_CLI_VERSION}. The commands this MCP gives assume ${MIN_CLI_VERSION} or later. Older CLIs do not have \`avocado config schema\` and \`avocado config validate\`, so \`validate-yaml\`, \`get-config-schema\` and the YAML edit tools cannot check \`avocado.yaml\`. CLIs older than 1.0.0-rc.4 can also prompt during install or need a TTY for provision. Run \`avocado upgrade\` to move to the latest release, or \`avocado upgrade --version <version>\` for a specific one.\n`;
       }
 
       out += `\n## Package feed\n\n${feed.describe()}`;
