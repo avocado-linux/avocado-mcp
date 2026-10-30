@@ -2,12 +2,14 @@
  * Parse and compare `avocado --version` output.
  *
  * The CLI prints `avocado 1.0.0-rc.5 (abc1234 2026-03-05)`, or just
- * `avocado 1.0.0-rc.5` when built outside its git checkout. The MCP advice
- * assumes 1.0.0-rc.4 or later (no install prompts, no TTY wrapper), so
- * `environment-check` warns on anything older.
+ * `avocado 1.0.0-rc.5` when built outside its git checkout. The MCP needs
+ * 1.0.0 or later: `validate-yaml`, `get-config-schema` and the YAML edit
+ * tools run `avocado config schema` and `avocado config validate`, which
+ * 1.0.0 adds. 1.0.0-rc.4 already removed the install prompts and the TTY
+ * wrapper. `environment-check` warns on anything older.
  */
 
-export const MIN_CLI_VERSION = "1.0.0-rc.4";
+export const MIN_CLI_VERSION = "1.0.0";
 
 const SEMVER_RE = /\b(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)/;
 
