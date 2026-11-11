@@ -1,0 +1,515 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import {
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+  realpathSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  cliVersionWarning,
+  createWorkspace,
+  findDelta,
+  loadPublishedState,
+  mirrorDirFrom,
+  projectBuildTarget,
+  readMirrorMarker,
+  readRecipeMap,
+  type GitResult,
+  type PublishedClient,
+} from "../../src/lib/build-path-io.js";
+import type { ResolvedFeed } from "../../src/lib/feed-config.js";
+import type { FeedPackage } from "../../src/lib/repo-client.js";
+
+function tmp(): string {
+  return realpathSync(mkdtempSync(join(tmpdir(), "bpio-")));
+}
+
+function write(path: string, text: string): void {
+  mkdirSync(join(path, ".."), { recursive: true });
+  writeFileSync(path, text);
+}
+
+const GIT_ENV = {
+  ...process.env,
+  GIT_CONFIG_GLOBAL: "/dev/null",
+  GIT_CONFIG_SYSTEM: "/dev/null",
+};
+
+function git(cwd: string, ...args: string[]): string {
+  return execFileSync("git", args, { cwd, env: GIT_ENV, encoding: "utf8" })
+    .toString()
+    .trim();
+}
+
+function initRepo(dir: string): void {
+  mkdirSync(dir, { recursive: true });
+  git(dir, "init", "-q");
+}
+
+function commit(dir: string, msg: string): string {
+  git(
+    dir,
+    "-c",
+    "user.name=t",
+    "-c",
+    "user.email=t@example.com",
+    "-c",
+    "commit.gpgsign=false",
+    "commit",
+    "-q",
+    "-m",
+    msg,
+  );
+  return git(dir, "rev-parse", "HEAD");
+}
+
+// ---- target ---------------------------------------------------------------
+
+test("project target: AVOCADO_TARGET wins over default_target", () => {
+  const dir = tmp();
+  const cfg = join(dir, "avocado.yaml");
+  write(cfg, "default_target: qemux86-64\n");
+  assert.equal(projectBuildTarget(cfg, { AVOCADO_TARGET: "imx93" }), "imx93");
+  assert.equal(projectBuildTarget(cfg, {}), "qemux86-64");
+  assert.equal(projectBuildTarget(join(dir, "none.yaml"), {}), undefined);
+  rmSync(dir, { recursive: true });
+});
+
+// ---- delta ----------------------------------------------------------------
+
+const DELTA = JSON.stringify({
+  schema_version: 1,
+  base: { release: "2026", channel: "edge", snapshot_id: null },
+  built_recipes: ["htop"],
+});
+
+test("delta is found two and three levels above a path feed", () => {
+  const dir = tmp();
+  const root = join(dir, "delta", "2026", "edge");
+  write(join(root, "delta.json"), DELTA);
+  const two = join(root, "target", "qemux86-64");
+  const three = join(two, "core2_64");
+  mkdirSync(three, { recursive: true });
+  const a = findDelta([two]);
+  assert.equal(a.found?.root, root);
+  assert.deepEqual(a.found?.manifest.built_recipes, ["htop"]);
+  const b = findDelta([three]);
+  assert.equal(b.found?.root, root);
+  assert.deepEqual(b.found?.feedDirs, [three]);
+  rmSync(dir, { recursive: true });
+});
+
+test("delta four levels above a path feed is not found", () => {
+  const dir = tmp();
+  const root = join(dir, "d");
+  write(join(root, "delta.json"), DELTA);
+  const deep = join(root, "a", "b", "c", "d");
+  mkdirSync(deep, { recursive: true });
+  assert.equal(findDelta([deep]).found, null);
+  rmSync(dir, { recursive: true });
+});
+
+test("malformed delta manifest is no delta and carries a warning", () => {
+  const dir = tmp();
+  const root = join(dir, "d");
+  write(join(root, "delta.json"), '{"built_recipes": "htop"}');
+  mkdirSync(join(root, "target", "m"), { recursive: true });
+  const r = findDelta([join(root, "target", "m")]);
+  assert.equal(r.found, null);
+  assert.equal(r.warnings.length, 1);
+  rmSync(dir, { recursive: true });
+});
+
+test("recipe map reads entries and rejects a malformed file", () => {
+  const dir = tmp();
+  write(
+    join(dir, "recipe-map.json"),
+    JSON.stringify({
+      schema_version: 1,
+      entries: [
+        {
+          recipe: "htop",
+          packages: ["htop"],
+          layer: "meta-oe",
+          epoch: 0,
+          pv: "3.5.0",
+          pr: "r0.1",
+          srcrev: "INVALID",
+          layer_commit: "abc1234",
+          machine: "qemux86-64",
+          release: "2026",
+          task_hash: null,
+        },
+      ],
+    }),
+  );
+  assert.equal(readRecipeMap(dir).map?.entries[0].pr, "r0.1");
+  const bad = tmp();
+  write(join(bad, "recipe-map.json"), "{not json");
+  const r = readRecipeMap(bad);
+  assert.equal(r.map, null);
+  assert.equal(r.warnings.length, 1);
+  assert.equal(readRecipeMap(join(bad, "absent")).warnings.length, 0);
+  rmSync(dir, { recursive: true });
+  rmSync(bad, { recursive: true });
+});
+
+// ---- workspace ------------------------------------------------------------
+
+function layerWithHtop(ws: string, name: string): string {
+  const repo = join(ws, name);
+  initRepo(repo);
+  write(join(repo, "recipes-support", "htop", "htop_3.5.0.bb"), "# htop\n");
+  write(join(repo, "recipes-support", "htop", "files", "p.patch"), "x\n");
+  git(repo, "add", "-A");
+  commit(repo, "add htop");
+  return repo;
+}
+
+test("workspace maps a recipe to its last commit and layer repository", () => {
+  const ws = tmp();
+  const repo = layerWithHtop(ws, "meta-oe");
+  write(join(repo, "recipes-support", "htop", "files", "p.patch"), "y\n");
+  git(repo, "add", "-A");
+  const second = commit(repo, "touch files dir");
+  const w = createWorkspace(ws);
+  const groups = w.workspace.lastCommitFor("htop");
+  assert.deepEqual(groups, [{ commit: second, layer: "meta-oe" }]);
+  rmSync(ws, { recursive: true });
+});
+
+test("workspace gives each append its own group, in every layer", () => {
+  const ws = tmp();
+  layerWithHtop(ws, "meta-oe");
+  const other = join(ws, "meta-custom");
+  initRepo(other);
+  write(join(other, "recipes-support", "htop", "htop_%.bbappend"), "# a\n");
+  git(other, "add", "-A");
+  const c2 = commit(other, "append");
+  const groups = createWorkspace(ws).workspace.lastCommitFor("htop");
+  assert.equal(groups.length, 2);
+  assert.ok(groups.some((g) => g.layer === "meta-custom" && g.commit === c2));
+  assert.ok(groups.some((g) => g.layer === "meta-oe"));
+  rmSync(ws, { recursive: true });
+});
+
+test("a recipe found in two layers is unknown", () => {
+  const ws = tmp();
+  layerWithHtop(ws, "meta-a");
+  layerWithHtop(ws, "meta-b");
+  assert.deepEqual(createWorkspace(ws).workspace.lastCommitFor("htop"), []);
+  assert.deepEqual(createWorkspace(ws).workspace.lastCommitFor("absent"), []);
+  rmSync(ws, { recursive: true });
+});
+
+test("git exit 1 is not an error", () => {
+  const ws = tmp();
+  const repo = layerWithHtop(ws, "meta-oe");
+  write(join(repo, "recipes-support", "nano", "nano_8.0.bb"), "# nano\n");
+  git(repo, "add", "-A");
+  const mid = commit(repo, "add nano");
+  write(join(repo, "recipes-support", "htop", "htop_3.5.0.bb"), "# v2\n");
+  git(repo, "add", "-A");
+  const second = commit(repo, "touch htop");
+  const w = createWorkspace(ws);
+  assert.equal(w.workspace.lastCommitFor("htop")[0].commit, second);
+  assert.equal(w.workspace.lastCommitFor("nano")[0].commit, mid);
+  assert.equal(w.workspace.isAncestor(second, mid), false);
+  assert.equal(w.workspace.isAncestor(mid, second), true);
+  assert.equal(w.workspace.isAncestor(second, second), true);
+  assert.deepEqual(w.failures, []);
+  rmSync(ws, { recursive: true });
+});
+
+test("git exit 1 from the runner is false and records nothing; exit 128 is recorded", () => {
+  const ws = tmp();
+  layerWithHtop(ws, "meta-oe");
+  let status = 1;
+  const run = (_cwd: string, args: string[]): GitResult =>
+    args.includes("merge-base")
+      ? { status, stdout: "" }
+      : { status: 0, stdout: "a".repeat(40) + "\n" };
+  const w = createWorkspace(ws, run);
+  w.workspace.lastCommitFor("htop");
+  assert.equal(w.workspace.isAncestor("a".repeat(40), "b".repeat(40)), false);
+  assert.deepEqual(w.failures, []);
+  status = 128;
+  assert.equal(w.workspace.isAncestor("a".repeat(40), "b".repeat(40)), false);
+  assert.equal(w.failures.length, 1);
+  rmSync(ws, { recursive: true });
+});
+
+test("isAncestor refuses a commit that is not hexadecimal", () => {
+  const ws = tmp();
+  layerWithHtop(ws, "meta-oe");
+  const calls: string[][] = [];
+  const run = (_cwd: string, args: string[]): GitResult => {
+    calls.push(args);
+    return { status: 0, stdout: "a".repeat(40) + "\n" };
+  };
+  const w = createWorkspace(ws, run);
+  w.workspace.lastCommitFor("htop");
+  const before = calls.length;
+  assert.equal(w.workspace.isAncestor("a".repeat(40), "--output=x"), false);
+  assert.equal(calls.length, before);
+  rmSync(ws, { recursive: true });
+});
+
+// ---- mirror ---------------------------------------------------------------
+
+test("mirror directory: tool input wins over the environment", () => {
+  const env = { AVOCADO_FEED_MIRROR_DIR: "/env/dir" };
+  assert.equal(mirrorDirFrom("/input/dir", env), "/input/dir");
+  assert.equal(mirrorDirFrom(undefined, env), "/env/dir");
+  assert.equal(mirrorDirFrom("  ", env), "/env/dir");
+  assert.equal(mirrorDirFrom(undefined, {}), undefined);
+});
+
+test("mirror marker is read from release/channel/repo", () => {
+  const dir = tmp();
+  write(
+    join(dir, "2026", "edge", "target", "m", "noarch", ".bakar-mirror.json"),
+    JSON.stringify({ repomd_sha256: "ab".repeat(32), mode: "metadata-only" }),
+  );
+  assert.equal(
+    readMirrorMarker(dir, "2026", "edge", "target/m/noarch"),
+    "ab".repeat(32),
+  );
+  assert.equal(readMirrorMarker(dir, "2026", "edge", "target/m/none"), null);
+  assert.equal(readMirrorMarker(dir, "2026", "edge", "../etc"), null);
+  rmSync(dir, { recursive: true });
+});
+
+// ---- published state ------------------------------------------------------
+
+const REPO = "target/qemux86-64/noarch";
+const HEX40 = "c".repeat(40);
+
+function feed(over: Partial<ResolvedFeed> = {}): ResolvedFeed {
+  return {
+    baseUrl: "https://repo.example",
+    releasever: "2026/edge",
+    manifestPath: "2026/edge",
+    release: "2026",
+    channel: "edge",
+    sources: { repoUrl: "default", releasever: "default" },
+    notes: [],
+    ...over,
+  } as ResolvedFeed;
+}
+
+const fpkg = (name: string): FeedPackage =>
+  ({
+    name,
+    summary: "",
+    description: "",
+    version: "1",
+    release: "r0",
+    arch: "noarch",
+    repo: REPO,
+    href: "",
+    epoch: 0,
+    sourcerpm: `${name}-1-r0.src.rpm`,
+  }) as FeedPackage;
+
+interface Calls {
+  digest: number;
+  remotePackages: number;
+  mirrorPaths: string[];
+}
+
+function stub(
+  opts: {
+    down?: boolean;
+    digest?: string;
+    build?: "ok" | "none";
+  } = {},
+): { client: PublishedClient; calls: Calls } {
+  const calls: Calls = { digest: 0, remotePackages: 0, mirrorPaths: [] };
+  const client = {
+    getTargetManifest: async () =>
+      opts.down ? null : { "qemux86-64": [REPO] },
+    fetchSnapshotPointer: async () => (opts.down ? null : "snap-latest"),
+    fetchBuildManifest: async (_f: unknown, id: string) =>
+      opts.down
+        ? { kind: "unreachable" as const, reason: "down" }
+        : opts.build === "none"
+          ? { kind: "no-cache-key" as const, reason: "absent" }
+          : {
+              kind: "manifest" as const,
+              commit: HEX40,
+              layers: { "meta-oe": id.padEnd(40, "0") },
+            },
+    fetchRepoPackageInfos: async () => {
+      calls.remotePackages++;
+      return [
+        {
+          name: "remote",
+          epoch: 0,
+          version: "1",
+          release: "r0",
+          sourcerpm: "",
+        },
+      ];
+    },
+    fetchRepoDigests: async () => {
+      calls.digest++;
+      if (opts.down) throw new Error("down");
+      return {
+        repomdSha256: opts.digest ?? "ab".repeat(32),
+        primarySha256: "",
+      };
+    },
+    fetchExtraFeed: async (x: { path?: string }) => {
+      calls.mirrorPaths.push(x.path ?? "");
+      return [fpkg("mirrored")];
+    },
+  } as unknown as PublishedClient;
+  return { client, calls };
+}
+
+function mirrorWith(digest: string): string {
+  const dir = tmp();
+  write(
+    join(dir, "2026", "edge", REPO, ".bakar-mirror.json"),
+    JSON.stringify({ repomd_sha256: digest }),
+  );
+  return dir;
+}
+
+test("fresh mirror serves package metadata after only a digest check", async () => {
+  const mirror = mirrorWith("ab".repeat(32));
+  const { client, calls } = stub();
+  const r = await loadPublishedState({
+    client,
+    feed: feed(),
+    target: "qemux86-64",
+    mirrorDir: mirror,
+  });
+  assert.equal(calls.remotePackages, 0);
+  assert.equal(calls.digest, 1);
+  assert.deepEqual(calls.mirrorPaths, [join(mirror, "2026", "edge", REPO)]);
+  assert.equal(r.published.packages[0].name, "mirrored");
+  assert.equal(r.published.reachable, true);
+  assert.equal(r.published.snapshotId, "snap-latest");
+  assert.equal(r.mirrorConfigured, true);
+  assert.deepEqual(r.warnings, []);
+  rmSync(mirror, { recursive: true });
+});
+
+test("a matching pin skips the mirror and reads the remote", async () => {
+  const mirror = mirrorWith("ab".repeat(32));
+  const { client, calls } = stub();
+  const r = await loadPublishedState({
+    client,
+    feed: feed({
+      snapshot: "snap-pinned",
+      releasever: "2026/edge/snapshots/snap-pinned",
+    }),
+    target: "qemux86-64",
+    mirrorDir: mirror,
+  });
+  assert.equal(calls.digest, 0);
+  assert.equal(calls.mirrorPaths.length, 0);
+  assert.equal(calls.remotePackages, 1);
+  assert.equal(r.published.snapshotId, "snap-pinned");
+  assert.deepEqual(r.warnings, []);
+  rmSync(mirror, { recursive: true });
+});
+
+test("a stale mirror reads the remote and warns", async () => {
+  const mirror = mirrorWith("00".repeat(32));
+  const { client, calls } = stub({ digest: "ab".repeat(32) });
+  const r = await loadPublishedState({
+    client,
+    feed: feed(),
+    target: "qemux86-64",
+    mirrorDir: mirror,
+  });
+  assert.equal(calls.remotePackages, 1);
+  assert.equal(calls.mirrorPaths.length, 0);
+  assert.equal(r.warnings.length, 1);
+  assert.match(r.warnings[0], /stale/);
+  rmSync(mirror, { recursive: true });
+});
+
+test("remote down with a mirror reads the mirror and warns freshness was not verified", async () => {
+  const mirror = mirrorWith("ab".repeat(32));
+  const { client } = stub({ down: true });
+  const r = await loadPublishedState({
+    client,
+    feed: feed(),
+    target: "qemux86-64",
+    mirrorDir: mirror,
+  });
+  assert.equal(r.published.reachable, false);
+  assert.equal(r.published.packages[0].name, "mirrored");
+  assert.equal(r.published.buildManifest, null);
+  assert.equal(r.mirrorConfigured, true);
+  assert.match(r.warnings.join("\n"), /not verified/);
+  rmSync(mirror, { recursive: true });
+});
+
+test("remote down without a mirror is unreachable with a warning", async () => {
+  const { client } = stub({ down: true });
+  const r = await loadPublishedState({
+    client,
+    feed: feed(),
+    target: "qemux86-64",
+  });
+  assert.equal(r.published.reachable, false);
+  assert.deepEqual(r.published.packages, []);
+  assert.equal(r.mirrorConfigured, false);
+  assert.match(r.warnings.join("\n"), /could not be read/);
+});
+
+test("missing build manifest leaves the manifest null and the remote reachable", async () => {
+  const { client } = stub({ build: "none" });
+  const r = await loadPublishedState({
+    client,
+    feed: feed(),
+    target: "qemux86-64",
+  });
+  assert.equal(r.published.reachable, true);
+  assert.equal(r.published.buildManifest, null);
+});
+
+test("build manifest layers reach the published state", async () => {
+  const { client } = stub();
+  const r = await loadPublishedState({
+    client,
+    feed: feed(),
+    target: "qemux86-64",
+  });
+  assert.equal(r.commit, HEX40);
+  assert.equal(
+    r.published.buildManifest?.layers["meta-oe"],
+    "snap-latest".padEnd(40, "0"),
+  );
+});
+
+// ---- CLI version ----------------------------------------------------------
+
+test("an avocado CLI older than 1.0.0 warns; a current or absent one does not", async () => {
+  assert.match(
+    (await cliVersionWarning(async () => "avocado 0.41.0\n")) ?? "",
+    /1\.0\.0/,
+  );
+  assert.match(
+    (await cliVersionWarning(async () => "avocado 1.0.0-rc.5")) ?? "",
+    /older than 1\.0\.0/,
+  );
+  assert.equal(await cliVersionWarning(async () => "avocado 1.0.0"), null);
+  assert.equal(await cliVersionWarning(async () => "avocado 1.2.0"), null);
+  assert.equal(
+    await cliVersionWarning(async () => {
+      throw new Error("not found");
+    }),
+    null,
+  );
+});
