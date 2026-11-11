@@ -50,6 +50,7 @@ Requires Node ≥20. `npx` will clone the repo on first run, install dependencie
 | `search-packages`            | Substring search across the project's configured RPM feed (`projectDir`), or the default feed |
 | `describe-package`           | Detail view for one package: version, arch, summary, description                     |
 | `check-package-coverage`     | Batch-check a whole dependency list against one target/stream in a single call; per-dep present/missing verdict + confidence + coverage % (engine behind `/package-coverage`) |
+| `check-build-path`           | Decide whether a change needs an image build: takes `project_dir`, optional `workspace_dir`, `change`, `mirror_dir`; returns a `feed_hit` / `package_miss` / `image_miss` verdict as JSON |
 | `search-references`          | Browse or search the reference catalog (omit `query` to browse, pass `query` to rank)|
 | `get-reference`              | Full project bundle: file tree, `avocado.yaml`, README, overlay layout, build hooks  |
 | `get-reference-file`         | Read a single file from a reference (app source, overlay configs, build scripts)     |
