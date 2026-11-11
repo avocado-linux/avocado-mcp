@@ -139,11 +139,16 @@ export type ClassifyResult =
   | { ok: true; verdict: Verdict }
   | { ok: false; error: string };
 
-const IMAGE_CLASSES: Array<{ name: string; re: RegExp }> = [
+const IMAGE_CLASSES: Array<{ name: string; re: RegExp; not?: RegExp }> = [
   { name: "machine configuration", re: /(^|\/)conf\/machine\// },
-  { name: "kas machine file", re: /(^|\/)kas\// },
+  {
+    name: "kas machine file",
+    re: /(^|\/)kas\//,
+    // A recipe directory named kas (recipes-devtools/kas) is a recipe, not a kas file.
+    not: /(^|\/)recipes-[^/]+\/kas\//,
+  },
   { name: "kernel recipe or fragment", re: /(^|\/)recipes-kernel\// },
-  { name: "kernel fragment", re: /(^|\/)linux[^/]*\/(.*\/)?[^/]+\.cfg$/ },
+  { name: "kernel fragment", re: /(^|\/)linux(-[^/]+)?\/(.*\/)?[^/]+\.cfg$/ },
   { name: "board-support layer path", re: /(^|\/)recipes-bsp\// },
   { name: "layer configuration", re: /(^|\/)conf\/layer\.conf$/ },
   { name: "distro configuration", re: /(^|\/)conf\/distro\// },
@@ -154,7 +159,8 @@ const IMAGE_CLASSES: Array<{ name: string; re: RegExp }> = [
 /** Returns the image-level class name of a path, or null. */
 export function imageClassOf(path: string): string | null {
   const p = path.replace(/\\/g, "/");
-  for (const c of IMAGE_CLASSES) if (c.re.test(p)) return c.name;
+  for (const c of IMAGE_CLASSES)
+    if (c.re.test(p) && !(c.not?.test(p) ?? false)) return c.name;
   return null;
 }
 
@@ -400,6 +406,9 @@ function localRule(
   const groups = ws.lastCommitFor(recipe);
   if (groups.length === 0) return "no-cache-key";
   for (const g of groups) {
+    // entry.layer_commit is the recipe layer's commit; a group in another
+    // layer cannot be proven against it (rule (b) evaluates it per layer).
+    if (g.layer !== entry.layer) return "no-cache-key";
     if (!ws.isAncestor(g.commit, entry.layer_commit)) return "stale-delta";
   }
   return null;
@@ -453,14 +462,15 @@ function publishedRule(
 
   const groups = ws.lastCommitFor(recipe);
   if (groups.length === 0) return miss("no-cache-key", names);
-  let key = "";
+  const keys = new Set<string>();
   for (const g of groups) {
     const layerCommit = pub.buildManifest.layers[g.layer];
     if (!layerCommit) return miss("no-cache-key", names);
     if (!ws.isAncestor(g.commit, layerCommit))
       return miss("no-cache-key", names);
-    key = `${g.layer}@${layerCommit}`;
+    keys.add(`${g.layer}@${layerCommit}`);
   }
+  const key = [...keys].sort().join(",");
   return { hit: true, key, reason: "no-cache-key", packages: names };
 }
 
