@@ -20,7 +20,6 @@ import {
 } from "./feed-args.js";
 import { resolveTarget } from "../lib/target-resolver.js";
 import { sameTarget, supportedTargets } from "../lib/hardware-support.js";
-import { registerBuildPathTool } from "./build-path.js";
 
 /**
  * Validate target names against the manifest of the feed the caller will
@@ -84,8 +83,6 @@ export function registerPackageTools(
   server: McpServer,
   repoClient: RepoClient,
 ): void {
-  registerBuildPathTool(server, repoClient);
-
   server.registerTool(
     "describe-package",
     {
