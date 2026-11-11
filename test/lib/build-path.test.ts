@@ -219,7 +219,7 @@ test("append file newer than the delta build is stale", () => {
         {
           htop: [
             { commit: "abc1234", layer: "meta-oe" },
-            { commit: "def5678", layer: "meta-avocado" },
+            { commit: "def5678", layer: "meta-oe" },
           ],
         },
         ["abc1234", "def5678"],
@@ -227,6 +227,33 @@ test("append file newer than the delta build is stale", () => {
     }),
   );
   assert.equal(v.missing[0].reason, "stale-delta");
+});
+
+test("append in another layer is not compared against the recipe layer commit", () => {
+  // The append group lives in meta-avocado; entry.layer_commit is meta-oe's,
+  // so the ancestor test across repositories proves nothing.
+  const v = verdictOf(
+    base({
+      workspace: workspace(
+        {
+          htop: [
+            { commit: "abc1234", layer: "meta-oe" },
+            { commit: "def5678", layer: "meta-avocado" },
+          ],
+        },
+        ["abc1234", "def5678"],
+      ),
+    }),
+  );
+  assert.equal(v.missing[0].reason, "no-cache-key");
+});
+
+test("linuxptp config and kas recipe directory are not image level", () => {
+  assert.equal(
+    imageClassOf("meta-oe/recipes-connectivity/linuxptp/files/ptp4l.cfg"),
+    null,
+  );
+  assert.equal(imageClassOf("meta-oe/recipes-devtools/kas/kas_4.7.bb"), null);
 });
 
 test("package at another version is version-differs", () => {
@@ -386,6 +413,33 @@ test("published package at a layer commit containing the recipe is feed hit", ()
   const v = verdictOf(base({ ...noDelta, published: publishedHit() }));
   assert.equal(v.verdict, "feed_hit");
   assert.equal(v.cache_keys.published.htop, "meta-oe@def5678");
+});
+
+test("published cache key records every group layer", () => {
+  const v = verdictOf(
+    base({
+      ...noDelta,
+      published: publishedHit({
+        buildManifest: {
+          layers: { "meta-oe": "def5678", "meta-avocado": "def5678" },
+        },
+      }),
+      workspace: workspace(
+        {
+          htop: [
+            { commit: "abc1234", layer: "meta-oe" },
+            { commit: "abc1234", layer: "meta-avocado" },
+          ],
+        },
+        ["abc1234", "def5678"],
+      ),
+    }),
+  );
+  assert.equal(v.verdict, "feed_hit");
+  assert.equal(
+    v.cache_keys.published.htop,
+    "meta-avocado@def5678,meta-oe@def5678",
+  );
 });
 
 test("published layer commit older than the recipe commit is a miss", () => {
