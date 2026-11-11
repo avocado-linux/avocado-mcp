@@ -16,6 +16,7 @@ import {
   validateFeed,
   type ExtraFeed,
 } from "../../src/lib/repo-client.js";
+import { resolveFeed } from "../../src/lib/feed-config.js";
 
 const realFetch = globalThis.fetch;
 afterEach(() => {
@@ -387,4 +388,11 @@ test("a feed that never finishes its body times out on the fetch and node:https 
     plain.close();
     secure.close();
   }
+});
+
+test("default feed matches resolved default", () => {
+  const f = resolveFeed({ env: {} });
+  assert.equal(DEFAULT_FEED.baseUrl, f.baseUrl);
+  assert.equal(DEFAULT_FEED.releasever, f.releasever);
+  assert.equal(DEFAULT_FEED.manifestPath, f.manifestPath);
 });

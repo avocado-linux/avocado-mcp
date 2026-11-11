@@ -127,8 +127,8 @@ function isExtRepo(path: string): boolean {
 
 export const DEFAULT_FEED: FeedSpec = {
   baseUrl: "https://repo.avocadolinux.org",
-  releasever: "2024/edge",
-  manifestPath: "2024/edge",
+  releasever: "2026/edge",
+  manifestPath: "2026/edge",
 };
 
 const SAFE_SEGMENT_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
