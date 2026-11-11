@@ -56,7 +56,7 @@ import {
 } from "./repo-client.js";
 
 export const DEFAULT_REPO_URL = "https://repo.avocadolinux.org";
-export const DEFAULT_RELEASE = "2024";
+export const DEFAULT_RELEASE = "2026";
 export const DEFAULT_CHANNEL = "edge";
 
 /** avocado-cli lock files, newest first (`src/utils/lockfile.rs`). */

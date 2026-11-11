@@ -13,13 +13,13 @@ export const feedArgsShape = {
     .string()
     .optional()
     .describe(
-      "Absolute path to the Avocado project directory (or its avocado.yaml). **Pass this whenever you're working in a project.** The tool then reads `distro.release`, `distro.channel`, `distro.repo`, `repos:` and `distro.feeds` from avocado.yaml, honours AVOCADO_* feed env vars, and applies the snapshot pin from avocado.lock, so results match what `avocado install` resolves. Omit only for project-less questions (defaults to repo.avocadolinux.org 2024/edge).",
+      "Absolute path to the Avocado project directory (or its avocado.yaml). **Pass this whenever you're working in a project.** The tool then reads `distro.release`, `distro.channel`, `distro.repo`, `repos:` and `distro.feeds` from avocado.yaml, honours AVOCADO_* feed env vars, and applies the snapshot pin from avocado.lock, so results match what `avocado install` resolves. Omit only for project-less questions (defaults to repo.avocadolinux.org 2026/edge).",
     ),
   release: z
     .string()
     .optional()
     .describe(
-      "Override the feed release. Valid: '2024', '2026'; newer hardware may exist only on '2026'. Normally leave unset and pass `projectDir` instead — the project's configured release is used. Without either, '2024'.",
+      "Override the feed release. Valid: '2024', '2026'; newer hardware may exist only on '2026'. Normally leave unset and pass `projectDir` instead — the project's configured release is used. Without either, '2026'.",
     ),
   channel: z
     .string()
