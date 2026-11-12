@@ -34,6 +34,8 @@ test("upstream sources does not mark kernel configuration as requiring Yocto", a
   assert.match(row, /\| No \|/);
   assert.match(text, /kernel\.compile/);
   assert.doesNotMatch(text, /jetson-orin-nano-devkit/);
+  assert.doesNotMatch(text, /It does not produce them/);
+  assert.doesNotMatch(text, /kernel configuration change needs Yocto/);
 });
 
 test("package coverage names the SDK route before a recipe ticket", async () => {
