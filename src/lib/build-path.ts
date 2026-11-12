@@ -30,8 +30,8 @@ export interface RecipeMapEntry {
   pv: string;
   pr: string;
   srcrev: string;
-  /** May be abbreviated: bakar records the short form. */
-  layer_commit: string;
+  /** May be abbreviated: bakar records the short form. Null when unknown. */
+  layer_commit: string | null;
   machine: string;
   release: string;
   task_hash: string | null;
@@ -405,6 +405,8 @@ function localRule(
     );
     if (!exact) return "version-differs";
   }
+  // Without the layer commit there is nothing to compare the groups with.
+  if (entry.layer_commit === null) return "no-cache-key";
   const groups = ws.lastCommitFor(recipe);
   if (groups.length === 0 || groups.some((g) => g.commit === ""))
     return "no-cache-key";

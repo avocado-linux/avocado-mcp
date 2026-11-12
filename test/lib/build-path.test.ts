@@ -774,3 +774,26 @@ test("a recipe found with no commit is no-cache-key, not unknown-recipe", () => 
   assert.equal(pub.missing[0].reason, "no-cache-key");
   assert.notEqual(pub.missing[0].recipe, null);
 });
+
+test("an unknown layer commit is no-cache-key and never reaches the ancestor test", () => {
+  let asked = 0;
+  const ws: Workspace = {
+    lastCommitFor: () => [{ commit: "abc1234", layer: "meta-oe" }],
+    isAncestor: () => {
+      asked++;
+      return true;
+    },
+  };
+  const v = verdictOf(
+    base({
+      workspace: ws,
+      recipeMap: {
+        schema_version: 1,
+        entries: [entry({ layer_commit: null })],
+      },
+    }),
+  );
+  assert.equal(v.verdict, "package_miss");
+  assert.equal(v.missing[0].reason, "no-cache-key");
+  assert.equal(asked, 0);
+});
