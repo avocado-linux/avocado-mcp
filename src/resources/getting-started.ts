@@ -7,7 +7,7 @@ export const CONTENT = `# Getting started with Avocado OS
 
 Avocado OS is a Yocto-based embedded Linux distribution. A working project consists of:
 
-- **A hardware target** (e.g. \`raspberrypi5\`, \`jetson-orin-nano-devkit\`, \`imx8mp-evk\`).
+- **A hardware target** (e.g. \`raspberrypi5\`, \`jetson-orin-nano\`, \`imx8mp-evk\`).
 - **An \`avocado.yaml\` config file** declaring runtimes, extensions, and packages.
 - **The \`avocado\` CLI on the host machine** for build and provisioning.
 - **The Avocado SDK container image** (\`docker.io/avocadolinux/sdk:<release>-<channel>\`), pulled automatically by the CLI.
