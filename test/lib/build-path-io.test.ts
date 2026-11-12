@@ -359,7 +359,7 @@ test("git exit 1 from the runner is false and records nothing; exit 128 is unpro
   const run = (_cwd: string, args: string[]): GitResult =>
     args.includes("merge-base")
       ? { status, stdout: "" }
-      : args[0] === "status"
+      : args.includes("status")
         ? { status: 0, stdout: "" }
         : { status: 0, stdout: "a".repeat(40) + "\n" };
   const w = createWorkspace(ws, run);
@@ -378,7 +378,7 @@ test("isAncestor refuses a commit that is not hexadecimal", () => {
   const calls: string[][] = [];
   const run = (_cwd: string, args: string[]): GitResult => {
     calls.push(args);
-    if (args[0] === "status") return { status: 0, stdout: "" };
+    if (args.includes("status")) return { status: 0, stdout: "" };
     return { status: 0, stdout: "a".repeat(40) + "\n" };
   };
   const w = createWorkspace(ws, run);
@@ -528,8 +528,12 @@ test("git is asked once per recipe and per commit pair", () => {
   layerWithHtop(ws, "meta-oe");
   let n = 0;
   const run = (_cwd: string, args: string[]): GitResult => {
+    // The file listings (ls-files, ls-tree) are asked once per layer, not per
+    // recipe; only the per-recipe runs are counted here.
+    if (args.includes("ls-files") || args.includes("ls-tree"))
+      return { status: 0, stdout: "" };
     n++;
-    return args.includes("merge-base") || args[0] === "status"
+    return args.includes("merge-base") || args.includes("status")
       ? { status: 0, stdout: "" }
       : { status: 0, stdout: "a".repeat(40) + "\n" };
   };
@@ -614,6 +618,105 @@ test("a dirty .inc gives no commit", () => {
   }, /htop\.inc/);
 });
 
+// A deletion is a change of the group too: the verdict must not read a path
+// that is gone from disk as a group that is clean.
+function deletedMember(
+  setup: (repo: string) => void,
+  expectNote: RegExp,
+): void {
+  const ws = tmp();
+  const repo = layerWithHtop(ws, "meta-oe");
+  write(join(repo, GROUP, "htop.inc"), "# inc\n");
+  write(join(repo, GROUP, "htop", "extra.conf"), "c\n");
+  git(repo, "add", "-A");
+  const tip = commit(repo, "more htop");
+  // Control: the untouched tree has the tip commit, so the empty commit
+  // below comes from the deletion and not from the fixture.
+  assert.deepEqual(createWorkspace(ws).workspace.lastCommitFor("htop"), [
+    { commit: tip, layer: "meta-oe" },
+  ]);
+  setup(repo);
+  const h = createWorkspace(ws);
+  assert.deepEqual(h.workspace.lastCommitFor("htop"), [
+    { commit: "", layer: "meta-oe" },
+  ]);
+  assert.ok(
+    h.failures.some((f) => expectNote.test(f) && /commit them/.test(f)),
+    h.failures.join("\n"),
+  );
+  rmSync(ws, { recursive: true });
+}
+
+test("a deleted tracked .inc gives no commit and a note naming it", () => {
+  deletedMember((repo) => {
+    rmSync(join(repo, GROUP, "htop.inc"));
+  }, /htop\.inc/);
+});
+
+test("git rm of a subdirectory's last file, which removes the directory, gives no commit", () => {
+  deletedMember((repo) => {
+    git(repo, "rm", "-q", "-r", join(GROUP, "files"));
+  }, /files\/p\.patch/);
+});
+
+test("deleting files/ entirely from disk gives no commit", () => {
+  deletedMember((repo) => {
+    rmSync(join(repo, GROUP, "files"), { recursive: true });
+  }, /files\/p\.patch/);
+});
+
+test("a committed deletion of a .inc is the group's newest commit", () => {
+  const ws = tmp();
+  const repo = layerWithHtop(ws, "meta-oe");
+  write(join(repo, GROUP, "htop.inc"), "# inc\n");
+  git(repo, "add", "-A");
+  const before = commit(repo, "add inc");
+  git(repo, "rm", "-q", join(GROUP, "htop.inc"));
+  const after = commit(repo, "drop inc");
+  assert.notEqual(before, after);
+  const h = createWorkspace(ws);
+  assert.deepEqual(h.workspace.lastCommitFor("htop"), [
+    { commit: after, layer: "meta-oe" },
+  ]);
+  rmSync(ws, { recursive: true });
+});
+
+test("a tracked .bbappend deleted from a second layer keeps that layer's group, with no commit", () => {
+  const ws = tmp();
+  layerWithHtop(ws, "meta-oe");
+  const other = join(ws, "meta-custom");
+  initRepo(other);
+  write(join(other, GROUP, "htop_%.bbappend"), "# a\n");
+  git(other, "add", "-A");
+  const c = commit(other, "append");
+  assert.equal(
+    createWorkspace(ws)
+      .workspace.lastCommitFor("htop")
+      .find((g) => g.layer === "meta-custom")?.commit,
+    c,
+  );
+  rmSync(join(other, GROUP, "htop_%.bbappend"));
+  for (const staged of [false, true]) {
+    if (staged)
+      git(other, "rm", "-q", "--cached", join(GROUP, "htop_%.bbappend"));
+    const h = createWorkspace(ws);
+    const groups = h.workspace.lastCommitFor("htop");
+    assert.equal(groups.length, 2, `staged=${staged}`);
+    assert.equal(
+      groups.find((g) => g.layer === "meta-custom")?.commit,
+      "",
+      `staged=${staged}`,
+    );
+    assert.ok(
+      h.failures.some(
+        (f) => f.startsWith("meta-custom:") && /htop_%\.bbappend/.test(f),
+      ),
+      h.failures.join("\n"),
+    );
+  }
+  rmSync(ws, { recursive: true });
+});
+
 test("a dirty .bbappend in a second layer gives that group no commit", () => {
   const ws = tmp();
   layerWithHtop(ws, "meta-oe");
@@ -658,7 +761,7 @@ test("a failed git status fails closed and is recorded", () => {
   const ws = tmp();
   layerWithHtop(ws, "meta-oe");
   const run = (_cwd: string, args: string[]): GitResult =>
-    args[0] === "status"
+    args.includes("status")
       ? { status: 128, stdout: "" }
       : { status: 0, stdout: "a".repeat(40) + "\n" };
   const h = createWorkspace(ws, run);
@@ -673,7 +776,7 @@ test("a timed-out git status (null exit status) fails closed", () => {
   const ws = tmp();
   layerWithHtop(ws, "meta-oe");
   const run = (_cwd: string, args: string[]): GitResult =>
-    args[0] === "status"
+    args.includes("status")
       ? { status: null, stdout: "" }
       : { status: 0, stdout: "a".repeat(40) + "\n" };
   const h = createWorkspace(ws, run);
@@ -691,7 +794,7 @@ test("status output beyond ten paths names ten and counts the rest", () => {
     "",
   );
   const run = (_cwd: string, args: string[]): GitResult =>
-    args[0] === "status"
+    args.includes("status")
       ? { status: 0, stdout: recs }
       : { status: 0, stdout: "a".repeat(40) + "\n" };
   const h = createWorkspace(ws, run);
@@ -708,13 +811,41 @@ test("status is not run for a group whose log result was empty", () => {
   layerWithHtop(ws, "meta-oe");
   const calls: string[] = [];
   const run = (_cwd: string, args: string[]): GitResult => {
-    calls.push(args[0]);
+    const sub = args.find((x) => x === "log" || x === "status");
+    if (sub) calls.push(sub);
     return { status: 0, stdout: "" };
   };
   const h = createWorkspace(ws, run);
   h.workspace.lastCommitFor("htop");
   assert.deepEqual(calls, ["log"]);
   assert.equal(h.failures.length, 1);
+  rmSync(ws, { recursive: true });
+});
+
+test("every git run turns the fsmonitor off before the subcommand", () => {
+  const ws = tmp();
+  layerWithHtop(ws, "meta-oe");
+  const calls: string[][] = [];
+  const run = (_cwd: string, args: string[]): GitResult => {
+    calls.push(args);
+    return args.includes("log")
+      ? { status: 0, stdout: "a".repeat(40) + "\n" }
+      : { status: 0, stdout: "" };
+  };
+  const w = createWorkspace(ws, run).workspace;
+  w.lastCommitFor("htop");
+  w.isAncestor("a".repeat(40), "b".repeat(40));
+  const subs = calls.map((a) =>
+    a.find((x) => !x.startsWith("-") && x !== "core.fsmonitor=false"),
+  );
+  for (const sub of ["log", "status", "merge-base"])
+    assert.ok(subs.includes(sub), `${sub} not run: ${subs.join(",")}`);
+  for (const a of calls)
+    assert.deepEqual(
+      a.slice(0, 2),
+      ["-c", "core.fsmonitor=false"],
+      a.join(" "),
+    );
   rmSync(ws, { recursive: true });
 });
 
