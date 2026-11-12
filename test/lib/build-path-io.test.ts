@@ -441,6 +441,27 @@ test("recipesInDir finds a layer kept in a subdirectory of its repository", () =
   rmSync(ws, { recursive: true });
 });
 
+test("a sibling recipe's subdirectory counts toward every recipe of the directory", () => {
+  const ws = tmp();
+  const repo = join(ws, "meta");
+  initRepo(repo);
+  const dir = join(repo, "recipes-devtools", "gcc");
+  write(join(dir, "gcc_14.bb"), "# gcc\n");
+  write(join(dir, "gcc-cross_14.bb"), "# cross\n");
+  write(join(dir, "gcc", "0001.patch"), "a\n");
+  git(repo, "add", "-A");
+  commit(repo, "gcc");
+  write(join(dir, "gcc", "0002.patch"), "b\n");
+  git(repo, "add", "-A");
+  const patch = commit(repo, "patch in gcc/");
+  const w = createWorkspace(ws).workspace;
+  // gcc-cross names no gcc/ directory itself, but searches it.
+  assert.deepEqual(w.lastCommitFor("gcc-cross"), [
+    { commit: patch, layer: "meta" },
+  ]);
+  rmSync(ws, { recursive: true });
+});
+
 test("a shared .inc beside the recipe counts toward its last commit", () => {
   const ws = tmp();
   const repo = layerWithHtop(ws, "meta-oe");
