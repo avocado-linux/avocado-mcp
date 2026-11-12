@@ -70,6 +70,8 @@ export interface Workspace {
    * `commit`: the recipe exists but cannot be proven against any layer commit.
    */
   lastCommitFor(recipe: string): LastCommit[];
+  /** Layer names holding a recipe file of this name, when more than one does. */
+  duplicateLayers?(recipe: string): string[];
   /**
    * Names of the recipes whose `.bb` or `.bbappend` sits in exactly this
    * recipe directory (`recipeDirOfPath` of a changed path, with the same
@@ -402,8 +404,13 @@ export function classifyBuildPath(input: ClassifyInput): ClassifyResult {
     }
     const reason = o.reason ?? "no-cache-key";
     const unknown = reason === "unknown-recipe";
+    const dups = input.workspace?.duplicateLayers?.(recipe) ?? [];
     if (unknown)
-      warn(`recipe ${recipe} is not in the recipe map or the workspace`);
+      warn(
+        dups.length > 1
+          ? `recipe ${recipe} is found in layers ${dups.join(" and ")}; it is treated as unknown`
+          : `recipe ${recipe} is not in the recipe map or the workspace`,
+      );
     const pkgs = o.packages.length > 0 ? o.packages : [recipe];
     for (const p of pkgs)
       missing.push({ recipe: unknown ? null : recipe, package: p, reason });
@@ -460,7 +467,9 @@ function evaluateRecipe(
   } else {
     out.reason = pub.reason;
   }
-  if (!entry && ws && ws.lastCommitFor(recipe).length === 0)
+  if (ws && (ws.duplicateLayers?.(recipe).length ?? 0) > 1)
+    out.reason = "unknown-recipe";
+  else if (!entry && ws && ws.lastCommitFor(recipe).length === 0)
     out.reason = "unknown-recipe";
   return out;
 }

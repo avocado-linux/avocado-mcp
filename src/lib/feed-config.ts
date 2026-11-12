@@ -96,6 +96,8 @@ export interface RepoSnapshotPin {
   release: string;
   channel: string;
   snapshot: string;
+  /** Base repo URL the pin was recorded against; absent in older locks. */
+  repoUrl?: string;
 }
 
 /** One feed in the project's feed set, for reporting. */
@@ -122,6 +124,8 @@ export interface ResolvedFeed extends FeedSpec {
   channel?: string;
   /** Snapshot id when the lock file pins this target. */
   snapshot?: string;
+  /** Repo URL the pin was recorded against, when the lock records one. */
+  snapshotRepoUrl?: string;
   /** Human-readable provenance for each resolved value. */
   sources: {
     repoUrl: string;
@@ -394,6 +398,7 @@ export function resolveFeed(input: ResolveInput): ResolvedFeed {
   let releasever: string | undefined;
   let releaseverSrc = "";
   let snapshot: string | undefined;
+  let snapshotRepoUrl: string | undefined;
   const explicitStream = Boolean(ov.release || ov.channel);
 
   const cfgReleasever = cfgString(["distro", "repo", "releasever"]);
@@ -417,6 +422,7 @@ export function resolveFeed(input: ResolveInput): ResolvedFeed {
     if (!pin) return;
     if (pin.release === release && pin.channel === channel) {
       snapshot = pin.snapshot;
+      snapshotRepoUrl = pin.repoUrl;
       releasever = `${release}/${channel}/snapshots/${pin.snapshot}`;
       releaseverSrc = `lock file snapshot pin for \`${input.target}\``;
     } else {
@@ -514,7 +520,10 @@ export function resolveFeed(input: ResolveInput): ResolvedFeed {
       }
     }
     const snap = releasever.match(/\/snapshots\/([^/]+)$/);
-    if (snap) snapshot = snap[1];
+    if (snap) {
+      if (snapshot !== snap[1]) snapshotRepoUrl = undefined;
+      snapshot = snap[1];
+    }
   }
   releasever = releasever.replace(/^\/+|\/+$/g, "");
 
@@ -614,6 +623,7 @@ export function resolveFeed(input: ResolveInput): ResolvedFeed {
     release,
     channel,
     snapshot,
+    ...(snapshotRepoUrl ? { snapshotRepoUrl } : {}),
     sources: {
       repoUrl: repoUrlSrc,
       releasever: releaseverSrc,
@@ -637,7 +647,13 @@ function readPin(lock: unknown, target: string): RepoSnapshotPin | undefined {
     typeof channel === "string" &&
     typeof snapshot === "string"
   ) {
-    return { release, channel, snapshot };
+    const repoUrl = o.repo_url;
+    return {
+      release,
+      channel,
+      snapshot,
+      ...(typeof repoUrl === "string" && repoUrl ? { repoUrl } : {}),
+    };
   }
   return undefined;
 }
