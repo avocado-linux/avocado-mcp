@@ -6,7 +6,10 @@ import { tmpdir } from "os";
 import { join } from "path";
 
 import { RepoClient } from "../../src/lib/repo-client.js";
-import { checkBuildPath } from "../../src/tools/build-path.js";
+import {
+  checkBuildPath,
+  renderVerdictText,
+} from "../../src/tools/build-path.js";
 
 class UnreachableRepo extends RepoClient {
   override async getTargetManifest() {
@@ -186,6 +189,31 @@ test("an uncommitted recipe file explains itself in the verdict warnings", async
     );
   } finally {
     rmSync(ws, { recursive: true, force: true });
+    p.done();
+  }
+});
+
+test("an unmapped path reaches the structured result and the rendered text", async () => {
+  const p = project("default_target: qemux86-64\n");
+  try {
+    const r = await checkBuildPath(
+      new UnreachableRepo(),
+      {
+        project_dir: p.dir,
+        change: { paths: ["meta-oe/classes/cmake.bbclass"] },
+      },
+      NO_ENV,
+    );
+    assert.equal(r.ok, true);
+    if (!r.ok) return;
+    assert.equal(r.verdict.verdict, "package_miss");
+    assert.deepEqual(r.verdict.missing, []);
+    assert.deepEqual(r.verdict.unmapped, ["meta-oe/classes/cmake.bbclass"]);
+    const text = renderVerdictText(r.verdict);
+    assert.match(text, /## Unmapped paths/);
+    assert.match(text, /`meta-oe\/classes\/cmake\.bbclass`/);
+    assert.doesNotMatch(text, /## Missing/);
+  } finally {
     p.done();
   }
 });
