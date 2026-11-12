@@ -19,7 +19,7 @@ import {
   streamLabel,
 } from "./feed-args.js";
 import { resolveTarget } from "../lib/target-resolver.js";
-import { supportedTargets } from "../lib/hardware-support.js";
+import { sameTarget, supportedTargets } from "../lib/hardware-support.js";
 
 /**
  * Validate target names against the manifest of the feed the caller will
@@ -261,7 +261,7 @@ export function registerPackageTools(
           .array(z.string())
           .min(1)
           .describe(
-            "Target names (e.g. ['raspberrypi5', 'jetson-orin-nano-devkit']). Must match entries from list-targets. Pass one or more.",
+            "Target names (e.g. ['raspberrypi5', 'jetson-orin-nano']). Must match entries from list-targets. Pass one or more.",
           ),
         query: z
           .string()
@@ -423,7 +423,7 @@ export function registerPackageTools(
         target: z
           .string()
           .describe(
-            "Single Avocado target slug the coverage is evaluated against (e.g. 'jetson-orin-nano-devkit'). Must exist in the project's feed (or the given release/channel) — targets differ per stream.",
+            "Single Avocado target slug the coverage is evaluated against (e.g. 'jetson-orin-nano'). Must exist in the project's feed (or the given release/channel) — targets differ per stream.",
           ),
         dependencies: z
           .array(
@@ -512,9 +512,15 @@ export function registerPackageTools(
         openWorldHint: true,
       },
     },
-    async ({ target, dependencies, maxAlternatives, ...feedArgs }) => {
+    async ({
+      target: requested,
+      dependencies,
+      maxAlternatives,
+      ...feedArgs
+    }) => {
       const feed = feedContextFrom(feedArgs);
-      const feedInfo = feed.structured([target]);
+      let target = requested;
+      let feedInfo = feed.structured([target]);
       const rel = feed.base.release ?? "";
       const chan = feed.base.channel ?? "";
       const stream = streamLabel(feed);
@@ -557,6 +563,17 @@ export function registerPackageTools(
           },
           isError: true,
         };
+      }
+      // The docs and some callers write the `-devkit` slug for a board the
+      // 2026 feed lists without the suffix; use the feed's key.
+      if (!manifest[target]) {
+        const listed = Object.keys(manifest).find((k) =>
+          sameTarget(k, requested),
+        );
+        if (listed) {
+          target = listed;
+          feedInfo = feed.structured([target]);
+        }
       }
       if (!manifest[target]) {
         const { targets: suggestFrom } = await supportedTargets(
@@ -712,6 +729,7 @@ export function registerPackageTools(
                 renderCoverage(
                   target,
                   feed.describe([target]),
+                  requested,
                   summary,
                   results,
                   errors,
@@ -770,6 +788,7 @@ interface CoverageRow {
 function renderCoverage(
   target: string,
   feedDescription: string,
+  requested: string,
   summary: {
     total: number;
     present: number;
@@ -786,6 +805,9 @@ function renderCoverage(
 ): string {
   let out = `# check-package-coverage\n\n`;
   out += `**Target:** \`${target}\`\n`;
+  if (requested !== target) {
+    out += `**Resolved from:** \`${requested}\` (given) to \`${target}\` (the feed's slug)\n`;
+  }
   out += feedDescription;
   out += `**Coverage:** ${summary.coveragePercent}% confirmed (${summary.present}/${summary.total} present)`;
   if (summary.fuzzy > 0) {
