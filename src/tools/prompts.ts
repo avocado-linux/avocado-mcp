@@ -79,7 +79,7 @@ export function registerPrompts(server: McpServer): void {
         .string()
         .optional()
         .describe(
-          "Target the user was building for (e.g. 'jetson-orin-nano-devkit'). Strongly recommended — unlocks cross-channel package lookup.",
+          "Target the user was building for (e.g. 'jetson-orin-nano'). Strongly recommended — unlocks cross-channel package lookup.",
         ),
       log: z
         .string()
@@ -276,7 +276,7 @@ export function registerPrompts(server: McpServer): void {
         .string()
         .optional()
         .describe(
-          "Target name (e.g. 'raspberrypi5', 'jetson-orin-nano-devkit', 'qemuarm64'). If omitted, the prompt will ask before proceeding. Must match an entry from `list-targets`.",
+          "Target name (e.g. 'raspberrypi5', 'jetson-orin-nano', 'qemuarm64'). If omitted, the prompt will ask before proceeding. Must match an entry from `list-targets`.",
         ),
       runtime: z
         .string()
@@ -458,7 +458,7 @@ export function registerPrompts(server: McpServer): void {
         .string()
         .optional()
         .describe(
-          "Avocado target slug (e.g. 'jetson-orin-nano-devkit'). If omitted or given as prose hardware, resolve it in Step 0 (from avocado.yaml if present, else interactively via `list-targets` + `get-target-info`).",
+          "Avocado target slug (e.g. 'jetson-orin-nano'). If omitted or given as prose hardware, resolve it in Step 0 (from avocado.yaml if present, else interactively via `list-targets` + `get-target-info`).",
         ),
       release: z
         .string()
