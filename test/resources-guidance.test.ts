@@ -35,3 +35,35 @@ test("upstream sources does not mark kernel configuration as requiring Yocto", a
   assert.match(text, /kernel\.compile/);
   assert.doesNotMatch(text, /jetson-orin-nano-devkit/);
 });
+
+test("package coverage names the SDK route before a recipe ticket", async () => {
+  const text = await readResource("avocado://skills/package-coverage");
+  const compile = text.indexOf("sdk compile");
+  const pkg = text.indexOf("sdk package");
+  const ext = text.indexOf("ext package");
+  assert.ok(compile >= 0, "names sdk compile");
+  assert.ok(pkg >= 0, "names sdk package");
+  assert.ok(ext >= 0, "names avocado ext package");
+  const recipe = text.search(
+    /OpenEmbedded|Yocto recipe|feed request|feed-request/,
+  );
+  assert.ok(recipe >= 0, "still mentions the recipe or feed request route");
+  const step = text.indexOf("Packaging signal");
+  assert.ok(step >= 0, "has the packaging signal step");
+  const stepText = text.slice(step);
+  const firstRecipe = stepText.search(/OpenEmbedded|Yocto recipe|feed request/);
+  assert.ok(stepText.indexOf("sdk compile") < firstRecipe);
+  assert.ok(stepText.indexOf("sdk package") < firstRecipe);
+  assert.ok(stepText.indexOf("ext package") < firstRecipe);
+  assert.doesNotMatch(text, /jetson-orin-nano-devkit/);
+  assert.match(text, /2024\/edge/);
+});
+
+test("package coverage describes candidates and near matches and no optimistic count", async () => {
+  const text = await readResource("avocado://skills/package-coverage");
+  assert.match(text, /nearMatches/);
+  assert.match(text, /candidates/);
+  assert.match(text, /not the requested package/);
+  assert.doesNotMatch(text, /optimistic/i);
+  assert.doesNotMatch(text, /\b(fuzzy|strong)\b/i);
+});
