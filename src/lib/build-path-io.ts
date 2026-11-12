@@ -165,9 +165,11 @@ export function findDelta(feedDirs: string[]): {
 function parseEntry(e: unknown): RecipeMapEntry | null {
   if (!e || typeof e !== "object") return null;
   const o = e as Record<string, unknown>;
-  const strs = ["recipe", "layer", "pv", "pr", "layer_commit", "machine"];
+  const strs = ["recipe", "layer", "pv", "pr", "machine"];
   if (!strs.every((k) => isStr(o[k]))) return null;
   if (!isStr(o.release)) return null;
+  // bakar writes null when it could not resolve the layer's commit.
+  if (o.layer_commit !== null && !isStr(o.layer_commit)) return null;
   if (!Array.isArray(o.packages) || !o.packages.every(isStr)) return null;
   if (typeof o.epoch !== "number" && !isStr(o.epoch)) return null;
   if (o.task_hash !== undefined && o.task_hash !== null && !isStr(o.task_hash))
@@ -180,7 +182,7 @@ function parseEntry(e: unknown): RecipeMapEntry | null {
     pv: o.pv as string,
     pr: o.pr as string,
     srcrev: isStr(o.srcrev) ? o.srcrev : "",
-    layer_commit: o.layer_commit as string,
+    layer_commit: o.layer_commit,
     machine: o.machine as string,
     release: o.release,
     task_hash: (o.task_hash as string | null | undefined) ?? null,
