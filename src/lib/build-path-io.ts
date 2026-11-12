@@ -32,6 +32,7 @@ import {
 import type { ResolvedFeed } from "./feed-config.js";
 import {
   isSafeSegment,
+  shownUrl,
   toPackageInfo,
   type FeedSpec,
   type RepoClient,
@@ -285,7 +286,10 @@ function walk(root: string, rel: string, depth: number, out: string[]): void {
   for (const e of entries) {
     const p = rel ? `${rel}/${e.name}` : e.name;
     if (e.isDirectory()) {
-      if (!SKIP_DIRS.has(e.name)) walk(root, p, depth + 1, out);
+      // A directory with its own .git is another layer repository, walked
+      // as that layer and never as part of this one.
+      if (SKIP_DIRS.has(e.name) || existsSync(join(root, p, ".git"))) continue;
+      walk(root, p, depth + 1, out);
     } else if (e.isFile() && /\.(bb|bbappend)$/.test(e.name)) {
       out.push(p);
     }
@@ -311,8 +315,11 @@ export interface WorkspaceHandle {
 
 /**
  * The workspace's layers are its immediate subdirectories that are git
- * repositories (or the directory itself when it is one). A recipe name found
- * in two layers is unknown; append files are collected from every layer.
+ * repositories, plus the directory itself when it is one: a workspace root
+ * that is a repository (with its layer repositories ignored by it) does not
+ * hide them. A recipe name found in two layers is unknown; append files are
+ * collected from every layer. Answers are memoized per workspace, so a
+ * recipe or commit pair costs one git run however often it is asked.
  */
 export function createWorkspace(
   workspaceDir: string,
@@ -321,22 +328,20 @@ export function createWorkspace(
   const failures: string[] = [];
   const root = resolve(workspaceDir);
   const layers: Array<{ name: string; dir: string }> = [];
-  if (existsSync(join(root, ".git"))) {
+  if (existsSync(join(root, ".git")))
     layers.push({ name: basename(root), dir: root });
-  } else {
-    let kids: string[] = [];
-    try {
-      kids = readdirSync(root, { withFileTypes: true })
-        .filter((d) => d.isDirectory() && !d.name.startsWith("."))
-        .map((d) => d.name)
-        .sort();
-    } catch {
-      /* unreadable workspace: no layers */
-    }
-    for (const k of kids)
-      if (existsSync(join(root, k, ".git")))
-        layers.push({ name: k, dir: join(root, k) });
+  let kids: string[] = [];
+  try {
+    kids = readdirSync(root, { withFileTypes: true })
+      .filter((d) => d.isDirectory() && !d.name.startsWith("."))
+      .map((d) => d.name)
+      .sort();
+  } catch {
+    /* unreadable workspace: no layers */
   }
+  for (const k of kids)
+    if (existsSync(join(root, k, ".git")))
+      layers.push({ name: k, dir: join(root, k) });
 
   const index = new Map<string, string[]>();
   const filesOf = (l: { dir: string }): string[] => {
@@ -379,6 +384,17 @@ export function createWorkspace(
       const rel = f.dir ? `${f.dir}/${n}` : n;
       if (isDir(join(layerDir, rel))) paths.push(rel);
     }
+    // A shared .inc beside the recipe changes what it builds, and a recipe
+    // pulling one in by `require` has no file of its own to show it.
+    try {
+      for (const e of readdirSync(join(layerDir, f.dir), {
+        withFileTypes: true,
+      }))
+        if (e.isFile() && e.name.endsWith(".inc"))
+          paths.push(f.dir ? `${f.dir}/${e.name}` : e.name);
+    } catch {
+      /* unreadable directory: the recipe file's own group still stands */
+    }
     return paths;
   };
 
@@ -412,58 +428,75 @@ export function createWorkspace(
     return { commit, layer: layer.name };
   };
 
-  const workspace: Workspace = {
-    lastCommitFor(recipe) {
-      const withBb = layers.filter((l) =>
-        recipeFiles(recipe, filesOf(l)).some((f) => !f.append),
+  const lastCommitMemo = new Map<string, LastCommit[]>();
+  const duplicateMemo = new Map<string, string[]>();
+  const ancestorMemo = new Map<string, boolean | null>();
+
+  const computeLastCommits = (recipe: string): LastCommit[] => {
+    const withBb = layers.filter((l) =>
+      recipeFiles(recipe, filesOf(l)).some((f) => !f.append),
+    );
+    if (withBb.length > 1) {
+      note(
+        `recipe ${recipe} is found in layers ${withBb.map((l) => l.name).join(" and ")}; it is treated as unknown`,
       );
-      if (withBb.length > 1) {
-        note(
-          `recipe ${recipe} is found in layers ${withBb.map((l) => l.name).join(" and ")}; it is treated as unknown`,
-        );
-        return [];
-      }
-      if (withBb.length === 0) return [];
-      const groups: LastCommit[] = [];
-      for (const l of layers) {
-        const files = recipeFiles(recipe, filesOf(l));
-        if (l === withBb[0]) {
-          const bbs = files.filter((f) => !f.append);
-          const paths = new Set<string>();
-          for (const f of bbs) {
-            paths.add(f.rel);
-            for (const p of besides(recipe, l.dir, f)) paths.add(p);
-          }
-          groups.push(lastCommit(l, [...paths]));
+      return [];
+    }
+    if (withBb.length === 0) return [];
+    const groups: LastCommit[] = [];
+    for (const l of layers) {
+      const files = recipeFiles(recipe, filesOf(l));
+      if (l === withBb[0]) {
+        const bbs = files.filter((f) => !f.append);
+        const paths = new Set<string>();
+        for (const f of bbs) {
+          paths.add(f.rel);
+          for (const p of besides(recipe, l.dir, f)) paths.add(p);
         }
-        for (const f of files.filter((x) => x.append))
-          groups.push(lastCommit(l, [f.rel, ...besides(recipe, l.dir, f)]));
+        groups.push(lastCommit(l, [...paths]));
       }
-      // A group with no commit cannot be compared with any layer commit;
-      // reporting it as no groups keeps it from reading as a stale delta.
-      if (groups.some((g) => g.commit === "")) return [];
-      return groups;
-    },
-    duplicateLayers(recipe) {
-      const names = layers
-        .filter((l) => recipeFiles(recipe, filesOf(l)).some((f) => !f.append))
-        .map((l) => l.name);
-      return names.length > 1 ? names : [];
-    },
-    isAncestor(a, b) {
-      if (!COMMIT_RE.test(a) || !COMMIT_RE.test(b)) return false;
-      const dir = commitRepo.get(a);
-      if (!dir) return false;
-      const r = run(dir, ["merge-base", "--is-ancestor", a, b]);
-      if (r.status === 0) return true;
-      // Exit 1 is the answer "not an ancestor". Anything else (an object
-      // the clone lacks, a timeout) leaves the answer unproven.
-      if (r.status !== 1)
-        failures.push(
-          `git merge-base in ${basename(dir)} ended with ${r.status === null ? "no exit status" : `exit ${r.status}`}`,
-        );
-      return false;
-    },
+      for (const f of files.filter((x) => x.append))
+        groups.push(lastCommit(l, [f.rel, ...besides(recipe, l.dir, f)]));
+    }
+    // A group whose files have no commit stays in the list with an empty
+    // commit: the recipe exists, and cannot be proven against any layer.
+    return groups;
+  };
+
+  const computeAncestor = (a: string, b: string): boolean | null => {
+    if (!COMMIT_RE.test(a) || !COMMIT_RE.test(b)) return null;
+    const dir = commitRepo.get(a);
+    if (!dir) return null;
+    const r = run(dir, ["merge-base", "--is-ancestor", a, b]);
+    if (r.status === 0) return true;
+    // Exit 1 is the answer "not an ancestor". Anything else (an object
+    // the clone lacks, a timeout) leaves the answer unproven.
+    if (r.status === 1) return false;
+    failures.push(
+      `git merge-base in ${basename(dir)} ended with ${r.status === null ? "no exit status" : `exit ${r.status}`}`,
+    );
+    return null;
+  };
+
+  const memo = <T>(m: Map<string, T>, key: string, compute: () => T): T => {
+    if (m.has(key)) return m.get(key) as T;
+    const v = compute();
+    m.set(key, v);
+    return v;
+  };
+
+  const workspace: Workspace = {
+    lastCommitFor: (recipe) =>
+      memo(lastCommitMemo, recipe, () => computeLastCommits(recipe)),
+    duplicateLayers: (recipe) =>
+      memo(duplicateMemo, recipe, () => {
+        const names = layers
+          .filter((l) => recipeFiles(recipe, filesOf(l)).some((f) => !f.append))
+          .map((l) => l.name);
+        return names.length > 1 ? names : [];
+      }),
+    isAncestor: (a, b) =>
+      memo(ancestorMemo, `${a}\0${b}`, () => computeAncestor(a, b)),
   };
   return { workspace, failures };
 }
@@ -681,11 +714,32 @@ export async function loadPublishedState(input: {
         warnings.push(`the mirror could not be read: ${errText(e)}`);
       }
     } else {
+      // The mirror holds the head, while the manifest and the remote read
+      // describe the snapshot the pointer names. A head that has moved past
+      // that snapshot would pair this metadata with another build's manifest.
+      const snapFeed: FeedSpec | null =
+        !pinned && snapshotId
+          ? {
+              ...headFeed,
+              releasever: `${feed.manifestPath}/snapshots/${snapshotId}`,
+            }
+          : null;
       let stale: string | null = null;
+      let behindSnapshot = false;
       try {
         for (let i = 0; i < repos.length && stale === null; i++) {
           const d = await client.fetchRepomdDigest(headFeed, repos[i]);
-          if (d.toLowerCase() !== markers[i]) stale = repos[i];
+          if (d.toLowerCase() !== markers[i]) {
+            stale = repos[i];
+            continue;
+          }
+          if (snapFeed) {
+            const sd = await client.fetchRepomdDigest(snapFeed, repos[i]);
+            if (sd.toLowerCase() !== markers[i]) {
+              stale = repos[i];
+              behindSnapshot = true;
+            }
+          }
         }
       } catch (e) {
         warnings.push(
@@ -702,7 +756,9 @@ export async function loadPublishedState(input: {
         }
       } else if (stale) {
         warnings.push(
-          `the mirror is stale: ${stale} differs from the remote head; the remote feed was read`,
+          behindSnapshot
+            ? `the mirror is stale: ${stale} differs from the snapshot ${snapshotId} the pointer names; the remote feed was read`
+            : `the mirror is stale: ${stale} differs from the remote head; the remote feed was read`,
         );
       }
     }
@@ -758,7 +814,10 @@ export function verdictFeeds(
       {
         name: feed.name ?? "avocado",
         kind: "distro",
-        url_or_path: `${feed.baseUrl}/${feed.manifestPath}`,
+        url_or_path: shownUrl(
+          `${feed.baseUrl}/${feed.manifestPath}`,
+          feed.masks,
+        ),
         release,
         channel,
         snapshot_id: snapshotId,
@@ -780,13 +839,18 @@ export function verdictFeeds(
 
 // ---- CLI version ----------------------------------------------------------
 
-async function defaultRunVersion(): Promise<string> {
-  const { stdout } = await execFileP(
-    process.env.AVOCADO_BINARY ?? "avocado",
-    ["--version"],
-    { env: cliEnv(), timeout: VERSION_TIMEOUT_MS, maxBuffer: 64 * 1024 },
-  );
-  return stdout;
+/** Runs `<AVOCADO_BINARY> --version`, the binary taken from the given environment. */
+function versionRunner(
+  vars: Record<string, string | undefined>,
+): () => Promise<string> {
+  return async () => {
+    const { stdout } = await execFileP(
+      vars.AVOCADO_BINARY ?? "avocado",
+      ["--version"],
+      { env: cliEnv(), timeout: VERSION_TIMEOUT_MS, maxBuffer: 64 * 1024 },
+    );
+    return stdout;
+  };
 }
 
 /**
@@ -794,11 +858,12 @@ async function defaultRunVersion(): Promise<string> {
  * when it is current, absent or unreadable.
  */
 export async function cliVersionWarning(
-  run: () => Promise<string> = defaultRunVersion,
+  run?: () => Promise<string>,
+  vars: Record<string, string | undefined> = process.env,
 ): Promise<string | null> {
   let out: string;
   try {
-    out = await run();
+    out = await (run ?? versionRunner(vars))();
   } catch {
     return null;
   }

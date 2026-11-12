@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import {
+  chmodSync,
   mkdirSync,
   mkdtempSync,
   rmSync,
@@ -19,6 +20,7 @@ import {
   projectBuildTarget,
   readMirrorMarker,
   readRecipeMap,
+  verdictFeeds,
   type GitResult,
   type PublishedClient,
 } from "../../src/lib/build-path-io.js";
@@ -222,7 +224,7 @@ test("a recipe found in two layers is unknown and the warning names both layers"
   rmSync(ws, { recursive: true });
 });
 
-test("an uncommitted recipe file has no commit: no groups and a warning naming the file", () => {
+test("an uncommitted recipe file has no commit: one group with an empty commit and a warning naming the file", () => {
   const ws = tmp();
   const repo = join(ws, "meta-a");
   initRepo(repo);
@@ -231,7 +233,9 @@ test("an uncommitted recipe file has no commit: no groups and a warning naming t
   commit(repo, "init");
   write(join(repo, "recipes-x", "foo", "foo_1.0.bb"), "# foo\n");
   const h = createWorkspace(ws);
-  assert.deepEqual(h.workspace.lastCommitFor("foo"), []);
+  assert.deepEqual(h.workspace.lastCommitFor("foo"), [
+    { commit: "", layer: "meta-a" },
+  ]);
   assert.ok(
     h.failures.some((f) => f.includes("foo_1.0.bb") && /commit/.test(f)),
     h.failures.join("\n"),
@@ -317,7 +321,7 @@ test("git exit 1 is not an error", () => {
   rmSync(ws, { recursive: true });
 });
 
-test("git exit 1 from the runner is false and records nothing; exit 128 is recorded", () => {
+test("git exit 1 from the runner is false and records nothing; exit 128 is unproven and recorded", () => {
   const ws = tmp();
   layerWithHtop(ws, "meta-oe");
   let status = 1;
@@ -330,7 +334,7 @@ test("git exit 1 from the runner is false and records nothing; exit 128 is recor
   assert.equal(w.workspace.isAncestor("a".repeat(40), "b".repeat(40)), false);
   assert.deepEqual(w.failures, []);
   status = 128;
-  assert.equal(w.workspace.isAncestor("a".repeat(40), "b".repeat(40)), false);
+  assert.equal(w.workspace.isAncestor("a".repeat(40), "c".repeat(40)), null);
   assert.equal(w.failures.length, 1);
   rmSync(ws, { recursive: true });
 });
@@ -346,8 +350,63 @@ test("isAncestor refuses a commit that is not hexadecimal", () => {
   const w = createWorkspace(ws, run);
   w.workspace.lastCommitFor("htop");
   const before = calls.length;
-  assert.equal(w.workspace.isAncestor("a".repeat(40), "--output=x"), false);
+  assert.equal(w.workspace.isAncestor("a".repeat(40), "--output=x"), null);
   assert.equal(calls.length, before);
+  rmSync(ws, { recursive: true });
+});
+
+test("a shared .inc beside the recipe counts toward its last commit", () => {
+  const ws = tmp();
+  const repo = layerWithHtop(ws, "meta-oe");
+  write(join(repo, "recipes-support", "htop", "htop.inc"), "# a\n");
+  git(repo, "add", "-A");
+  commit(repo, "add inc");
+  write(join(repo, "recipes-support", "htop", "htop.inc"), "# b\n");
+  git(repo, "add", "-A");
+  const incChange = commit(repo, "change inc");
+  const groups = createWorkspace(ws).workspace.lastCommitFor("htop");
+  assert.deepEqual(groups, [{ commit: incChange, layer: "meta-oe" }]);
+  rmSync(ws, { recursive: true });
+});
+
+test("a workspace that is itself a repository still finds nested layer repositories", () => {
+  const ws = tmp();
+  initRepo(ws);
+  write(join(ws, "README"), "x\n");
+  git(ws, "add", "-A");
+  commit(ws, "root");
+  write(join(ws, ".gitignore"), "meta-b/\n");
+  const nested = join(ws, "meta-b");
+  initRepo(nested);
+  write(join(nested, "recipes-x", "foo", "foo_1.0.bb"), "# foo\n");
+  git(nested, "add", "-A");
+  const c = commit(nested, "add foo");
+  const w = createWorkspace(ws);
+  assert.deepEqual(w.workspace.lastCommitFor("foo"), [
+    { commit: c, layer: "meta-b" },
+  ]);
+  assert.deepEqual(w.workspace.duplicateLayers?.("foo"), []);
+  assert.deepEqual(w.failures, []);
+  rmSync(ws, { recursive: true });
+});
+
+test("git is asked once per recipe and per commit pair", () => {
+  const ws = tmp();
+  layerWithHtop(ws, "meta-oe");
+  let n = 0;
+  const run = (_cwd: string, args: string[]): GitResult => {
+    n++;
+    return args.includes("merge-base")
+      ? { status: 0, stdout: "" }
+      : { status: 0, stdout: "a".repeat(40) + "\n" };
+  };
+  const w = createWorkspace(ws, run).workspace;
+  w.lastCommitFor("htop");
+  w.lastCommitFor("htop");
+  assert.equal(n, 1);
+  w.isAncestor("a".repeat(40), "b".repeat(40));
+  w.isAncestor("a".repeat(40), "b".repeat(40));
+  assert.equal(n, 2);
   rmSync(ws, { recursive: true });
 });
 
@@ -422,6 +481,8 @@ function stub(
     /** targets.json fails while the snapshot pointer answers. */
     manifestDown?: boolean;
     digest?: string;
+    /** Digest of a snapshot's repomd when it differs from the head's. */
+    snapshotDigest?: string;
     build?: "ok" | "none";
   } = {},
 ): { client: PublishedClient; calls: Calls } {
@@ -458,9 +519,11 @@ function stub(
         },
       ];
     },
-    fetchRepomdDigest: async () => {
+    fetchRepomdDigest: async (f: { releasever: string }) => {
       calls.digest++;
       if (opts.down) throw new Error("down");
+      if (f.releasever.includes("/snapshots/") && opts.snapshotDigest)
+        return opts.snapshotDigest;
       return opts.digest ?? "ab".repeat(32);
     },
     fetchExtraFeed: async (x: { path?: string }) => {
@@ -490,7 +553,8 @@ test("fresh mirror serves package metadata after only a digest check", async () 
     mirrorDir: mirror,
   });
   assert.equal(calls.remotePackages, 0);
-  assert.equal(calls.digest, 1);
+  // The head's and the pointed snapshot's metadata index, one request each.
+  assert.equal(calls.digest, 2);
   assert.deepEqual(calls.mirrorPaths, [join(mirror, "2026", "edge", REPO)]);
   assert.equal(r.published.packages[0].name, "mirrored");
   assert.equal(r.published.reachable, true);
@@ -533,6 +597,22 @@ test("a stale mirror reads the remote and warns", async () => {
   assert.equal(calls.mirrorPaths.length, 0);
   assert.equal(r.warnings.length, 1);
   assert.match(r.warnings[0], /stale/);
+  rmSync(mirror, { recursive: true });
+});
+
+test("a mirror matching the head but not the pointed snapshot is not used", async () => {
+  const mirror = mirrorWith("ab".repeat(32));
+  const { client, calls } = stub({ snapshotDigest: "cd".repeat(32) });
+  const r = await loadPublishedState({
+    client,
+    feed: feed(),
+    target: "qemux86-64",
+    mirrorDir: mirror,
+  });
+  assert.equal(calls.mirrorPaths.length, 0);
+  assert.equal(calls.remotePackages, 1);
+  assert.equal(r.warnings.length, 1);
+  assert.match(r.warnings[0], /snapshot/);
   rmSync(mirror, { recursive: true });
 });
 
@@ -617,7 +697,7 @@ test("a pin recorded against another feed URL is not used", async () => {
     mirrorDir: mirror,
   });
   assert.equal(r.published.snapshotId, "snap-latest");
-  assert.equal(calls.digest, 1);
+  assert.equal(calls.digest, 2);
   assert.equal(calls.mirrorPaths.length, 1);
   rmSync(mirror, { recursive: true });
 });
@@ -664,7 +744,30 @@ test("build manifest layers reach the published state", async () => {
   );
 });
 
+test("the fallback feed entry masks secrets in its url", () => {
+  const f = feed({
+    baseUrl: "https://repo.example/tok-secret-9",
+    masks: ["tok-secret-9"],
+    feeds: [],
+  });
+  const out = verdictFeeds(f, "s1", null);
+  assert.equal(out.length, 1);
+  assert.doesNotMatch(out[0].url_or_path, /tok-secret-9/);
+});
+
 // ---- CLI version ----------------------------------------------------------
+
+test("the version query runs the binary named by the injected environment", async () => {
+  const dir = tmp();
+  const bin = join(dir, "fake-avocado");
+  write(bin, "#!/bin/sh\necho 'avocado 0.9.0'\n");
+  chmodSync(bin, 0o755);
+  assert.match(
+    (await cliVersionWarning(undefined, { AVOCADO_BINARY: bin })) ?? "",
+    /0\.9\.0/,
+  );
+  rmSync(dir, { recursive: true });
+});
 
 test("an avocado CLI older than 1.0.0 warns; a current or absent one does not", async () => {
   assert.match(
