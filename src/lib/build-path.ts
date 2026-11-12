@@ -66,8 +66,9 @@ export interface Workspace {
   /**
    * One entry per file group of the recipe: the recipe file with its files
    * directory, and each append file. Empty when the recipe is not found. A
-   * group whose files have no commit (new or uncommitted) carries an empty
-   * `commit`: the recipe exists but cannot be proven against any layer commit.
+   * group whose files have no commit (new or untracked) or have uncommitted
+   * changes (a dirty group) carries an empty `commit`: the recipe exists but
+   * cannot be proven against any layer commit until the changes are committed.
    */
   lastCommitFor(recipe: string): LastCommit[];
   /** Layer names holding a recipe file of this name, when more than one does. */
@@ -175,7 +176,7 @@ const IMAGE_CLASSES: Array<{ name: string; re: RegExp; not?: RegExp }> = [
   { name: "package group", re: /(^|\/)recipes-[^/]+\/packagegroups\// },
   { name: "image recipe", re: /(^|\/)recipes-[^/]+\/images\// },
   {
-    name: "image or kernel class",
+    name: "image, kernel, rootfs or SDK class",
     re: /(^|\/)classes[^/]*\/[^/]*(image|kernel|rootfs|populate_sdk)[^/]*\.bbclass$/,
   },
   { name: "wic image layout", re: /\.wks(\.in)?$/ },
@@ -440,7 +441,8 @@ function evaluateRecipe(
 
   if (entry && built && input.delta) {
     if (!ws) {
-      // Uncommitted edits are not seen, and without a workspace nothing is.
+      // Without a workspace no group can be checked, so there is no commit to
+      // compare; a dirty group carries an empty commit too, once one is given.
       localReason = "no-cache-key";
     } else {
       localReason = localRule(entry, input.delta.packages, ws, recipe);
