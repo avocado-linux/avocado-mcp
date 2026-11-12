@@ -385,6 +385,29 @@ test("isAncestor refuses a commit that is not hexadecimal", () => {
   rmSync(ws, { recursive: true });
 });
 
+test("recipesInDir names every recipe whose file sits in the directory", () => {
+  const ws = tmp();
+  const repo = layerWithHtop(ws, "meta-oe");
+  write(join(repo, "recipes-core", "glibc", "glibc_2.40.bb"), "# a\n");
+  write(join(repo, "recipes-core", "glibc", "glibc-locale_2.40.bb"), "# b\n");
+  write(join(repo, "recipes-core", "glibc", "glibc.inc"), "# c\n");
+  git(repo, "add", "-A");
+  commit(repo, "glibc");
+  const w = createWorkspace(ws).workspace;
+  assert.deepEqual(w.recipesInDir?.("recipes-core/glibc"), [
+    "glibc",
+    "glibc-locale",
+  ]);
+  assert.deepEqual(w.recipesInDir?.("recipes-support/htop"), ["htop"]);
+  assert.deepEqual(w.recipesInDir?.("recipes-core/absent"), []);
+  write(join(repo, "meta-sub", "recipes-core", "zlib", "zlib_1.3.bb"), "# z\n");
+  assert.deepEqual(
+    createWorkspace(ws).workspace.recipesInDir?.("recipes-core/zlib"),
+    ["zlib"],
+  );
+  rmSync(ws, { recursive: true });
+});
+
 test("a shared .inc beside the recipe counts toward its last commit", () => {
   const ws = tmp();
   const repo = layerWithHtop(ws, "meta-oe");

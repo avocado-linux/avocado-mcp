@@ -14,6 +14,7 @@ import { basename, dirname, join, resolve } from "path";
 import { promisify } from "util";
 import { parse as parseYaml } from "yaml";
 import {
+  recipeOfPath,
   selectSnapshot,
   type DeltaManifest,
   type LastCommit,
@@ -432,6 +433,7 @@ export function createWorkspace(
 
   const lastCommitMemo = new Map<string, LastCommit[]>();
   const duplicateMemo = new Map<string, string[]>();
+  const dirMemo = new Map<string, string[]>();
   const ancestorMemo = new Map<string, boolean | null>();
 
   const computeLastCommits = (recipe: string): LastCommit[] => {
@@ -496,6 +498,20 @@ export function createWorkspace(
           .filter((l) => recipeFiles(recipe, filesOf(l)).some((f) => !f.append))
           .map((l) => l.name);
         return names.length > 1 ? names : [];
+      }),
+    recipesInDir: (recipeDir) =>
+      memo(dirMemo, recipeDir, () => {
+        const names = new Set<string>();
+        for (const l of layers)
+          for (const rel of filesOf(l)) {
+            // A repository can hold the layer in a subdirectory, so the
+            // directory is matched from its recipes-<kind> segment on.
+            const d = dirname(rel);
+            if (d !== recipeDir && !d.endsWith(`/${recipeDir}`)) continue;
+            const name = recipeOfPath(rel);
+            if (name) names.add(name);
+          }
+        return [...names].sort();
       }),
     isAncestor: (a, b) =>
       memo(ancestorMemo, `${a}\0${b}`, () => computeAncestor(a, b)),
