@@ -82,3 +82,11 @@ test("application development names the SDK route before vendoring", async () =>
     text.indexOf("ext package") >= 0 && text.indexOf("ext package") < vendor,
   );
 });
+
+test("feeds resource has the distro feeds list form and the overlay recipe", async () => {
+  const text = await readResource("avocado://skills/feeds-and-lockfile");
+  assert.match(text, /distro\.feeds: \[/);
+  assert.match(text, /Using a locally built package/);
+  assert.match(text, /sdk package/);
+  assert.match(text, /not yet verified/i);
+});
