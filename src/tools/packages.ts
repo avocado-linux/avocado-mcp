@@ -413,6 +413,49 @@ export function registerPackageTools(
     summary: z.string(),
   });
 
+  const coverageSection = z.object({
+    target: z.string(),
+    targetAvailable: z
+      .boolean()
+      .nullable()
+      .describe(
+        "true = target exists in this stream; false = target genuinely not in this stream (re-resolve to a release that supports it); null = the manifest couldn't be fetched (invalid stream / network) so availability is unknown. When false or null, `isError` is set.",
+      ),
+    summary: z.object({
+      total: z.number().int(),
+      present: z.number().int(),
+      missing: z.number().int(),
+      notChecked: z
+        .number()
+        .int()
+        .describe(
+          "No match in the feeds checked, but at least one enabled feed was not read. Counted in the `coveragePercent` denominator as not confirmed.",
+        ),
+      coveragePercent: z
+        .number()
+        .int()
+        .describe(
+          "present / total, as a percentage: the share of dependencies confirmed present. Read it with `notChecked`.",
+        ),
+      exact: z.number().int(),
+      strong: z.number().int(),
+      fuzzy: z.number().int(),
+    }),
+    results: z.array(
+      z.object({
+        name: z.string(),
+        ecosystem: z.string().optional(),
+        status: z.enum(["present", "missing", "not-checked"]),
+        confidence: z.enum(["exact", "strong", "fuzzy"]).nullable(),
+        match: coverageMatchSchema.nullable(),
+        matchedQuery: z.string().nullable(),
+        alternatives: z.array(z.string()),
+      }),
+    ),
+    feedErrors: z.array(z.string()),
+    notChecked: notCheckedSchema,
+  });
+
   server.registerTool(
     "check-package-coverage",
     {
@@ -422,8 +465,15 @@ export function registerPackageTools(
       inputSchema: {
         target: z
           .string()
+          .optional()
           .describe(
-            "Single Avocado target slug the coverage is evaluated against (e.g. 'jetson-orin-nano'). Must exist in the project's feed (or the given release/channel) — targets differ per stream.",
+            "Single Avocado target slug the coverage is evaluated against (e.g. 'jetson-orin-nano'). Must exist in the project's feed (or the given release/channel) — targets differ per stream. Pass exactly one of `target` or `targets`.",
+          ),
+        targets: z
+          .array(z.string())
+          .optional()
+          .describe(
+            "Several target slugs evaluated one after another against the same dependency list; one result section per target, in the order given. An unavailable target is reported in its own section and does not stop the others; entries that resolve to the same slug are evaluated once. Pass exactly one of `target` or `targets`; an empty list counts as not given.",
           ),
         dependencies: z
           .array(
@@ -459,50 +509,24 @@ export function registerPackageTools(
             "How many near-miss alternative package names to surface per dependency (for maintainer review). Default 3.",
           ),
       },
+      // Accepts both shapes: the flat single-target result, and
+      // `{ release, channel, feed, targets: [...] }` for the list form.
       outputSchema: {
-        target: z.string(),
+        target: z.string().optional(),
         release: z.string(),
         channel: z.string(),
         feed: feedSummarySchema,
-        targetAvailable: z
-          .boolean()
-          .nullable()
+        targetAvailable: coverageSection.shape.targetAvailable.optional(),
+        summary: coverageSection.shape.summary.optional(),
+        results: coverageSection.shape.results.optional(),
+        feedErrors: coverageSection.shape.feedErrors.optional(),
+        notChecked: coverageSection.shape.notChecked.optional(),
+        targets: z
+          .array(coverageSection)
+          .optional()
           .describe(
-            "true = target exists in this stream; false = target genuinely not in this stream (re-resolve to a release that supports it); null = the manifest couldn't be fetched (invalid stream / network) so availability is unknown. When false or null, `isError` is set.",
+            "List form only: one section per requested target, in the order given, each with the fields of the single-target result.",
           ),
-        summary: z.object({
-          total: z.number().int(),
-          present: z.number().int(),
-          missing: z.number().int(),
-          notChecked: z
-            .number()
-            .int()
-            .describe(
-              "No match in the feeds checked, but at least one enabled feed was not read. Counted in the `coveragePercent` denominator as not confirmed.",
-            ),
-          coveragePercent: z
-            .number()
-            .int()
-            .describe(
-              "present / total, as a percentage: the share of dependencies confirmed present. Read it with `notChecked`.",
-            ),
-          exact: z.number().int(),
-          strong: z.number().int(),
-          fuzzy: z.number().int(),
-        }),
-        results: z.array(
-          z.object({
-            name: z.string(),
-            ecosystem: z.string().optional(),
-            status: z.enum(["present", "missing", "not-checked"]),
-            confidence: z.enum(["exact", "strong", "fuzzy"]).nullable(),
-            match: coverageMatchSchema.nullable(),
-            matchedQuery: z.string().nullable(),
-            alternatives: z.array(z.string()),
-          }),
-        ),
-        feedErrors: z.array(z.string()),
-        notChecked: notCheckedSchema,
       },
       annotations: {
         title: "Batch-check dependencies against the Avocado feed",
@@ -513,14 +537,28 @@ export function registerPackageTools(
       },
     },
     async ({
-      target: requested,
+      target: requestedOne,
+      targets: requestedMany,
       dependencies,
       maxAlternatives,
       ...feedArgs
     }) => {
+      const listForm = requestedMany !== undefined && requestedMany.length > 0;
+      if (
+        (requestedOne === undefined) === !listForm ||
+        (requestedOne !== undefined && requestedMany !== undefined)
+      ) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: "# check-package-coverage failed\n\n❌ Invalid input: pass exactly one of target or targets (a single slug, or a non-empty list of slugs).",
+            },
+          ],
+          isError: true,
+        };
+      }
       const feed = feedContextFrom(feedArgs);
-      let target = requested;
-      let feedInfo = feed.structured([target]);
       const rel = feed.base.release ?? "";
       const chan = feed.base.channel ?? "";
       const stream = streamLabel(feed);
@@ -540,238 +578,259 @@ export function registerPackageTools(
         fuzzy: 0,
       };
 
-      // Validate the target against THIS feed — the Thor-on-2024 case.
+      // One feed manifest read serves every target of the call.
       const manifest = await repoClient.getTargetsConfig(feed.base);
-      if (!manifest) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `# check-package-coverage failed\n\nCould not fetch \`targets.json\` from ${feedFetchLabel(feed.base)}. Check the configured feed (release/channel/repo URL) and network.\n\n${feed.describe([target])}`,
-            },
-          ],
-          structuredContent: {
-            target,
-            release: rel,
-            channel: chan,
-            feed: feedInfo,
-            targetAvailable: null,
-            summary: emptySummary,
-            results: [],
-            feedErrors: [],
-            notChecked: [],
-          },
-          isError: true,
-        };
-      }
+
       // The docs and some callers write the `-devkit` slug for a board the
       // 2026 feed lists without the suffix; use the feed's key.
-      if (!manifest[target]) {
-        const listed = Object.keys(manifest).find((k) =>
-          sameTarget(k, requested),
+      const resolveSlug = (requested: string): string => {
+        if (!manifest || manifest[requested]) return requested;
+        return (
+          Object.keys(manifest).find((k) => sameTarget(k, requested)) ??
+          requested
         );
-        if (listed) {
-          target = listed;
-          feedInfo = feed.structured([target]);
-        }
-      }
-      if (!manifest[target]) {
-        const { targets: suggestFrom } = await supportedTargets(
-          Object.keys(manifest),
-        );
-        const fuzzy = resolveTarget(target, suggestFrom).slice(0, 3);
-        return {
-          content: [
-            {
-              type: "text",
-              text: [
-                `# check-package-coverage — target not in \`${stream}\``,
-                ``,
-                `\`${target}\` is not available in the \`${stream}\` feed.${
-                  fuzzy.length
-                    ? ` Did you mean: ${fuzzy.map((t) => `\`${t}\``).join(", ")}?`
-                    : ""
-                }`,
-                ``,
-                `Some hardware ships only on newer releases (e.g. NVIDIA Thor on 2026, not 2024). Check the stream status with \`get-target-info({ target: "${target}" })\` or \`list-targets({ query: "${target}", release, channel })\` against another stream, then re-run with the release/channel that supports this target.`,
-                ``,
-                feed.describe([target]),
-              ].join("\n"),
-            },
-          ],
-          structuredContent: {
-            target,
-            release: rel,
-            channel: chan,
-            feed: feedInfo,
-            targetAvailable: false,
-            summary: emptySummary,
-            results: [],
-            feedErrors: [],
-            notChecked: [],
-          },
-          isError: true,
+      };
+
+      // Evaluates one target. `failed` is true when no coverage was produced
+      // for it (unavailable, unreadable feed, or an exception).
+      const evaluate = async (
+        requested: string,
+      ): Promise<{
+        text: string;
+        section: {
+          target: string;
+          targetAvailable: boolean | null;
+          summary: typeof emptySummary;
+          results: unknown[];
+          feedErrors: string[];
+          notChecked: { target: string; [k: string]: unknown }[];
         };
-      }
-
-      try {
-        // One feed warm-up for the whole batch; cached process-wide after this.
-        const fetched = await repoClient.fetchTargetPackages(
+        failed: boolean;
+      }> => {
+        const target = resolveSlug(requested);
+        const base = {
           target,
-          feed.forTarget(target),
-        );
-        const { packages, errors } = fetched;
-        const notChecked = fetched.notChecked.map((n) => ({ target, ...n }));
-        // With an unread feed enabled (private, refused, or failed to load),
-        // "no match" is unknown, not missing.
-        const noMatch: "missing" | "not-checked" =
-          notChecked.length > 0 ||
-          feedFailures([{ target, messages: errors }]).length > 0
-            ? "not-checked"
-            : "missing";
+          summary: emptySummary,
+          results: [] as unknown[],
+          feedErrors: [] as string[],
+          notChecked: [] as { target: string; [k: string]: unknown }[],
+        };
 
-        // fetchTargetPackages does NOT throw when repos are unreachable — it
-        // returns an empty package list plus per-repo errors. Reporting that as
-        // a confident 0% coverage would tell a maintainer every dependency is a
-        // genuine gap. Treat "no packages AND fetch errors" as unknown, not 0%.
-        if (packages.length === 0 && errors.length > 0) {
+        // Validate the target against THIS feed — the Thor-on-2024 case.
+        if (!manifest) {
           return {
-            content: [
-              {
-                type: "text",
-                text: `# check-package-coverage — feed unavailable\n\nCouldn't read the package feed for \`${target}\` on \`${stream}\`, so coverage is unknown (not 0%). Retry shortly — this is often transient for a freshly-added target.\n\nErrors:\n${errors.map((e) => `- ${e}`).join("\n")}`,
+            text: `# check-package-coverage failed\n\nCould not fetch \`targets.json\` from ${feedFetchLabel(feed.base)}. Check the configured feed (release/channel/repo URL) and network.\n\n${feed.describe([target])}`,
+            section: { ...base, targetAvailable: null },
+            failed: true,
+          };
+        }
+        if (!manifest[target]) {
+          const { targets: suggestFrom } = await supportedTargets(
+            Object.keys(manifest),
+          );
+          const fuzzy = resolveTarget(target, suggestFrom).slice(0, 3);
+          return {
+            text: [
+              `# check-package-coverage — target not in \`${stream}\``,
+              ``,
+              `\`${target}\` is not available in the \`${stream}\` feed.${
+                fuzzy.length
+                  ? ` Did you mean: ${fuzzy.map((t) => `\`${t}\``).join(", ")}?`
+                  : ""
+              }`,
+              ``,
+              `Some hardware ships only on newer releases (e.g. NVIDIA Thor on 2026, not 2024). Check the stream status with \`get-target-info({ target: "${target}" })\` or \`list-targets({ query: "${target}", release, channel })\` against another stream, then re-run with the release/channel that supports this target.`,
+              ``,
+              feed.describe([target]),
+            ].join("\n"),
+            section: { ...base, targetAvailable: false },
+            failed: true,
+          };
+        }
+
+        try {
+          // One feed warm-up per target; cached process-wide after this.
+          const fetched = await repoClient.fetchTargetPackages(
+            target,
+            feed.forTarget(target),
+          );
+          const { packages, errors } = fetched;
+          const notChecked = fetched.notChecked.map((n) => ({ target, ...n }));
+          // With an unread feed enabled (private, refused, or failed to load),
+          // "no match" is unknown, not missing.
+          const noMatch: "missing" | "not-checked" =
+            notChecked.length > 0 ||
+            feedFailures([{ target, messages: errors }]).length > 0
+              ? "not-checked"
+              : "missing";
+
+          // fetchTargetPackages does NOT throw when repos are unreachable — it
+          // returns an empty package list plus per-repo errors. Reporting that as
+          // a confident 0% coverage would tell a maintainer every dependency is a
+          // genuine gap. Treat "no packages AND fetch errors" as unknown, not 0%.
+          if (packages.length === 0 && errors.length > 0) {
+            return {
+              text: `# check-package-coverage — feed unavailable\n\nCouldn't read the package feed for \`${target}\` on \`${stream}\`, so coverage is unknown (not 0%). Retry shortly — this is often transient for a freshly-added target.\n\nErrors:\n${errors.map((e) => `- ${e}`).join("\n")}`,
+              section: {
+                ...base,
+                targetAvailable: null,
+                feedErrors: errors,
+                notChecked,
               },
-            ],
-            structuredContent: {
+              failed: true,
+            };
+          }
+
+          const results = dependencies.map((dep) => {
+            let best: SearchResult | null = null;
+            let matchedQuery: string | null = null;
+            const altNames = new Set<string>();
+            for (const q of dep.queries) {
+              const ranked = rankMatches(packages, q);
+              if (ranked.length > 0) {
+                if (!best || ranked[0].score > best.score) {
+                  best = ranked[0];
+                  matchedQuery = q;
+                }
+                for (const r of ranked.slice(0, maxAlt + 1))
+                  altNames.add(r.name);
+              }
+            }
+            if (best) altNames.delete(best.name);
+            return {
+              name: dep.name,
+              ecosystem: dep.ecosystem,
+              status: best ? ("present" as const) : noMatch,
+              confidence: best ? scoreToConfidence(best.score) : null,
+              match: best
+                ? {
+                    name: best.name,
+                    version: best.version,
+                    release: best.release,
+                    arch: best.arch,
+                    feed: best.feed,
+                    repo: best.repo,
+                    summary: best.summary,
+                  }
+                : null,
+              matchedQuery,
+              alternatives: Array.from(altNames).slice(0, maxAlt),
+            };
+          });
+
+          const present = results.filter((r) => r.status === "present").length;
+          const notCheckedCount = results.filter(
+            (r) => r.status === "not-checked",
+          ).length;
+          const missing = results.length - notCheckedCount - present;
+          // The percentage is what is confirmed present, over every dependency.
+          // A not-checked row is unknown, so it is not confirmed.
+          // Round, but never let rounding show a false 100% while something is
+          // not present (199/200 → 99, not 100) or a false 0% while something is
+          // present (1/200 → 1, not 0). The headline must not contradict counts.
+          let coveragePercent = results.length
+            ? Math.round((present / results.length) * 100)
+            : 0;
+          if (coveragePercent === 100 && present < results.length) {
+            coveragePercent = 99;
+          }
+          if (coveragePercent === 0 && present > 0) coveragePercent = 1;
+          const summary = {
+            total: results.length,
+            present,
+            missing,
+            notChecked: notCheckedCount,
+            coveragePercent,
+            exact: results.filter((r) => r.confidence === "exact").length,
+            strong: results.filter((r) => r.confidence === "strong").length,
+            fuzzy: results.filter((r) => r.confidence === "fuzzy").length,
+          };
+
+          return {
+            text:
+              renderCoverage(
+                target,
+                feed.describe([target]),
+                requested,
+                summary,
+                results,
+                errors,
+                notChecked.length +
+                  feedFailures([{ target, messages: errors }]).length,
+              ) + renderNotChecked(notChecked),
+            section: {
               target,
-              release: rel,
-              channel: chan,
-              feed: feedInfo,
-              targetAvailable: null,
-              summary: emptySummary,
-              results: [],
+              targetAvailable: true,
+              summary,
+              results,
               feedErrors: errors,
               notChecked,
             },
-            isError: true,
+            failed: false,
           };
-        }
-
-        const results = dependencies.map((dep) => {
-          let best: SearchResult | null = null;
-          let matchedQuery: string | null = null;
-          const altNames = new Set<string>();
-          for (const q of dep.queries) {
-            const ranked = rankMatches(packages, q);
-            if (ranked.length > 0) {
-              if (!best || ranked[0].score > best.score) {
-                best = ranked[0];
-                matchedQuery = q;
-              }
-              for (const r of ranked.slice(0, maxAlt + 1)) altNames.add(r.name);
-            }
-          }
-          if (best) altNames.delete(best.name);
+        } catch (error) {
           return {
-            name: dep.name,
-            ecosystem: dep.ecosystem,
-            status: best ? ("present" as const) : noMatch,
-            confidence: best ? scoreToConfidence(best.score) : null,
-            match: best
-              ? {
-                  name: best.name,
-                  version: best.version,
-                  release: best.release,
-                  arch: best.arch,
-                  feed: best.feed,
-                  repo: best.repo,
-                  summary: best.summary,
-                }
-              : null,
-            matchedQuery,
-            alternatives: Array.from(altNames).slice(0, maxAlt),
+            text: `# check-package-coverage failed\n\n❌ ${error instanceof Error ? error.message : String(error)}`,
+            section: { ...base, targetAvailable: true },
+            failed: true,
           };
-        });
-
-        const present = results.filter((r) => r.status === "present").length;
-        const notCheckedCount = results.filter(
-          (r) => r.status === "not-checked",
-        ).length;
-        const missing = results.length - notCheckedCount - present;
-        // The percentage is what is confirmed present, over every dependency.
-        // A not-checked row is unknown, so it is not confirmed.
-        // Round, but never let rounding show a false 100% while something is
-        // not present (199/200 → 99, not 100) or a false 0% while something is
-        // present (1/200 → 1, not 0). The headline must not contradict counts.
-        let coveragePercent = results.length
-          ? Math.round((present / results.length) * 100)
-          : 0;
-        if (coveragePercent === 100 && present < results.length) {
-          coveragePercent = 99;
         }
-        if (coveragePercent === 0 && present > 0) coveragePercent = 1;
-        const summary = {
-          total: results.length,
-          present,
-          missing,
-          notChecked: notCheckedCount,
-          coveragePercent,
-          exact: results.filter((r) => r.confidence === "exact").length,
-          strong: results.filter((r) => r.confidence === "strong").length,
-          fuzzy: results.filter((r) => r.confidence === "fuzzy").length,
-        };
+      };
 
+      if (!listForm) {
+        const one = await evaluate(requestedOne as string);
         return {
-          content: [
-            {
-              type: "text",
-              text:
-                renderCoverage(
-                  target,
-                  feed.describe([target]),
-                  requested,
-                  summary,
-                  results,
-                  errors,
-                  notChecked.length +
-                    feedFailures([{ target, messages: errors }]).length,
-                ) + renderNotChecked(notChecked),
-            },
-          ],
+          content: [{ type: "text" as const, text: one.text }],
           structuredContent: {
-            target,
             release: rel,
             channel: chan,
-            feed: feedInfo,
-            targetAvailable: true,
-            summary,
-            results,
-            feedErrors: errors,
-            notChecked,
+            feed: feed.structured([one.section.target]),
+            ...one.section,
           },
-        };
-      } catch (error) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `# check-package-coverage failed\n\n❌ ${error instanceof Error ? error.message : String(error)}`,
-            },
-          ],
-          structuredContent: {
-            target,
-            release: rel,
-            channel: chan,
-            feed: feedInfo,
-            targetAvailable: true,
-            summary: emptySummary,
-            results: [],
-            feedErrors: [],
-            notChecked: [],
-          },
-          isError: true,
+          ...(one.failed ? { isError: true } : {}),
         };
       }
+
+      // Entries that resolve to the same slug are evaluated once, in the
+      // position of the first.
+      const order: string[] = [];
+      const firstGiven = new Map<string, string>();
+      const merged: string[] = [];
+      for (const given of requestedMany as string[]) {
+        const slug = resolveSlug(given);
+        if (firstGiven.has(slug)) {
+          merged.push(`\`${given}\` into \`${slug}\``);
+          continue;
+        }
+        firstGiven.set(slug, given);
+        order.push(slug);
+      }
+
+      const evaluated: Awaited<ReturnType<typeof evaluate>>[] = [];
+      for (const slug of order) {
+        evaluated.push(await evaluate(firstGiven.get(slug) as string));
+      }
+
+      let text = `# check-package-coverage\n\n**Targets:** ${order.map((t) => `\`${t}\``).join(", ")}\n`;
+      if (merged.length > 0) {
+        text += `_Duplicate entries merged (evaluated once): ${merged.join(", ")}._\n`;
+      }
+      for (const e of evaluated) {
+        text += `\n---\n\n${e.text.replace(
+          /^# check-package-coverage/,
+          `## Target \`${e.section.target}\``,
+        )}\n`;
+      }
+      return {
+        content: [{ type: "text" as const, text }],
+        structuredContent: {
+          release: rel,
+          channel: chan,
+          feed: feed.structured(order),
+          targets: evaluated.map((e) => e.section),
+        },
+        ...(evaluated.every((e) => e.failed) ? { isError: true } : {}),
+      };
     },
   );
 }
