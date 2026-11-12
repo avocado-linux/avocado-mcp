@@ -16,7 +16,7 @@ export function editDistance(a: string, b: string): number {
 }
 
 export interface ClassifyOptions {
-  /** Largest case-insensitive distance that counts as near. Default 2. */
+  /** Largest case-insensitive distance that counts as near. Default 1 for a query of up to 5 characters, else 2. */
   maxDistance?: number;
   /** Cap on the number of near names returned. Unlimited when omitted. */
   limit?: number;
@@ -36,7 +36,9 @@ export function classifyName(
   names: readonly string[],
   options: ClassifyOptions = {},
 ): NameClassification {
-  const maxDistance = options.maxDistance ?? 2;
+  // Two edits are a large share of a short name ("curl" vs "perl"), so a
+  // query of up to 5 characters allows one.
+  const maxDistance = options.maxDistance ?? (query.length <= 5 ? 1 : 2);
   const lowerQuery = query.toLowerCase();
   let exact: string | null = null;
   const scored: Array<{ name: string; distance: number }> = [];

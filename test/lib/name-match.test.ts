@@ -58,9 +58,15 @@ test("classifyName: distance is measured ignoring case", () => {
   assert.deepEqual(r, { exact: null, near: ["curls"] });
 });
 
-test("classifyName: default maxDistance is 2", () => {
-  const r = classifyName("abcd", ["abxx", "abxxx"]);
-  assert.deepEqual(r.near, ["abxx"]);
+test("classifyName: default maxDistance is 1 for a query of up to 5 characters", () => {
+  const r = classifyName("curl", ["curls", "cups", "perl", "curlxx"]);
+  assert.deepEqual(r.near, ["curls"]);
+  assert.deepEqual(classifyName("abcde", ["abcxx", "abcdx"]).near, ["abcdx"]);
+});
+
+test("classifyName: default maxDistance is 2 for a longer query", () => {
+  const r = classifyName("abcdef", ["abcdxx", "abcxxx", "abcdex"]);
+  assert.deepEqual(r.near, ["abcdex", "abcdxx"]);
 });
 
 test("classifyName: maxDistance option widens and narrows", () => {
@@ -71,7 +77,9 @@ test("classifyName: maxDistance option widens and narrows", () => {
 });
 
 test("classifyName: orders by distance then name", () => {
-  const r = classifyName("abc", ["abz", "abd", "abcd", "ab", "abcde"]);
+  const r = classifyName("abc", ["abz", "abd", "abcd", "ab", "abcde"], {
+    maxDistance: 2,
+  });
   assert.deepEqual(r.near, ["ab", "abcd", "abd", "abz", "abcde"]);
 });
 
