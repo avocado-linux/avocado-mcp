@@ -745,6 +745,21 @@ export class RepoClient {
   }
 
   /**
+   * SHA-256 of the exact `repomd.xml` bytes of one repo of the feed. One
+   * request; the freshness check of a mirror needs nothing more.
+   */
+  async fetchRepomdDigest(feed: FeedSpec, repo: string): Promise<string> {
+    if (!isSafePath(repo)) throw new Error(`Invalid repo path: ${repo}`);
+    const repomd = await this.fetchFeedFileAt(
+      feed,
+      feed.releasever,
+      `${repo}/repodata/repomd.xml`,
+      MAX_REPOMD_BYTES,
+    );
+    return createHash("sha256").update(repomd).digest("hex");
+  }
+
+  /**
    * The snapshot id the latest pointer names for one machine, read from the
    * live channel head (`{manifestPath}/target/<machine>/snapshots-latest.json`).
    * Null when the pointer is absent, unreadable or names an unsafe id.

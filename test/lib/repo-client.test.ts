@@ -1,5 +1,6 @@
 import { test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { gzipSync } from "node:zlib";
 import {
   createServer,
@@ -454,6 +455,22 @@ test("package parsing carries epoch and sourcerpm as PackageInfo", async () => {
     },
     { name: "noepoch", epoch: 0, version: "1.0", release: "r0", sourcerpm: "" },
   ]);
+});
+
+test("repomd digest makes one request, for repomd.xml only", async () => {
+  const repomd = `<repomd><data type="primary"><location href="repodata/p.xml.gz"/></data></repomd>`;
+  const calls = stubFiles({ "repodata/repomd.xml": repomd });
+  const d = await new RepoClient().fetchRepomdDigest(
+    DEFAULT_FEED,
+    "target/qemux86-64",
+  );
+  assert.equal(d, createHash("sha256").update(repomd).digest("hex"));
+  assert.equal(calls.length, 1);
+  assert.ok(calls[0].endsWith("target/qemux86-64/repodata/repomd.xml"));
+  await assert.rejects(
+    new RepoClient().fetchRepomdDigest(DEFAULT_FEED, "../x"),
+    /Invalid repo path/,
+  );
 });
 
 test("snapshot pointer is read from the channel head per machine", async () => {
