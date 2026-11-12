@@ -80,6 +80,42 @@ repos:
     targets: [raspberrypi5]
 \`\`\`
 
+### Using a locally built package
+
+To use a package you built yourself instead of the one the distro feed
+carries, build the RPM, publish it in a local feed and rank that feed first.
+The feed grammar belongs to the CLI; the steps here only use what it accepts.
+
+1. Build the RPM. For a component of the base OS, build it with BitBake and
+   take it from the build's \`tmp/deploy/rpm/<arch>/\` directory. For your own
+   code, use the SDK: \`avocado sdk compile <section>\` then
+   \`avocado sdk package <section> --out <dir>\` (the section needs a
+   \`package\` block). To package an extension sysroot, run
+   \`avocado ext package <name> --out-dir <dir>\`. Without an output
+   directory the RPM stays inside the container.
+2. Put the RPM in a directory and make it an RPM repository (see the
+   unverified note below).
+3. Declare the directory under \`repos:\` with \`path:\`.
+4. List it before the distro feed, as \`distro.feeds: [local-rpms, avocado]\`.
+   The first feed that has the package name wins.
+5. Run \`avocado install\`, \`avocado build\`, then
+   \`avocado provision <runtime> --profile <profile>\`.
+
+\`\`\`yaml
+distro:
+  feeds: [local-rpms, avocado]    # local feed ranks ahead of the distro feed
+
+repos:
+  local-rpms:
+    path: rpms
+\`\`\`
+
+Not yet verified: the repository metadata step (\`createrepo_c <dir>\`) and
+installing a local RPM through a \`path:\` feed have not been confirmed by a
+full install, build and provision run. Treat step 2 and the install result as
+unconfirmed until they are, and check the \`avocado install\` output for the
+package before relying on it.
+
 ### Private \`org:\` feeds
 
 The CLI trades your Connect login for a short-lived feed token on each run.
