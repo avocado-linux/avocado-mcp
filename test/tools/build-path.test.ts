@@ -193,6 +193,129 @@ test("an uncommitted recipe file explains itself in the verdict warnings", async
   }
 });
 
+class DeltaRepo extends UnreachableRepo {
+  override async fetchExtraFeed() {
+    return [
+      {
+        name: "foo",
+        summary: "",
+        description: "",
+        version: "1.0",
+        release: "r0",
+        arch: "core2_64",
+        repo: "delta",
+        href: "foo-1.0-r0.core2_64.rpm",
+        epoch: 0,
+        sourcerpm: "foo-1.0-r0.src.rpm",
+      },
+    ];
+  }
+}
+
+test("a modified patch in a committed recipe group is a no-cache-key miss that says to commit", async () => {
+  const p = project(
+    "default_target: qemux86-64\ndistro:\n  release: 2026\n  channel: edge\n  feeds: [local]\nrepos:\n  local:\n    path: delta/target/qemux86-64\n",
+  );
+  const ws = mkdtempSync(join(tmpdir(), "build-path-ws-"));
+  try {
+    const droot = join(p.dir, "delta");
+    mkdirSync(join(droot, "target", "qemux86-64"), { recursive: true });
+    writeFileSync(
+      join(droot, "delta.json"),
+      JSON.stringify({
+        schema_version: 1,
+        base: { release: "2026", channel: "edge", snapshot_id: null },
+        built_recipes: ["foo"],
+      }),
+    );
+    const layer = join(ws, "meta-a");
+    mkdirSync(join(layer, "recipes-x", "foo", "files"), { recursive: true });
+    const git = (...a: string[]) =>
+      execFileSync("git", a, {
+        cwd: layer,
+        env: {
+          ...process.env,
+          GIT_CONFIG_GLOBAL: "/dev/null",
+          GIT_CONFIG_SYSTEM: "/dev/null",
+        },
+      })
+        .toString()
+        .trim();
+    git("init", "-q");
+    writeFileSync(join(layer, "recipes-x", "foo", "foo_1.0.bb"), "# foo\n");
+    const patch = join(layer, "recipes-x", "foo", "files", "fix.patch");
+    writeFileSync(patch, "a\n");
+    git("add", "-A");
+    git(
+      "-c",
+      "user.name=t",
+      "-c",
+      "user.email=t@example.com",
+      "-c",
+      "commit.gpgsign=false",
+      "commit",
+      "-q",
+      "-m",
+      "init",
+    );
+    writeFileSync(
+      join(droot, "recipe-map.json"),
+      JSON.stringify({
+        schema_version: 1,
+        entries: [
+          {
+            recipe: "foo",
+            packages: ["foo"],
+            layer: "meta-a",
+            epoch: 0,
+            pv: "1.0",
+            pr: "r0",
+            srcrev: "",
+            layer_commit: git("rev-parse", "HEAD"),
+            machine: "qemux86-64",
+            release: "2026",
+            task_hash: null,
+          },
+        ],
+      }),
+    );
+    const run = () =>
+      checkBuildPath(
+        new DeltaRepo(),
+        {
+          project_dir: p.dir,
+          workspace_dir: ws,
+          change: { recipes: ["foo"] },
+        },
+        NO_ENV,
+      );
+
+    // Control: the clean tree is served by the delta, so the miss below
+    // comes from the edit and not from the fixture.
+    const clean = await run();
+    assert.equal(clean.ok, true);
+    if (!clean.ok) return;
+    assert.equal(clean.verdict.verdict, "feed_hit");
+
+    writeFileSync(patch, "b\n");
+    const r = await run();
+    assert.equal(r.ok, true);
+    if (!r.ok) return;
+    assert.equal(r.verdict.verdict, "package_miss");
+    assert.deepEqual(
+      r.verdict.missing.map((m) => [m.recipe, m.reason]),
+      [["foo", "no-cache-key"]],
+    );
+    assert.ok(
+      r.verdict.warnings.some((w) => /fix\.patch/.test(w) && /commit/.test(w)),
+      JSON.stringify(r.verdict.warnings),
+    );
+  } finally {
+    rmSync(ws, { recursive: true, force: true });
+    p.done();
+  }
+});
+
 test("an unmapped path reaches the structured result and the rendered text", async () => {
   const p = project("default_target: qemux86-64\n");
   try {
