@@ -222,7 +222,7 @@ export function registerBuildPathTool(
           .string()
           .optional()
           .describe(
-            "Absolute path to the layers workspace (a git repository, or a directory of them). It should hold only the layers of the build being checked. Uncommitted changes in a recipe's file groups make the recipe a miss until they are committed: commit, then rebuild. A recipe name present in two layer repositories (for example meta-avocado and meta-avocado-nonpublic, which share many recipe names) is an unknown recipe, with a warning naming both.",
+            "Absolute path to the layers workspace (a git repository, or a directory of them). It should hold only the layers of the build being checked. Uncommitted changes in a recipe's file groups make the recipe a miss until they are committed: commit, then rebuild. A recipe name present in two layer repositories (for example meta-avocado and meta-avocado-nonpublic, which share many recipe names) is an unknown recipe, with a warning naming both. When `workspace_dir` holds every repository that provides a recipe, a recipe provided by two repositories is reported as unknown-recipe (package_miss) because the tool cannot tell which one built it; leave a providing repository out of `workspace_dir` to let the delta's recorded layer decide.",
           ),
         change: z
           .object({
