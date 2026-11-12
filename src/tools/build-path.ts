@@ -159,6 +159,27 @@ export async function checkBuildPath(
   return result;
 }
 
+/** The text half of the tool result: the same facts as the structured verdict. */
+export function renderVerdictText(v: Verdict): string {
+  let text = `# check-build-path: \`${v.verdict}\`\n\nTarget \`${v.target}\`.\n`;
+  if (v.reasons.length > 0)
+    text += `\n## Reasons\n\n${v.reasons.map((x) => `- ${x}`).join("\n")}\n`;
+  if (v.missing.length > 0)
+    text += `\n## Missing\n\n${v.missing
+      .map(
+        (m) =>
+          `- \`${m.package}\`${m.recipe ? ` (recipe \`${m.recipe}\`)` : ""}: ${m.reason}`,
+      )
+      .join("\n")}\n`;
+  if (v.unmapped.length > 0)
+    text += `\n## Unmapped paths\n\nThese changed paths map to no package. Build with Yocto, or name the affected recipes in \`change.recipes\`.\n\n${v.unmapped
+      .map((x) => `- \`${x}\``)
+      .join("\n")}\n`;
+  if (v.warnings.length > 0)
+    text += `\n## Warnings\n\n${v.warnings.map((x) => `- ${x}`).join("\n")}\n`;
+  return text;
+}
+
 const missingSchema = z.object({
   recipe: z.string().nullable(),
   package: z.string(),
@@ -190,7 +211,7 @@ export function registerBuildPathTool(
     {
       title: "Check whether a change needs an image build",
       description:
-        "Decide the build path for a change before building anything. Returns `feed_hit` (every package is served by the published feed or the project's local delta: use `avocado install` and `avocado build`, no Yocto), `package_miss` (named packages are not served: build those recipes with bakar into the delta feed) or `image_miss` (the change touches machine, kernel, board-support, layer, distro, package-group or image paths: a full image build is needed). Pass `change.recipes` and/or `change.paths` (paths changed in the layer workspace). `workspace_dir` is the layers checkout, used to prove a delta or published package was built from the current recipe commits. `mirror_dir` (or AVOCADO_FEED_MIRROR_DIR) names a local feed mirror used for package metadata only when it matches the remote head. A changed path that maps to no recipe (a bbclass, a shared include the workspace cannot place) and is not documentation or a test file gives `package_miss` with no entry in `missing` and the path named in `reasons`; image and kernel classes give `image_miss`. An unreachable remote still returns a verdict, with reason `feed-unreachable`. Read-only: it never builds, writes a feed or touches a device.",
+        "Decide the build path for a change before building anything. Returns `feed_hit` (every package is served by the published feed or the project's local delta: use `avocado install` and `avocado build`, no Yocto), `package_miss` (named packages are not served: build those recipes with bakar into the delta feed) or `image_miss` (the change touches machine, kernel, board-support, layer, distro, package-group or image paths: a full image build is needed). Pass `change.recipes` and/or `change.paths` (paths changed in the layer workspace). `workspace_dir` is the layers checkout, used to prove a delta or published package was built from the current recipe commits. `mirror_dir` (or AVOCADO_FEED_MIRROR_DIR) names a local feed mirror used for package metadata only when it matches the remote head. A changed path that maps to no recipe (a bbclass, a library file, or a shared include the workspace cannot place) and is not documentation or a test file gives `package_miss` whose `missing` list does not name it: the path is in `unmapped` instead. Read an empty `missing` with a non-empty `unmapped` as: the change cannot be mapped to packages, so build with Yocto as for `image_miss`, or name the affected recipes in `change.recipes` and call again. `missing[].package` only ever holds package names. Image and kernel classes, rootfs and SDK classes and wic layouts give `image_miss`. An unreachable remote still returns a verdict, with reason `feed-unreachable`. Read-only: it never builds, writes a feed or touches a device.",
       inputSchema: {
         project_dir: z
           .string()
@@ -222,6 +243,7 @@ export function registerBuildPathTool(
         verdict: z.enum(["feed_hit", "package_miss", "image_miss"]),
         missing: z.array(missingSchema),
         reasons: z.array(z.string()),
+        unmapped: z.array(z.string()),
         feeds: z.array(feedSchema),
         cache_keys: z.object({
           published: z.record(z.string()),
@@ -251,18 +273,7 @@ export function registerBuildPathTool(
           };
         }
         const v = r.verdict;
-        let text = `# check-build-path: \`${v.verdict}\`\n\nTarget \`${v.target}\`.\n`;
-        if (v.reasons.length > 0)
-          text += `\n## Reasons\n\n${v.reasons.map((x) => `- ${x}`).join("\n")}\n`;
-        if (v.missing.length > 0)
-          text += `\n## Missing\n\n${v.missing
-            .map(
-              (m) =>
-                `- \`${m.package}\`${m.recipe ? ` (recipe \`${m.recipe}\`)` : ""}: ${m.reason}`,
-            )
-            .join("\n")}\n`;
-        if (v.warnings.length > 0)
-          text += `\n## Warnings\n\n${v.warnings.map((x) => `- ${x}`).join("\n")}\n`;
+        const text = renderVerdictText(v);
         return {
           content: [{ type: "text", text }],
           structuredContent: v as unknown as Record<string, unknown>,

@@ -394,17 +394,50 @@ test("recipesInDir names every recipe whose file sits in the directory", () => {
   git(repo, "add", "-A");
   commit(repo, "glibc");
   const w = createWorkspace(ws).workspace;
+  assert.deepEqual(w.recipesInDir?.("meta-oe/recipes-core/glibc"), [
+    "glibc",
+    "glibc-locale",
+  ]);
   assert.deepEqual(w.recipesInDir?.("recipes-core/glibc"), [
     "glibc",
     "glibc-locale",
   ]);
-  assert.deepEqual(w.recipesInDir?.("recipes-support/htop"), ["htop"]);
-  assert.deepEqual(w.recipesInDir?.("recipes-core/absent"), []);
+  assert.deepEqual(w.recipesInDir?.("meta-oe/recipes-support/htop"), ["htop"]);
+  assert.deepEqual(w.recipesInDir?.("meta-oe/recipes-core/absent"), []);
+  rmSync(ws, { recursive: true });
+});
+
+test("recipesInDir is scoped to the layer of the changed path", () => {
+  const ws = tmp();
+  const a = join(ws, "meta-a");
+  const b = join(ws, "meta-b");
+  initRepo(a);
+  initRepo(b);
+  write(join(a, "recipes-core", "foo", "foo_1.bb"), "# a\n");
+  write(join(b, "recipes-core", "foo", "bar_1.bb"), "# b\n");
+  for (const r of [a, b]) {
+    git(r, "add", "-A");
+    commit(r, "x");
+  }
+  const w = createWorkspace(ws).workspace;
+  assert.deepEqual(w.recipesInDir?.("meta-a/recipes-core/foo"), ["foo"]);
+  assert.deepEqual(w.recipesInDir?.("meta-b/recipes-core/foo"), ["bar"]);
+  rmSync(ws, { recursive: true });
+});
+
+test("recipesInDir finds a layer kept in a subdirectory of its repository", () => {
+  const ws = tmp();
+  const repo = join(ws, "meta-repo");
+  initRepo(repo);
   write(join(repo, "meta-sub", "recipes-core", "zlib", "zlib_1.3.bb"), "# z\n");
-  assert.deepEqual(
-    createWorkspace(ws).workspace.recipesInDir?.("recipes-core/zlib"),
-    ["zlib"],
-  );
+  git(repo, "add", "-A");
+  commit(repo, "z");
+  const w = createWorkspace(ws).workspace;
+  assert.deepEqual(w.recipesInDir?.("meta-sub/recipes-core/zlib"), ["zlib"]);
+  assert.deepEqual(w.recipesInDir?.("meta-repo/meta-sub/recipes-core/zlib"), [
+    "zlib",
+  ]);
+  assert.deepEqual(w.recipesInDir?.("meta-other/recipes-core/zlib"), []);
   rmSync(ws, { recursive: true });
 });
 
