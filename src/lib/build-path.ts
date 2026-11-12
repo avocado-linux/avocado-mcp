@@ -435,6 +435,10 @@ function evaluateRecipe(
   const ws = input.workspace;
   const out: RecipeOutcome = { hit: false, packages: [], extraReasons: [] };
   if (entry) out.packages = entry.packages;
+  // Memoized. Asking first collects the dirty-group warning for every recipe,
+  // including those the rules below reject before they reach the groups
+  // (version-differs, no-cache-key); no verdict reads this call's result.
+  ws?.lastCommitFor(recipe);
 
   let localReason: MissReason | null = null;
   const built = input.delta?.manifest.built_recipes.includes(recipe) ?? false;

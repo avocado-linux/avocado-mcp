@@ -316,6 +316,169 @@ test("a modified patch in a committed recipe group is a no-cache-key miss that s
   }
 });
 
+const GIT_TEST_ENV = {
+  ...process.env,
+  GIT_CONFIG_GLOBAL: "/dev/null",
+  GIT_CONFIG_SYSTEM: "/dev/null",
+};
+
+function gitIn(cwd: string, ...a: string[]): string {
+  return execFileSync("git", a, { cwd, env: GIT_TEST_ENV }).toString().trim();
+}
+
+function commitIn(cwd: string, msg: string): void {
+  gitIn(
+    cwd,
+    "-c",
+    "user.name=t",
+    "-c",
+    "user.email=t@example.com",
+    "-c",
+    "commit.gpgsign=false",
+    "commit",
+    "-q",
+    "-m",
+    msg,
+  );
+}
+
+// A recipe served by the delta, in a real git repository. Unless `pv` makes
+// the version differ, a clean control is asserted to be a feed_hit first, so
+// a miss after `edit` comes from the edit and not from the fixture.
+async function deltaScenario(
+  edit: (ctx: { ws: string; layer: string }) => void,
+  opts: { pv?: string } = {},
+) {
+  const p = project(
+    "default_target: qemux86-64\ndistro:\n  release: 2026\n  channel: edge\n  feeds: [local]\nrepos:\n  local:\n    path: delta/target/qemux86-64\n",
+  );
+  const ws = mkdtempSync(join(tmpdir(), "build-path-ws-"));
+  try {
+    const droot = join(p.dir, "delta");
+    mkdirSync(join(droot, "target", "qemux86-64"), { recursive: true });
+    writeFileSync(
+      join(droot, "delta.json"),
+      JSON.stringify({
+        schema_version: 1,
+        base: { release: "2026", channel: "edge", snapshot_id: null },
+        built_recipes: ["foo"],
+      }),
+    );
+    const layer = join(ws, "meta-a");
+    const dir = join(layer, "recipes-x", "foo");
+    mkdirSync(join(dir, "files"), { recursive: true });
+    gitIn(layer, "init", "-q");
+    writeFileSync(join(dir, "foo_1.0.bb"), "# foo\n");
+    writeFileSync(join(dir, "foo.inc"), "# inc\n");
+    writeFileSync(join(dir, "files", "fix.patch"), "a\n");
+    gitIn(layer, "add", "-A");
+    commitIn(layer, "init");
+    writeFileSync(
+      join(droot, "recipe-map.json"),
+      JSON.stringify({
+        schema_version: 1,
+        entries: [
+          {
+            recipe: "foo",
+            packages: ["foo"],
+            layer: "meta-a",
+            epoch: 0,
+            pv: opts.pv ?? "1.0",
+            pr: "r0",
+            srcrev: "",
+            layer_commit: gitIn(layer, "rev-parse", "HEAD"),
+            machine: "qemux86-64",
+            release: "2026",
+            task_hash: null,
+          },
+        ],
+      }),
+    );
+    const run = async () => {
+      const r = await checkBuildPath(
+        new DeltaRepo(),
+        {
+          project_dir: p.dir,
+          workspace_dir: ws,
+          change: { recipes: ["foo"] },
+        },
+        NO_ENV,
+      );
+      assert.equal(r.ok, true);
+      if (!r.ok) throw new Error("checkBuildPath failed");
+      return r.verdict;
+    };
+    if (!opts.pv) assert.equal((await run()).verdict, "feed_hit");
+    edit({ ws, layer });
+    return await run();
+  } finally {
+    rmSync(ws, { recursive: true, force: true });
+    p.done();
+  }
+}
+
+const reasons = (v: {
+  missing: Array<{ recipe: string | null; reason: string }>;
+}) => v.missing.map((m) => [m.recipe, m.reason]);
+
+test("an uncommitted delete of a tracked .inc is a no-cache-key miss that says to commit", async () => {
+  const v = await deltaScenario(({ layer }) =>
+    rmSync(join(layer, "recipes-x", "foo", "foo.inc")),
+  );
+  assert.equal(v.verdict, "package_miss");
+  assert.deepEqual(reasons(v), [["foo", "no-cache-key"]]);
+  assert.ok(
+    v.warnings.some((w) => /foo\.inc/.test(w) && /commit/.test(w)),
+    JSON.stringify(v.warnings),
+  );
+});
+
+test("git rm of a subdirectory so the directory disappears is a no-cache-key miss", async () => {
+  const v = await deltaScenario(({ layer }) =>
+    gitIn(layer, "rm", "-q", "-r", "recipes-x/foo/files"),
+  );
+  assert.equal(v.verdict, "package_miss");
+  assert.deepEqual(reasons(v), [["foo", "no-cache-key"]]);
+  assert.ok(
+    v.warnings.some((w) => /files\/fix\.patch/.test(w)),
+    JSON.stringify(v.warnings),
+  );
+});
+
+test("deleting files/ from disk entirely is a no-cache-key miss", async () => {
+  const v = await deltaScenario(({ layer }) =>
+    rmSync(join(layer, "recipes-x", "foo", "files"), { recursive: true }),
+  );
+  assert.equal(v.verdict, "package_miss");
+  assert.deepEqual(reasons(v), [["foo", "no-cache-key"]]);
+});
+
+test("a committed deletion of a .inc after the build is stale-delta", async () => {
+  const v = await deltaScenario(({ layer }) => {
+    gitIn(layer, "rm", "-q", "recipes-x/foo/foo.inc");
+    commitIn(layer, "drop inc");
+  });
+  assert.equal(v.verdict, "package_miss");
+  assert.deepEqual(reasons(v), [["foo", "stale-delta"]]);
+});
+
+test("a version difference beside a dirty patch still carries the commit-first warning", async () => {
+  const v = await deltaScenario(
+    ({ layer }) =>
+      writeFileSync(
+        join(layer, "recipes-x", "foo", "files", "fix.patch"),
+        "b\n",
+      ),
+    { pv: "2.0" },
+  );
+  assert.equal(v.verdict, "package_miss");
+  assert.deepEqual(reasons(v), [["foo", "version-differs"]]);
+  assert.ok(
+    v.warnings.some((w) => /fix\.patch/.test(w) && /commit/.test(w)),
+    JSON.stringify(v.warnings),
+  );
+});
+
 test("an unmapped path reaches the structured result and the rendered text", async () => {
   const p = project("default_target: qemux86-64\n");
   try {

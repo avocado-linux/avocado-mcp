@@ -47,6 +47,13 @@ const VERSION_TIMEOUT_MS = 5_000;
 const MAX_WALK_DEPTH = 10;
 const SKIP_DIRS = new Set([".git", "node_modules"]);
 
+/**
+ * Leads every git run: a repository's `core.fsmonitor` may name a hook or
+ * start a daemon that writes under .git/, and these runs must neither execute
+ * anything but git nor write.
+ */
+const GIT_BASE = ["-c", "core.fsmonitor=false"];
+
 // ---- target ---------------------------------------------------------------
 
 /**
@@ -354,6 +361,28 @@ export function createWorkspace(
     if (!f) {
       f = [];
       walk(l.dir, "", 0, f);
+      // A recipe file that git tracks but the disk no longer has (rm, or
+      // git rm) still names its group, so the deletion shows as a change
+      // instead of the group silently vanishing. HEAD covers a file removed
+      // from the index, the index covers one that was added and then removed.
+      const seen = new Set(f);
+      for (const args of [
+        ["ls-tree", "-r", "-z", "--name-only", "HEAD"],
+        ["ls-files", "-z"],
+      ]) {
+        const r = run(l.dir, [...GIT_BASE, ...args]);
+        if (r.status !== 0) continue;
+        for (const rel of r.stdout.split("\0")) {
+          if (
+            /\.(bb|bbappend)$/.test(rel) &&
+            !seen.has(rel) &&
+            !rel.split("/").some((c) => SKIP_DIRS.has(c))
+          ) {
+            seen.add(rel);
+            f.push(rel);
+          }
+        }
+      }
       index.set(l.dir, f);
     }
     return f;
@@ -380,45 +409,44 @@ export function createWorkspace(
     return out;
   };
 
-  const besides = (recipe: string, layerDir: string, f: RecipeFile) => {
-    const paths: string[] = [];
-    // A recipe at the layer root has no recipe directory to scan.
-    if (!f.dir) {
-      for (const n of ["files", recipe])
-        if (isDir(join(layerDir, n))) paths.push(n);
-      return paths;
-    }
-    // Every subdirectory of the recipe directory: files/, <pn>/ and the
-    // directories of sibling recipes are all on the file search path (gcc-*.inc
-    // adds gcc/ for gcc-cross), and the classifier names every recipe of the
-    // directory for a change in any of them. A shared .inc beside the recipe
-    // changes what it builds as well, and a recipe pulling one in by `require`
-    // has no file of its own to show it. Other recipes' .bb files are not here.
-    try {
-      for (const e of readdirSync(join(layerDir, f.dir), {
-        withFileTypes: true,
-      })) {
-        if (e.isDirectory() && !SKIP_DIRS.has(e.name))
-          paths.push(`${f.dir}/${e.name}`);
-        else if (e.isFile() && e.name.endsWith(".inc"))
-          paths.push(`${f.dir}/${e.name}`);
-      }
-    } catch {
-      /* unreadable directory: the recipe file's own group still stands */
-    }
-    return paths;
+  /**
+   * Glob pathspecs for what sits beside a recipe file: git matches them
+   * against the index and HEAD as well as the disk, so a member that was
+   * deleted (a `.inc`, or a subdirectory that `git rm` removed whole) is
+   * still named, where a listing of the directory would not show it.
+   * A recipe in a subdirectory covers every sibling `.inc` and every
+   * subdirectory of its directory: files/, <pn>/ and the directories of
+   * sibling recipes are all on the file search path (gcc-*.inc adds gcc/ for
+   * gcc-cross), and the classifier names every recipe of the directory for a
+   * change in any of them. A shared .inc beside the recipe changes what it
+   * builds as well, and a recipe pulling one in by `require` has no file of
+   * its own to show it. Other recipes' .bb files are not here. A recipe at
+   * the layer root has no directory of its own to cover, so it gets the
+   * root-level `.inc` files plus files/ and <pn>/.
+   */
+  const besides = (recipe: string, f: RecipeFile): string[] => {
+    // Escape glob characters in the names so only the wildcards added here act.
+    const esc = (p: string) => p.replace(/[*?[\\]/g, "\\$&");
+    if (!f.dir)
+      return [":(glob)*.inc", ":(glob)files/**", `:(glob)${esc(recipe)}/**`];
+    const d = esc(f.dir);
+    return [`:(glob)${d}/*.inc`, `:(glob)${d}/*/**`];
   };
 
   const lastCommit = (
     layer: { name: string; dir: string },
     paths: string[],
+    globs: string[],
   ): LastCommit => {
+    const specs = [...paths.map((p) => `:(literal)${p}`), ...globs];
     const r = run(layer.dir, [
+      ...GIT_BASE,
       "log",
       "-1",
+      "--no-renames",
       "--format=%H",
       "--",
-      ...paths.map((p) => `:(literal)${p}`),
+      ...specs,
     ]);
     let commit = "";
     if (r.status === 0) {
@@ -440,13 +468,14 @@ export function createWorkspace(
     // group fails closed to "no commit" like an untracked file does.
     if (commit) {
       const s = run(layer.dir, [
+        ...GIT_BASE,
         "status",
         "--porcelain=v1",
         "-z",
         "--no-renames",
         "--untracked-files=normal",
         "--",
-        ...paths.map((p) => `:(literal)${p}`),
+        ...specs,
       ]);
       if (s.status !== 0) {
         failures.push(
@@ -494,14 +523,15 @@ export function createWorkspace(
       if (l === withBb[0]) {
         const bbs = files.filter((f) => !f.append);
         const paths = new Set<string>();
+        const globs = new Set<string>();
         for (const f of bbs) {
           paths.add(f.rel);
-          for (const p of besides(recipe, l.dir, f)) paths.add(p);
+          for (const p of besides(recipe, f)) globs.add(p);
         }
-        groups.push(lastCommit(l, [...paths]));
+        groups.push(lastCommit(l, [...paths], [...globs]));
       }
       for (const f of files.filter((x) => x.append))
-        groups.push(lastCommit(l, [f.rel, ...besides(recipe, l.dir, f)]));
+        groups.push(lastCommit(l, [f.rel], besides(recipe, f)));
     }
     // A group whose files have no commit stays in the list with an empty
     // commit: the recipe exists, and cannot be proven against any layer.
@@ -512,7 +542,7 @@ export function createWorkspace(
     if (!COMMIT_RE.test(a) || !COMMIT_RE.test(b)) return null;
     const dir = commitRepo.get(a);
     if (!dir) return null;
-    const r = run(dir, ["merge-base", "--is-ancestor", a, b]);
+    const r = run(dir, [...GIT_BASE, "merge-base", "--is-ancestor", a, b]);
     if (r.status === 0) return true;
     // Exit 1 is the answer "not an ancestor". Anything else (an object
     // the clone lacks, a timeout) leaves the answer unproven.
