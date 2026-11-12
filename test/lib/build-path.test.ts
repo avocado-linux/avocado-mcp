@@ -952,40 +952,56 @@ for (const path of [
   });
 }
 
-test("a patch in a <pn>/ subdirectory maps to that recipe alone", () => {
-  const dirs = {
-    "meta-oe/recipes-devtools/python": ["python3-numpy", "python3-scipy"],
-  };
+test("every file below a recipe directory names every recipe of that directory", () => {
+  const dir = "meta-oe/recipes-devtools/python";
+  const names = ["python3-numpy", "python3-scipy"];
   const ws = workspace(
     {
       "python3-numpy": [{ commit: "abc1234", layer: "meta-oe" }],
       "python3-scipy": [{ commit: "abc1234", layer: "meta-oe" }],
     },
     ["abc1234", "def5678"],
-    dirs,
+    { [dir]: names },
   );
-  const only = (path: string) =>
-    verdictOf(
+  for (const sub of [
+    "python3-numpy/0001.patch",
+    "python3-numpy-1.26/0001.patch",
+    "files/0001.patch",
+    "other/0001.patch",
+    "python-common.inc",
+  ]) {
+    const v = verdictOf(
       base({
         recipeMap: null,
         delta: null,
-        change: { paths: [path] },
+        change: { paths: [`${dir}/${sub}`] },
         workspace: ws,
       }),
-    )
-      .missing.map((m) => m.recipe)
-      .sort();
-  const dir = "meta-oe/recipes-devtools/python";
-  assert.deepEqual(only(`${dir}/python3-numpy/0001.patch`), ["python3-numpy"]);
-  assert.deepEqual(only(`${dir}/python3-numpy-1.26/0001.patch`), [
-    "python3-numpy",
-  ]);
-  // files/, a directory-level include and a subdirectory naming no recipe
-  // are shared, so every recipe of the directory is affected.
-  const both = ["python3-numpy", "python3-scipy"];
-  assert.deepEqual(only(`${dir}/files/0001.patch`), both);
-  assert.deepEqual(only(`${dir}/python-common.inc`), both);
-  assert.deepEqual(only(`${dir}/other/0001.patch`), both);
+    );
+    assert.deepEqual(v.missing.map((m) => m.recipe).sort(), names, sub);
+  }
+});
+
+test("a <pn>/ subdirectory is on the file path of sibling recipes: a gcc-like directory", () => {
+  // gcc-*.inc adds ${THISDIR}/gcc to the file path of gcc-cross and libgcc.
+  const dir = "meta/recipes-devtools/gcc";
+  const names = ["gcc", "gcc-cross", "libgcc"];
+  const ws = workspace(
+    Object.fromEntries(
+      names.map((n) => [n, [{ commit: "abc1234", layer: "meta" }]]),
+    ),
+    ["abc1234", "def5678"],
+    { [dir]: names },
+  );
+  const v = verdictOf(
+    base({
+      recipeMap: null,
+      delta: null,
+      change: { paths: [`${dir}/gcc/0001-fix.patch`] },
+      workspace: ws,
+    }),
+  );
+  assert.deepEqual(v.missing.map((m) => m.recipe).sort(), names);
 });
 
 test("unmapped paths are listed in a structured field and an empty list otherwise", () => {
