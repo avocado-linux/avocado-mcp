@@ -484,6 +484,27 @@ test("coverage percentage counts exact matches only", async () => {
   });
 });
 
+test("a candidate keeps a slot when near matches would fill the list", async () => {
+  await withDocsFixture(async () => {
+    const packages = [
+      pkg("zlibb"),
+      pkg("zlibc"),
+      pkg("zlibd"),
+      pkg("libzlib1"),
+    ];
+    const r = await coverage(packages, [{ name: "z", queries: ["zlib"] }], {
+      maxAlternatives: 3,
+    });
+    assert.deepEqual(r.results[0].nearMatches, ["zlibb", "zlibc"]);
+    assert.deepEqual(r.results[0].candidates, ["libzlib1"]);
+    assert.deepEqual(r.results[0].alternatives, ["zlibb", "zlibc", "libzlib1"]);
+    const one = await coverage(packages, [{ name: "z", queries: ["zlib"] }], {
+      maxAlternatives: 1,
+    });
+    assert.deepEqual(one.results[0].alternatives, ["zlibb"]);
+  });
+});
+
 test("near matches come before candidates and are cut to maxAlternatives", async () => {
   await withDocsFixture(async () => {
     const packages = [

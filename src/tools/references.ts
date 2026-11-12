@@ -10,6 +10,7 @@ import {
   type ReferenceProject,
 } from "../lib/references-client.js";
 import { sameTarget } from "../lib/hardware-support.js";
+import { resolveTargetInput } from "../lib/target-resolver.js";
 
 const referenceEntrySchema = z.object({
   slug: z.string(),
@@ -31,31 +32,47 @@ type LabelledReference = ReferenceEntry & {
 };
 
 /**
- * Label and filter references for a target. Equivalent slugs count as listed
- * (a reference naming the old `-devkit` slug matches the new slug). Kept in
- * the tool layer so the project initialization listing is unchanged.
+ * Label and filter references for a target. The typed target is resolved
+ * against the slugs the references list ("rpi5" becomes `raspberrypi5`), and
+ * equivalent slugs count as listed (a reference naming the old `-devkit` slug
+ * matches the new slug). Kept in the tool layer so the project initialization
+ * listing is unchanged. `omitted` counts the references the default filter
+ * dropped.
  */
 async function referencesForTarget(
   query: string,
   target: string | undefined,
   includeIncompatible: boolean,
-): Promise<LabelledReference[]> {
+): Promise<{ references: LabelledReference[]; omitted: number }> {
   const scored = await searchReferencesScored(query, target);
-  if (!target) return scored.map((s) => s.entry);
+  if (!target) return { references: scored.map((s) => s.entry), omitted: 0 };
+  const slugs = [
+    ...new Set((await listReferences()).flatMap((r) => r.hardware)),
+  ];
+  const typed = target.trim().toLowerCase();
+  const wanted = (
+    resolveTargetInput(target, slugs).target ?? typed
+  ).toLowerCase();
   const labelled = scored.map(({ entry }): LabelledReference => {
     const compatibility: ReferenceCompatibility =
       entry.hardware.length === 0
         ? "generic"
-        : entry.hardware.some(
-              (h) => sameTarget(h, target) || sameTarget(target, h),
-            )
+        : entry.hardware.some((h) => {
+              const slug = h.toLowerCase();
+              return sameTarget(slug, wanted) || sameTarget(wanted, slug);
+            })
           ? "listed"
           : "unlisted";
     return { ...entry, compatibility };
   });
-  return includeIncompatible
-    ? labelled
-    : labelled.filter((r) => r.compatibility !== "unlisted");
+  if (includeIncompatible) return { references: labelled, omitted: 0 };
+  const kept = labelled.filter((r) => r.compatibility !== "unlisted");
+  return { references: kept, omitted: labelled.length - kept.length };
+}
+
+function omittedNote(omitted: number): string {
+  if (omitted === 0) return "";
+  return `_${omitted} ${omitted === 1 ? "reference" : "references"} listing other targets omitted; set \`include_incompatible\` to show ${omitted === 1 ? "it" : "them"}._\n\n`;
 }
 
 export function registerReferenceTools(server: McpServer): void {
@@ -107,11 +124,16 @@ export function registerReferenceTools(server: McpServer): void {
       try {
         if (q.length === 0) {
           // Catalog-browse mode
-          const all = await (target
-            ? referencesForTarget("", target, include_incompatible === true)
-            : listReferences());
+          const { references: all, omitted } = target
+            ? await referencesForTarget(
+                "",
+                target,
+                include_incompatible === true,
+              )
+            : { references: await listReferences(), omitted: 0 };
           let out = `# search-references — catalog\n\n`;
           out += `**Total:** ${all.length}${target ? `  •  **Target filter:** \`${target}\`` : ""}\n\n`;
+          out += omittedNote(omitted);
           out += renderList(all);
           return {
             content: [{ type: "text", text: out }],
@@ -125,7 +147,7 @@ export function registerReferenceTools(server: McpServer): void {
         }
 
         // Ranked-search mode
-        const matches = await referencesForTarget(
+        const { references: matches, omitted } = await referencesForTarget(
           q,
           target,
           include_incompatible === true,
@@ -134,7 +156,7 @@ export function registerReferenceTools(server: McpServer): void {
           content: [
             {
               type: "text",
-              text: `# search-references\n\n**Query:** \`${q}\`${target ? `  •  **Target:** \`${target}\`` : ""}\n**Matches:** ${matches.length}\n\n${renderList(matches)}`,
+              text: `# search-references\n\n**Query:** \`${q}\`${target ? `  •  **Target:** \`${target}\`` : ""}\n**Matches:** ${matches.length}\n\n${omittedNote(omitted)}${renderList(matches)}`,
             },
           ],
           structuredContent: {
