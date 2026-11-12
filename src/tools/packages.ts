@@ -732,16 +732,22 @@ export function registerPackageTools(
               }
             }
             const taken = (n: string) => n === best?.name;
+            const rankedCandidates = Array.from(cands)
+              .filter(([n]) => !taken(n) && !near.has(n))
+              .sort((x, y) => y[1] - x[1] || (x[0] < y[0] ? -1 : 1))
+              .map(([n]) => n);
+            // Near matches come first, but a top candidate keeps one slot so
+            // a crowd of near matches cannot hide every candidate.
+            const reserved = rankedCandidates.length > 0 && maxAlt >= 2 ? 1 : 0;
             const nearMatches = Array.from(near)
               .filter(([n]) => !taken(n) && !exactNames.has(n))
               .sort((x, y) => x[1] - y[1] || (x[0] < y[0] ? -1 : 1))
               .map(([n]) => n)
-              .slice(0, maxAlt);
-            const candidates = Array.from(cands)
-              .filter(([n]) => !taken(n) && !near.has(n))
-              .sort((x, y) => y[1] - x[1] || (x[0] < y[0] ? -1 : 1))
-              .map(([n]) => n)
-              .slice(0, maxAlt - nearMatches.length);
+              .slice(0, maxAlt - reserved);
+            const candidates = rankedCandidates.slice(
+              0,
+              maxAlt - nearMatches.length,
+            );
             return {
               name: dep.name,
               ecosystem: dep.ecosystem,
