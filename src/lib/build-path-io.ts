@@ -379,22 +379,28 @@ export function createWorkspace(
   };
 
   const besides = (recipe: string, layerDir: string, f: RecipeFile) => {
-    const names = new Set(["files", recipe]);
-    const stem = f.base.replace(/\.(bb|bbappend)$/, "");
-    if (stem.includes("_")) names.add(stem.replace("_", "-"));
     const paths: string[] = [];
-    for (const n of names) {
-      const rel = f.dir ? `${f.dir}/${n}` : n;
-      if (isDir(join(layerDir, rel))) paths.push(rel);
+    // A recipe at the layer root has no recipe directory to scan.
+    if (!f.dir) {
+      for (const n of ["files", recipe])
+        if (isDir(join(layerDir, n))) paths.push(n);
+      return paths;
     }
-    // A shared .inc beside the recipe changes what it builds, and a recipe
-    // pulling one in by `require` has no file of its own to show it.
+    // Every subdirectory of the recipe directory: files/, <pn>/ and the
+    // directories of sibling recipes are all on the file search path (gcc-*.inc
+    // adds gcc/ for gcc-cross), and the classifier names every recipe of the
+    // directory for a change in any of them. A shared .inc beside the recipe
+    // changes what it builds as well, and a recipe pulling one in by `require`
+    // has no file of its own to show it. Other recipes' .bb files are not here.
     try {
       for (const e of readdirSync(join(layerDir, f.dir), {
         withFileTypes: true,
-      }))
-        if (e.isFile() && e.name.endsWith(".inc"))
-          paths.push(f.dir ? `${f.dir}/${e.name}` : e.name);
+      })) {
+        if (e.isDirectory() && !SKIP_DIRS.has(e.name))
+          paths.push(`${f.dir}/${e.name}`);
+        else if (e.isFile() && e.name.endsWith(".inc"))
+          paths.push(`${f.dir}/${e.name}`);
+      }
     } catch {
       /* unreadable directory: the recipe file's own group still stands */
     }
@@ -504,10 +510,12 @@ export function createWorkspace(
         const names = new Set<string>();
         for (const l of layers)
           for (const rel of filesOf(l)) {
-            // Exactly this layer and this directory: the changed path names it
-            // from the workspace root (`<layer>/<dir>`) or from the layer
-            // repository (`<dir>`, which holds a layer kept in a subdirectory).
-            // A same-named directory of another layer is another recipe set.
+            // The changed path names the directory from the workspace root
+            // (`<layer>/<dir>`, which scopes it to that layer) or from the layer
+            // repository (`<dir>`, which also holds a layer kept in a
+            // subdirectory). The second form cannot say which layer, so it
+            // matches every layer having that directory: over-inclusion, which
+            // costs a rebuild and never a stale package.
             const d = dirname(rel);
             if (d !== recipeDir && `${l.name}/${d}` !== recipeDir) continue;
             const name = recipeOfPath(rel);
@@ -620,8 +628,9 @@ const errText = (e: unknown) => String((e as Error)?.message ?? e);
  * Read the published feed for one target. The snapshot pointer, targets
  * index and build manifest always come from the remote. Package metadata
  * comes from the mirror when every marker digest equals the remote head's
- * `repomd.xml` digest (never a pinned snapshot's, and a matching pin skips
- * the mirror), otherwise from the remote.
+ * `repomd.xml` digest and, when the pointer names a snapshot, that
+ * snapshot's `repomd.xml` digest too (head only with no pointer; a matching
+ * pin skips the mirror), otherwise from the remote.
  */
 export async function loadPublishedState(input: {
   client: PublishedClient;
