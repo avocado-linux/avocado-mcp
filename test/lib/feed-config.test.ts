@@ -201,6 +201,33 @@ test("stale snapshot pin (different channel) is ignored with a note", () => {
   assert.ok(f.notes.some((n) => n.includes("avocado update")));
 });
 
+test("a snapshot pin carries the repo_url it was recorded against", () => {
+  const mk = (extra: Record<string, unknown>) =>
+    resolveFeed({
+      env: {},
+      config: cfg("distro:\n  release: 2026\n  channel: edge\n"),
+      lock: {
+        targets: {
+          t: {
+            "repo-snapshot": {
+              release: "2026",
+              channel: "edge",
+              snapshot: "s1",
+              ...extra,
+            },
+          },
+        },
+      },
+      target: "t",
+    });
+  assert.equal(
+    mk({ repo_url: "https://other.example" }).snapshotRepoUrl,
+    "https://other.example",
+  );
+  assert.equal(mk({}).snapshotRepoUrl, undefined);
+  assert.equal(mk({}).snapshot, "s1");
+});
+
 test("explicit releasever disables snapshot pinning (CLI: user owns resolution)", () => {
   const f = resolveFeed({
     env: {},

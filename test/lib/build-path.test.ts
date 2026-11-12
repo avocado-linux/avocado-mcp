@@ -197,6 +197,22 @@ test("recipe built into the delta at the recorded commit is feed hit", () => {
   assert.equal(v.schema_version, 1);
 });
 
+test("a recipe in two layers is unknown even with a recipe-map entry, and the warning names both", () => {
+  const ws: Workspace = {
+    ...workspace({ htop: [] }, ["abc1234"]),
+    duplicateLayers: () => ["meta-a", "meta-b"],
+  };
+  const v = verdictOf(base({ workspace: ws }));
+  assert.equal(v.verdict, "package_miss");
+  assert.ok(v.missing.length > 0);
+  assert.ok(v.missing.every((m) => m.reason === "unknown-recipe"));
+  assert.ok(v.missing.every((m) => m.recipe === null));
+  assert.ok(
+    v.warnings.some((w) => w.includes("meta-a") && w.includes("meta-b")),
+    v.warnings.join("\n"),
+  );
+});
+
 test("null task hash reports the five-field key and never null", () => {
   const v = verdictOf(
     base({
