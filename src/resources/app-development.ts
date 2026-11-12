@@ -9,7 +9,7 @@ This skill is the guide for the day-to-day work of building features inside an A
 
 ## The most important rule: feed-first for every library
 
-> **Before suggesting any library / dependency / package to a user, call \`search-packages\` against their target. If it's in the feed, add it to \`extensions.<name>.packages\` (or use \`add-package-to-extension\`). Only vendor / bundle / language-package-manager-install when the feed genuinely lacks it.**
+> **Before suggesting any library / dependency / package to a user, call \`search-packages\` against their target. If it's in the feed, add it to \`extensions.<name>.packages\` (or use \`add-package-to-extension\`). When the feed genuinely lacks it, build it in the SDK first (\`avocado sdk compile\` then \`avocado sdk package\`, or \`avocado ext package\`) and use the local feed recipe; only after that consider vendoring / bundling / a language-package-manager install, or a feed request.**
 
 Concrete: if the user says "I want to add MQTT to my Python app", do NOT immediately reach for \`pip install paho-mqtt\`. Call \`search-packages({ targets: [<target>], query: "mqtt", projectDir: "<project path>" })\`, see what's in the feed (commonly \`paho-mqtt\` is available as a system package), and add it via \`add-package-to-extension\`.
 
@@ -30,7 +30,7 @@ The package feed is the canonical distribution surface. It's why Avocado has one
 
 It's not always wrong — these are the legitimate cases:
 
-- **Feed genuinely doesn't have it.** \`search-packages\` returns no match across the target's repos. Then yes, vendor.
+- **Feed genuinely doesn't have it, and the SDK route does not fit.** \`search-packages\` returns no match across the target's repos. Build the package in the SDK first (\`avocado sdk compile\` then \`avocado sdk package\`, or \`avocado ext package\`) and use the local feed recipe in \`avocado://skills/feeds-and-lockfile\`. Vendor only when that cannot work.
 - **You need a specific version newer than what the feed has.** Sometimes worth opening a feed request (the right long-term fix) but vendoring is acceptable as a short-term path.
 - **It's pure-Python / pure-Node and trivial.** Tiny pure-Python helpers without C extensions don't gain much from feed packaging.
 - **It's app-internal code that will never have a downstream consumer.** Your own \`utils/\` directory isn't a "library" in the package sense.
@@ -93,7 +93,7 @@ The two most common mistakes:
 1. **Identify what the user actually needs.** "MQTT support" → look for an MQTT client library. "Send email" → look for an SMTP library or \`msmtp\`.
 2. **Search the feed for the user's target.** \`search-packages({ targets: ["<target>"], query: "<name-or-keyword>", projectDir: "<project path>" })\` — \`projectDir\` makes the search use the project's configured release / channel / repo URL / snapshot pin, i.e. what \`avocado install\` will actually resolve. Try a few synonyms — package names vary (\`paho-mqtt\` vs \`python3-paho-mqtt\` vs \`mosquitto-clients\`).
 3. **If a feed match exists:** verify the exact name with \`describe-package\` and add it via \`add-package-to-extension\` (or hand-edit and re-run \`avocado install\`). Done.
-4. **If no feed match:** tell the user it isn't in the feed and propose the vendoring approach. Two flavours:
+4. **If no feed match:** tell the user it isn't in the feed and propose the SDK route first: build the package with \`avocado sdk compile\` then \`avocado sdk package\` (or \`avocado ext package\`) and use the local feed recipe in \`avocado://skills/feeds-and-lockfile\`. Only if that does not fit, propose vendoring or a feed request. Vendoring has two flavours:
    - **Language package manager in build hook.** For Python: \`pip install --target="$AVOCADO_BUILD_EXT_SYSROOT/usr/lib/python3.<x>/site-packages" <pkg>\` in \`app-install.sh\`. For Node: \`npm ci --omit=dev\` then copy \`node_modules/\` into overlay. For Rust: \`cargo build --release\` then copy the binary.
    - **Vendor into overlay.** \`git clone\` or download release, build at hook time, install artifacts into \`$AVOCADO_BUILD_EXT_SYSROOT\` under the right overlay paths.
 5. **Verify on device after deploy.** \`rpm -q <pkg>\` for feed packages; \`which <bin>\` or runtime smoke for vendored.
