@@ -302,7 +302,10 @@ function isDir(p: string): boolean {
 
 export interface WorkspaceHandle {
   workspace: Workspace;
-  /** Git runs that did not end with exit 0 or 1; the tool may surface them. */
+  /**
+   * Notes the tool surfaces as warnings: git runs that did not end with exit
+   * 0 or 1, a recipe found in two layers, and a recipe file with no commit.
+   */
   failures: string[];
 }
 
@@ -346,6 +349,9 @@ export function createWorkspace(
     return f;
   };
   const commitRepo = new Map<string, string>();
+  const note = (w: string) => {
+    if (!failures.includes(w)) failures.push(w);
+  };
 
   const recipeFiles = (recipe: string, all: string[]) => {
     const esc = recipe.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -391,6 +397,12 @@ export function createWorkspace(
     if (r.status === 0) {
       commit = r.stdout.trim();
       if (!COMMIT_RE.test(commit)) commit = "";
+      // Exit 0 with no output: no commit touches these paths (an untracked
+      // or uncommitted file), which is not the same as an old commit.
+      if (!commit)
+        note(
+          `${layer.name}: ${paths.join(", ")} has no commit; uncommitted edits are not seen, so the recipe has no cache key`,
+        );
     } else {
       failures.push(
         `git log in ${layer.name} ended with ${r.status === null ? "no exit status" : `exit ${r.status}`}`,
@@ -405,7 +417,13 @@ export function createWorkspace(
       const withBb = layers.filter((l) =>
         recipeFiles(recipe, filesOf(l)).some((f) => !f.append),
       );
-      if (withBb.length !== 1) return [];
+      if (withBb.length > 1) {
+        note(
+          `recipe ${recipe} is found in layers ${withBb.map((l) => l.name).join(" and ")}; it is treated as unknown`,
+        );
+        return [];
+      }
+      if (withBb.length === 0) return [];
       const groups: LastCommit[] = [];
       for (const l of layers) {
         const files = recipeFiles(recipe, filesOf(l));
@@ -421,7 +439,16 @@ export function createWorkspace(
         for (const f of files.filter((x) => x.append))
           groups.push(lastCommit(l, [f.rel, ...besides(recipe, l.dir, f)]));
       }
+      // A group with no commit cannot be compared with any layer commit;
+      // reporting it as no groups keeps it from reading as a stale delta.
+      if (groups.some((g) => g.commit === "")) return [];
       return groups;
+    },
+    duplicateLayers(recipe) {
+      const names = layers
+        .filter((l) => recipeFiles(recipe, filesOf(l)).some((f) => !f.append))
+        .map((l) => l.name);
+      return names.length > 1 ? names : [];
     },
     isAncestor(a, b) {
       if (!COMMIT_RE.test(a) || !COMMIT_RE.test(b)) return false;
@@ -521,7 +548,7 @@ export type PublishedClient = Pick<
   | "fetchSnapshotPointer"
   | "fetchBuildManifest"
   | "fetchRepoPackageInfos"
-  | "fetchRepoDigests"
+  | "fetchRepomdDigest"
   | "fetchExtraFeed"
 >;
 
@@ -553,21 +580,25 @@ export async function loadPublishedState(input: {
   const mirrorDir = input.mirrorDir;
   const warnings: string[] = [];
   const headFeed: FeedSpec = { ...feed, releasever: feed.manifestPath };
-  const pinned = feed.snapshot !== undefined;
 
   const [manifest, pointer] = await Promise.all([
     client.getTargetManifest(headFeed),
     client.fetchSnapshotPointer(headFeed, target),
   ]);
-  const remoteDown = manifest === null && pointer === null;
+  // The repository list comes from targets.json; without it there is nothing
+  // to read, whatever the pointer says.
+  const remoteDown = manifest === null;
 
+  // A pin recorded against another feed URL is not this feed's pin.
+  const pin =
+    feed.snapshot !== undefined
+      ? { snapshot_id: feed.snapshot, url: feed.snapshotRepoUrl ?? null }
+      : null;
+  const pinned =
+    pin !== null && selectSnapshot(pin, feed.baseUrl, null) === pin.snapshot_id;
   const snapshotId = remoteDown
     ? null
-    : selectSnapshot(
-        pinned ? { snapshot_id: feed.snapshot as string } : null,
-        feed.baseUrl,
-        pointer,
-      );
+    : selectSnapshot(pin, feed.baseUrl, pointer);
 
   let buildManifest: PublishedState["buildManifest"] = null;
   let commit: string | null = null;
@@ -634,7 +665,9 @@ export async function loadPublishedState(input: {
     if (repos.length === 0 || markers.some((m) => m === null)) {
       warnings.push(
         repos.length === 0
-          ? `the mirror at ${mirrorDir} has no repository for ${target}`
+          ? remoteDown
+            ? `the remote feed could not be read and the mirror at ${mirrorDir} has no repository for ${target}`
+            : `the remote feed lists no repository for ${target}, so the mirror at ${mirrorDir} was not used`
           : "the mirror is missing a marker for a repository, so it was not used",
       );
     } else if (remoteDown) {
@@ -651,8 +684,8 @@ export async function loadPublishedState(input: {
       let stale: string | null = null;
       try {
         for (let i = 0; i < repos.length && stale === null; i++) {
-          const d = await client.fetchRepoDigests(headFeed, repos[i]);
-          if (d.repomdSha256.toLowerCase() !== markers[i]) stale = repos[i];
+          const d = await client.fetchRepomdDigest(headFeed, repos[i]);
+          if (d.toLowerCase() !== markers[i]) stale = repos[i];
         }
       } catch (e) {
         warnings.push(
@@ -677,7 +710,17 @@ export async function loadPublishedState(input: {
 
   if (!served && !remoteDown) {
     const repos = manifest?.[target] ?? [];
-    const source = pinned ? feed : headFeed;
+    // The head is read through the snapshot the pointer named, so the
+    // packages are the ones the build manifest just fetched describes; the
+    // head path itself is cached for the session and may be a snapshot old.
+    const source: FeedSpec = pinned
+      ? feed
+      : snapshotId
+        ? {
+            ...headFeed,
+            releasever: `${feed.manifestPath}/snapshots/${snapshotId}`,
+          }
+        : headFeed;
     const results = await Promise.allSettled(
       repos.map((r) => client.fetchRepoPackageInfos(source, r)),
     );

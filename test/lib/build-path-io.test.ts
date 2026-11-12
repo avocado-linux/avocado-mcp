@@ -22,6 +22,7 @@ import {
   type GitResult,
   type PublishedClient,
 } from "../../src/lib/build-path-io.js";
+import { classifyBuildPath } from "../../src/lib/build-path.js";
 import type { ResolvedFeed } from "../../src/lib/feed-config.js";
 import type { FeedPackage } from "../../src/lib/repo-client.js";
 
@@ -207,6 +208,96 @@ test("a recipe found in two layers is unknown", () => {
   rmSync(ws, { recursive: true });
 });
 
+test("a recipe found in two layers is unknown and the warning names both layers", () => {
+  const ws = tmp();
+  layerWithHtop(ws, "meta-a");
+  layerWithHtop(ws, "meta-b");
+  const h = createWorkspace(ws);
+  assert.deepEqual(h.workspace.lastCommitFor("htop"), []);
+  h.workspace.lastCommitFor("htop");
+  const w = h.failures.filter((f) => f.includes("htop"));
+  assert.equal(w.length, 1, "one warning however often it is asked");
+  assert.match(w[0], /meta-a/);
+  assert.match(w[0], /meta-b/);
+  rmSync(ws, { recursive: true });
+});
+
+test("an uncommitted recipe file has no commit: no groups and a warning naming the file", () => {
+  const ws = tmp();
+  const repo = join(ws, "meta-a");
+  initRepo(repo);
+  write(join(repo, "README"), "x\n");
+  git(repo, "add", "-A");
+  commit(repo, "init");
+  write(join(repo, "recipes-x", "foo", "foo_1.0.bb"), "# foo\n");
+  const h = createWorkspace(ws);
+  assert.deepEqual(h.workspace.lastCommitFor("foo"), []);
+  assert.ok(
+    h.failures.some((f) => f.includes("foo_1.0.bb") && /commit/.test(f)),
+    h.failures.join("\n"),
+  );
+  rmSync(ws, { recursive: true });
+});
+
+test("a delta recipe whose file is uncommitted is no-cache-key, never stale-delta", () => {
+  const ws = tmp();
+  const repo = join(ws, "meta-a");
+  initRepo(repo);
+  write(join(repo, "README"), "x\n");
+  git(repo, "add", "-A");
+  commit(repo, "init");
+  write(join(repo, "recipes-x", "foo", "foo_1.0.bb"), "# foo\n");
+  const entry = {
+    recipe: "foo",
+    packages: ["foo"],
+    layer: "meta-a",
+    epoch: 0,
+    pv: "1.0",
+    pr: "r0",
+    srcrev: "",
+    layer_commit: "abcd",
+    machine: "q",
+    release: "2026",
+    task_hash: null,
+  };
+  const r = classifyBuildPath({
+    target: "q",
+    release: "2026",
+    channel: "edge",
+    change: { recipes: ["foo"] },
+    recipeMap: { schema_version: 1, entries: [entry] },
+    delta: {
+      manifest: {
+        schema_version: 1,
+        base: { release: "2026", channel: "edge", snapshot_id: null },
+        built_recipes: ["foo"],
+      },
+      packages: [
+        {
+          name: "foo",
+          epoch: 0,
+          version: "1.0",
+          release: "r0",
+          sourcerpm: "foo-1.0-r0.src.rpm",
+        },
+      ],
+    },
+    workspace: createWorkspace(ws).workspace,
+    published: {
+      reachable: false,
+      snapshotId: null,
+      packages: [],
+      buildManifest: null,
+    },
+    now: "x",
+  });
+  assert.ok(r.ok);
+  if (!r.ok) return;
+  assert.equal(r.verdict.verdict, "package_miss");
+  assert.ok(r.verdict.missing.every((m) => m.reason === "no-cache-key"));
+  rmSync(ws, { recursive: true });
+});
+
 test("git exit 1 is not an error", () => {
   const ws = tmp();
   const repo = layerWithHtop(ws, "meta-oe");
@@ -320,20 +411,29 @@ const fpkg = (name: string): FeedPackage =>
 interface Calls {
   digest: number;
   remotePackages: number;
+  /** releasever of each remote package read. */
+  remoteReleasevers: string[];
   mirrorPaths: string[];
 }
 
 function stub(
   opts: {
     down?: boolean;
+    /** targets.json fails while the snapshot pointer answers. */
+    manifestDown?: boolean;
     digest?: string;
     build?: "ok" | "none";
   } = {},
 ): { client: PublishedClient; calls: Calls } {
-  const calls: Calls = { digest: 0, remotePackages: 0, mirrorPaths: [] };
+  const calls: Calls = {
+    digest: 0,
+    remotePackages: 0,
+    remoteReleasevers: [],
+    mirrorPaths: [],
+  };
   const client = {
     getTargetManifest: async () =>
-      opts.down ? null : { "qemux86-64": [REPO] },
+      opts.down || opts.manifestDown ? null : { "qemux86-64": [REPO] },
     fetchSnapshotPointer: async () => (opts.down ? null : "snap-latest"),
     fetchBuildManifest: async (_f: unknown, id: string) =>
       opts.down
@@ -345,8 +445,9 @@ function stub(
               commit: HEX40,
               layers: { "meta-oe": id.padEnd(40, "0") },
             },
-    fetchRepoPackageInfos: async () => {
+    fetchRepoPackageInfos: async (f: { releasever: string }) => {
       calls.remotePackages++;
+      calls.remoteReleasevers.push(f.releasever);
       return [
         {
           name: "remote",
@@ -357,13 +458,10 @@ function stub(
         },
       ];
     },
-    fetchRepoDigests: async () => {
+    fetchRepomdDigest: async () => {
       calls.digest++;
       if (opts.down) throw new Error("down");
-      return {
-        repomdSha256: opts.digest ?? "ab".repeat(32),
-        primarySha256: "",
-      };
+      return opts.digest ?? "ab".repeat(32);
     },
     fetchExtraFeed: async (x: { path?: string }) => {
       calls.mirrorPaths.push(x.path ?? "");
@@ -466,6 +564,79 @@ test("remote down without a mirror is unreachable with a warning", async () => {
   assert.deepEqual(r.published.packages, []);
   assert.equal(r.mirrorConfigured, false);
   assert.match(r.warnings.join("\n"), /could not be read/);
+});
+
+test("targets.json down with the pointer answering is an unreachable remote, with a warning", async () => {
+  const { client, calls } = stub({ manifestDown: true });
+  const r = await loadPublishedState({
+    client,
+    feed: feed(),
+    target: "qemux86-64",
+  });
+  assert.equal(r.published.reachable, false);
+  assert.deepEqual(r.published.packages, []);
+  assert.equal(calls.remotePackages, 0);
+  assert.match(r.warnings.join("\n"), /could not be read/);
+});
+
+test("targets.json down with a mirror lacking the target says the remote was unreadable", async () => {
+  const mirror = tmp();
+  const { client } = stub({ manifestDown: true });
+  const r = await loadPublishedState({
+    client,
+    feed: feed(),
+    target: "qemux86-64",
+    mirrorDir: mirror,
+  });
+  assert.equal(r.published.reachable, false);
+  const w = r.warnings.join("\n");
+  assert.match(w, /remote feed could not be read/);
+  assert.match(w, /no repository for qemux86-64/);
+  rmSync(mirror, { recursive: true });
+});
+
+test("a live head read asks the snapshot the pointer names, so the packages match the manifest", async () => {
+  const { client, calls } = stub();
+  await loadPublishedState({ client, feed: feed(), target: "qemux86-64" });
+  assert.deepEqual(calls.remoteReleasevers, [
+    "2026/edge/snapshots/snap-latest",
+  ]);
+});
+
+test("a pin recorded against another feed URL is not used", async () => {
+  const mirror = mirrorWith("ab".repeat(32));
+  const { client, calls } = stub();
+  const r = await loadPublishedState({
+    client,
+    feed: feed({
+      snapshot: "snap-pinned",
+      snapshotRepoUrl: "https://elsewhere.example/",
+      releasever: "2026/edge/snapshots/snap-pinned",
+    }),
+    target: "qemux86-64",
+    mirrorDir: mirror,
+  });
+  assert.equal(r.published.snapshotId, "snap-latest");
+  assert.equal(calls.digest, 1);
+  assert.equal(calls.mirrorPaths.length, 1);
+  rmSync(mirror, { recursive: true });
+});
+
+test("a pin recorded against the feed URL in use, trailing slash aside, is used", async () => {
+  const { client, calls } = stub();
+  const r = await loadPublishedState({
+    client,
+    feed: feed({
+      snapshot: "snap-pinned",
+      snapshotRepoUrl: "https://repo.example/",
+      releasever: "2026/edge/snapshots/snap-pinned",
+    }),
+    target: "qemux86-64",
+  });
+  assert.equal(r.published.snapshotId, "snap-pinned");
+  assert.deepEqual(calls.remoteReleasevers, [
+    "2026/edge/snapshots/snap-pinned",
+  ]);
 });
 
 test("missing build manifest leaves the manifest null and the remote reachable", async () => {
