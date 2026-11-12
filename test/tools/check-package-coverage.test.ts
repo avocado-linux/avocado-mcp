@@ -10,9 +10,9 @@ import { clearHardwareDataCache } from "../../src/lib/hardware-data.js";
 import { clearSelectableCache } from "../../src/lib/hardware-support.js";
 import { FEED_2026_NEXT, TARGETS, DEVICES } from "../lib/hardware-fixture.js";
 
-const pkg = (name: string) => ({
+const pkg = (name: string, summary = "") => ({
   name,
-  summary: "",
+  summary,
   description: "",
   version: "1",
   release: "r0",
@@ -28,6 +28,8 @@ const MANIFEST = Object.fromEntries(
 );
 
 const asked: string[] = [];
+let feedPackages = [pkg("curl"), pkg("jq")];
+let feedNotChecked: { feed: string; reason: string }[] = [];
 
 class StubRepo extends RepoClient {
   override async getTargetsConfig() {
@@ -36,9 +38,9 @@ class StubRepo extends RepoClient {
   override async fetchTargetPackages(target: string) {
     asked.push(target);
     return {
-      packages: [pkg("curl"), pkg("jq")],
+      packages: feedPackages,
       errors: [],
-      notChecked: [],
+      notChecked: feedNotChecked,
     };
   }
 }
@@ -57,6 +59,8 @@ async function withDocsFixture<T>(run: () => Promise<T>): Promise<T> {
   clearHardwareDataCache();
   clearSelectableCache();
   asked.length = 0;
+  feedPackages = [pkg("curl"), pkg("jq")];
+  feedNotChecked = [];
   globalThis.fetch = (async (url: RequestInfo | URL) => {
     const body = String(url).endsWith("targets.json")
       ? TARGETS
@@ -282,5 +286,259 @@ test("isError is true only when no target could be evaluated", async () => {
 
     const some = await callWith({ targets: ["no-such-board", "qemux86-64"] });
     assert.notEqual(some.res.isError, true);
+  });
+});
+
+interface Row {
+  name: string;
+  status: "present" | "missing" | "not-checked";
+  confidence: "exact" | null;
+  match: { name: string } | null;
+  matchedQuery: string | null;
+  alternatives: string[];
+  nearMatches: string[];
+  candidates: string[];
+}
+
+interface Summary {
+  total: number;
+  present: number;
+  missing: number;
+  notChecked: number;
+  coveragePercent: number;
+  exact: number;
+  candidates: number;
+}
+
+async function coverage(
+  packages: ReturnType<typeof pkg>[],
+  dependencies: { name: string; queries: string[] }[],
+  extra: Record<string, unknown> = {},
+) {
+  feedPackages = packages;
+  const { res, text, sc } = await callWith({
+    target: "qemux86-64",
+    dependencies,
+    ...extra,
+  });
+  const section = sc as unknown as {
+    summary: Summary;
+    results: Row[];
+  };
+  return { res, text, summary: section.summary, results: section.results };
+}
+
+test("an exact name is covered", async () => {
+  await withDocsFixture(async () => {
+    const { summary, results, text } = await coverage(
+      [pkg("openssl"), pkg("openssl-dev")],
+      [{ name: "libssl-dev", queries: ["openssl"] }],
+    );
+    assert.equal(results[0].status, "present");
+    assert.equal(results[0].confidence, "exact");
+    assert.equal(results[0].match?.name, "openssl");
+    assert.equal(results[0].matchedQuery, "openssl");
+    assert.deepEqual(results[0].nearMatches, []);
+    assert.deepEqual(results[0].candidates, ["openssl-dev"]);
+    assert.equal(summary.present, 1);
+    assert.equal(summary.exact, 1);
+    assert.equal(summary.coveragePercent, 100);
+    assert.match(text, /candidate, not the requested package/);
+  });
+});
+
+test("any one of several queries can match exactly", async () => {
+  await withDocsFixture(async () => {
+    const { results } = await coverage(
+      [pkg("paho-mqtt"), pkg("python3-paho-mqtt")],
+      [
+        {
+          name: "paho-mqtt",
+          queries: ["libpaho", "python3-paho-mqtt", "paho"],
+        },
+      ],
+    );
+    assert.equal(results[0].status, "present");
+    assert.equal(results[0].match?.name, "python3-paho-mqtt");
+    assert.equal(results[0].matchedQuery, "python3-paho-mqtt");
+  });
+});
+
+test("a one-edit typo is missing and listed as a near match", async () => {
+  await withDocsFixture(async () => {
+    const { summary, results, text } = await coverage(
+      [pkg("curl")],
+      [{ name: "curl", queries: ["curll"] }],
+    );
+    assert.equal(results[0].status, "missing");
+    assert.equal(results[0].match, null);
+    assert.equal(results[0].confidence, null);
+    assert.equal(results[0].matchedQuery, null);
+    assert.deepEqual(results[0].nearMatches, ["curl"]);
+    assert.deepEqual(results[0].alternatives, ["curl"]);
+    assert.equal(summary.present, 0);
+    assert.equal(summary.missing, 1);
+    assert.equal(summary.candidates, 1);
+    assert.match(text, /near match, not the requested package/);
+  });
+});
+
+test("a name equal only ignoring case is missing and listed as a near match", async () => {
+  await withDocsFixture(async () => {
+    const { results } = await coverage(
+      [pkg("openssl")],
+      [{ name: "openssl", queries: ["OpenSSL"] }],
+    );
+    assert.equal(results[0].status, "missing");
+    assert.deepEqual(results[0].nearMatches, ["openssl"]);
+    assert.deepEqual(results[0].candidates, []);
+    assert.deepEqual(results[0].alternatives, ["openssl"]);
+  });
+});
+
+test("a summary-only hit is missing and listed as a candidate", async () => {
+  await withDocsFixture(async () => {
+    const { summary, results } = await coverage(
+      [pkg("paho-client", "an mqtt client library")],
+      [
+        { name: "mqtt", queries: ["mqttlib"] },
+        { name: "m", queries: ["mqtt"] },
+      ],
+    );
+    assert.equal(results[0].status, "missing");
+    assert.deepEqual(results[0].candidates, []);
+    assert.equal(results[1].status, "missing");
+    assert.equal(results[1].match, null);
+    assert.deepEqual(results[1].nearMatches, []);
+    assert.deepEqual(results[1].candidates, ["paho-client"]);
+    assert.equal(summary.candidates, 1);
+  });
+});
+
+test("a substring-only hit is missing and listed as a candidate", async () => {
+  await withDocsFixture(async () => {
+    const { results } = await coverage(
+      [pkg("libpaho-mqtt3c"), pkg("python3-paho-mqtt")],
+      [{ name: "paho-mqtt", queries: ["paho-mqtt"] }],
+    );
+    assert.equal(results[0].status, "missing");
+    assert.equal(results[0].match, null);
+    assert.deepEqual(results[0].nearMatches, []);
+    assert.deepEqual(results[0].candidates, [
+      "libpaho-mqtt3c",
+      "python3-paho-mqtt",
+    ]);
+  });
+});
+
+test("nothing close is missing with no lists", async () => {
+  await withDocsFixture(async () => {
+    const { summary, results } = await coverage(
+      [pkg("curl")],
+      [{ name: "zstd", queries: ["zstd"] }],
+    );
+    assert.equal(results[0].status, "missing");
+    assert.deepEqual(results[0].alternatives, []);
+    assert.deepEqual(results[0].nearMatches, []);
+    assert.deepEqual(results[0].candidates, []);
+    assert.equal(summary.candidates, 0);
+  });
+});
+
+test("an unread feed leaves the dependency not-checked", async () => {
+  await withDocsFixture(async () => {
+    feedNotChecked = [{ feed: "org:private", reason: "private" }];
+    const { summary, results } = await coverage(
+      [pkg("curl")],
+      [{ name: "zstd", queries: ["zstd"] }],
+    );
+    assert.equal(results[0].status, "not-checked");
+    assert.equal(summary.notChecked, 1);
+    assert.equal(summary.present, 0);
+  });
+});
+
+test("coverage percentage counts exact matches only", async () => {
+  await withDocsFixture(async () => {
+    const { summary } = await coverage(
+      [pkg("curl"), pkg("jq"), pkg("openssl")],
+      [
+        { name: "curl", queries: ["curl"] },
+        { name: "jq", queries: ["jqq"] },
+        { name: "ssl", queries: ["ssl"] },
+        { name: "zstd", queries: ["zstd"] },
+      ],
+    );
+    assert.equal(summary.total, 4);
+    assert.equal(summary.present, 1);
+    assert.equal(summary.exact, 1);
+    assert.equal(summary.missing, 3);
+    assert.equal(summary.coveragePercent, 25);
+    assert.equal(summary.candidates, 2);
+  });
+});
+
+test("near matches come before candidates and are cut to maxAlternatives", async () => {
+  await withDocsFixture(async () => {
+    const packages = [
+      pkg("libzlib1"),
+      pkg("libzlib2"),
+      pkg("libzlib3"),
+      pkg("zlibb"),
+      pkg("zlibs"),
+    ];
+    const all = await coverage(packages, [{ name: "z", queries: ["zlib"] }], {
+      maxAlternatives: 10,
+    });
+    assert.deepEqual(all.results[0].nearMatches, ["zlibb", "zlibs"]);
+    assert.deepEqual(all.results[0].candidates, [
+      "libzlib1",
+      "libzlib2",
+      "libzlib3",
+    ]);
+    assert.deepEqual(all.results[0].alternatives, [
+      "zlibb",
+      "zlibs",
+      "libzlib1",
+      "libzlib2",
+      "libzlib3",
+    ]);
+    const cut = await coverage(packages, [{ name: "z", queries: ["zlib"] }], {
+      maxAlternatives: 3,
+    });
+    assert.deepEqual(cut.results[0].alternatives, [
+      "zlibb",
+      "zlibs",
+      "libzlib1",
+    ]);
+    assert.deepEqual(cut.results[0].nearMatches, ["zlibb", "zlibs"]);
+    assert.deepEqual(cut.results[0].candidates, ["libzlib1"]);
+    const one = await coverage(packages, [{ name: "z", queries: ["zlib"] }], {
+      maxAlternatives: 1,
+    });
+    assert.deepEqual(one.results[0].alternatives, ["zlibb"]);
+    assert.deepEqual(one.results[0].candidates, []);
+  });
+});
+
+test("search-packages output for the same query is unchanged", async () => {
+  await withDocsFixture(async () => {
+    feedPackages = [pkg("openssl"), pkg("openssl-dev"), pkg("libssl")];
+    const client = await connect();
+    const res = await client.callTool({
+      name: "search-packages",
+      arguments: {
+        query: "OpenSSL",
+        targets: ["qemux86-64"],
+        release: "2026",
+        channel: "edge",
+      },
+    });
+    const text = (res.content as { text: string }[])
+      .map((c) => c.text)
+      .join("\n");
+    assert.match(text, /\*\*Total matches:\*\* 2/);
+    assert.match(text, /openssl-dev/);
+    assert.doesNotMatch(text, /near match|candidate|not the requested/);
   });
 });
