@@ -71,6 +71,13 @@ export interface Workspace {
    */
   lastCommitFor(recipe: string): LastCommit[];
   /**
+   * Names of the recipes whose `.bb` or `.bbappend` sits in a recipe
+   * directory (`recipes-<kind>/<dir>`, relative to a layer). A directory such
+   * as glibc holds several recipes sharing one files directory and `.inc`.
+   * Empty when the directory holds none.
+   */
+  recipesInDir?(recipeDir: string): string[];
+  /**
    * True when commit `a` is an ancestor of (or equal to) commit `b`, false
    * when it is not, null when the answer could not be established (a git
    * failure or an object the clone lacks).
@@ -160,6 +167,10 @@ const IMAGE_CLASSES: Array<{ name: string; re: RegExp; not?: RegExp }> = [
   { name: "distro configuration", re: /(^|\/)conf\/distro\// },
   { name: "package group", re: /(^|\/)recipes-[^/]+\/packagegroups\// },
   { name: "image recipe", re: /(^|\/)recipes-[^/]+\/images\// },
+  {
+    name: "image or kernel class",
+    re: /(^|\/)classes[^/]*\/[^/]*(image|kernel)[^/]*\.bbclass$/,
+  },
 ];
 
 /** Returns the image-level class name of a path, or null. */
@@ -180,28 +191,32 @@ export function recipeOfPath(path: string): string | null {
 }
 
 /**
- * Recipe name of any file below a recipe directory (`recipes-<kind>/<dir>/...`):
- * the directory name. Covers the files directory, patches and shared `.inc`
- * files. A directory whose name differs from the recipe it holds maps to a
- * name the workspace does not know, which the classifier reports as an
- * unknown recipe, never as a hit.
+ * The recipe directory (`recipes-<kind>/<dir>`, without the layer prefix) of
+ * any file below it: the files directory, patches and shared `.inc` files.
+ * A directory can hold several recipes, so the name is the directory's and
+ * the recipes come from the workspace (`Workspace.recipesInDir`).
  */
 export function recipeDirOfPath(path: string): string | null {
-  const m = /(^|\/)recipes-[^/]+\/([^/]+)\/.+/.exec(path.replace(/\\/g, "/"));
+  const m = /(^|\/)(recipes-[^/]+\/[^/]+)\/.+/.exec(path.replace(/\\/g, "/"));
   return m ? m[2] : null;
 }
 
-/** Paths that cannot change what a build produces: documentation and repository metadata. */
+/** Trees of tests and CI: they build nothing that ships. */
+const TEST_TREES: RegExp[] = [/(^|\/)tests?\//, /(^|\/)support\/ci-build\//];
+
+/** Documentation and repository metadata cannot change what a build produces. */
 const IGNORABLE: RegExp[] = [
   /(^|\/)(docs?|\.github|\.gitlab)\//,
-  /\.(md|rst|txt)$/i,
+  // .txt is absent on purpose: oe-core ships fs-perms.txt and
+  // device_table-minimal.txt, which image builds read.
+  /\.(md|rst)$/i,
   /(^|\/)(README|LICENSE|COPYING|CONTRIBUTING|MAINTAINERS|CHANGELOG|NOTICE|AUTHORS)[^/]*$/,
   /(^|\/)\.[^/]+$/,
 ];
 
-const isIgnorable = (path: string): boolean => {
+const matchesAny = (res: RegExp[], path: string): boolean => {
   const p = path.replace(/\\/g, "/");
-  return IGNORABLE.some((re) => re.test(p));
+  return res.some((re) => re.test(p));
 };
 
 /**
@@ -265,11 +280,23 @@ export function classifyBuildPath(input: ClassifyInput): ClassifyResult {
       imageReasons.push(`${cls}: ${p}`);
       continue;
     }
-    const r = recipeOfPath(p) ?? recipeDirOfPath(p);
-    if (r) pathRecipes.push(r);
+    const r = recipeOfPath(p);
+    if (r) {
+      pathRecipes.push(r);
+      continue;
+    }
+    if (matchesAny(TEST_TREES, p)) continue;
+    const dir = recipeDirOfPath(p);
+    if (dir) {
+      // Without the workspace nothing says which recipes share the directory.
+      const names = input.workspace?.recipesInDir?.(dir) ?? [];
+      if (names.length > 0) pathRecipes.push(...names);
+      else unmapped.push(p);
+      continue;
+    }
     // Anything else under a layer (a bbclass, an include, a library file)
     // can change what builds, and no cache key covers it: it fails closed.
-    else if (!isIgnorable(p)) unmapped.push(p);
+    if (!matchesAny(IGNORABLE, p)) unmapped.push(p);
   }
 
   const result = (
@@ -343,8 +370,8 @@ export function classifyBuildPath(input: ClassifyInput): ClassifyResult {
   const reasons: string[] = [];
   const keys: Verdict["cache_keys"] = { published: {}, local: {} };
 
+  // Paths stay out of `missing`, which names packages a caller builds.
   for (const p of unmapped) {
-    missing.push({ recipe: null, package: p, reason: "no-cache-key" });
     reasons.push(
       `${p}: no-cache-key: the path maps to no recipe and may change any build`,
     );
@@ -371,7 +398,8 @@ export function classifyBuildPath(input: ClassifyInput): ClassifyResult {
 
   warnNewerPublished(input, warn);
 
-  if (missing.length > 0) return result("package_miss", missing, reasons, keys);
+  if (missing.length > 0 || unmapped.length > 0)
+    return result("package_miss", missing, reasons, keys);
   return result("feed_hit", [], [], keys);
 }
 

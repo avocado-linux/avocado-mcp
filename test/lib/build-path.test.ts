@@ -46,9 +46,11 @@ const entry = (over: Partial<RecipeMapEntry> = {}): RecipeMapEntry => ({
 function workspace(
   groups: Record<string, Array<{ commit: string; layer: string }>>,
   history: string[],
+  dirs: Record<string, string[]> = {},
 ): Workspace {
   return {
     lastCommitFor: (r) => groups[r] ?? [],
+    recipesInDir: (d) => dirs[d] ?? [],
     isAncestor: (a, b) => {
       const i = history.findIndex((h) => h.startsWith(a) || a.startsWith(h));
       const j = history.findIndex((h) => h.startsWith(b) || b.startsWith(h));
@@ -801,18 +803,26 @@ test("an unknown layer commit is no-cache-key and never reaches the ancestor tes
 
 // ---- paths that are neither image-level nor a recipe file ----
 
-test("a path below a recipe directory names the recipe of that directory", () => {
+test("recipeDirOfPath names the recipe directory of any file below it", () => {
   assert.equal(
     recipeDirOfPath("meta-oe/recipes-support/htop/files/fix.patch"),
-    "htop",
+    "recipes-support/htop",
   );
   assert.equal(
     recipeDirOfPath("meta-oe/recipes-support/htop/htop.inc"),
-    "htop",
+    "recipes-support/htop",
   );
   assert.equal(recipeDirOfPath("meta-oe/recipes-support/loose.inc"), null);
   assert.equal(recipeDirOfPath("meta-oe/classes/foo.bbclass"), null);
 });
+
+const HTOP_DIR = { "recipes-support/htop": ["htop"] };
+const htopWs = (commit = "abc1234") =>
+  workspace(
+    { htop: [{ commit, layer: "meta-oe" }] },
+    ["abc1234", "def5678"],
+    HTOP_DIR,
+  );
 
 test("a patch under the recipe's files directory classifies that recipe, not the map", () => {
   const v = verdictOf(
@@ -822,42 +832,79 @@ test("a patch under the recipe's files directory classifies that recipe, not the
         entries: [entry(), entry({ recipe: "nano", packages: ["nano"] })],
       },
       change: { paths: ["meta-oe/recipes-support/htop/files/fix.patch"] },
+      workspace: htopWs(),
     }),
   );
   assert.deepEqual(Object.keys(v.cache_keys.local), ["htop"]);
 });
 
-test("a shared .inc names its directory's recipe and a stale delta is a miss", () => {
+test("a shared .inc names the recipes of its directory and a stale delta is a miss", () => {
   const v = verdictOf(
     base({
       change: { paths: ["meta-oe/recipes-support/htop/htop.inc"] },
-      workspace: workspace(
-        { htop: [{ commit: "def5678", layer: "meta-oe" }] },
-        ["abc1234", "def5678"],
-      ),
+      workspace: htopWs("def5678"),
     }),
   );
   assert.equal(v.verdict, "package_miss");
   assert.equal(v.missing[0].reason, "stale-delta");
 });
 
+test("a file shared by several recipes of one directory classifies each of them", () => {
+  const dirs = { "recipes-core/glibc": ["glibc", "glibc-locale"] };
+  const v = verdictOf(
+    base({
+      recipeMap: null,
+      delta: null,
+      change: { paths: ["meta-oe/recipes-core/glibc/files/fix.patch"] },
+      workspace: workspace(
+        {
+          glibc: [{ commit: "abc1234", layer: "meta-oe" }],
+          "glibc-locale": [{ commit: "abc1234", layer: "meta-oe" }],
+        },
+        ["abc1234", "def5678"],
+        dirs,
+      ),
+    }),
+  );
+  assert.equal(v.verdict, "package_miss");
+  assert.deepEqual(v.missing.map((m) => m.recipe).sort(), [
+    "glibc",
+    "glibc-locale",
+  ]);
+});
+
+test("a recipe-directory path the workspace cannot map fails closed", () => {
+  const path = "meta-oe/recipes-support/htop/files/fix.patch";
+  for (const workspaceInput of [null, workspace({}, [])]) {
+    const v = verdictOf(
+      base({ change: { paths: [path] }, workspace: workspaceInput }),
+    );
+    assert.equal(v.verdict, "package_miss");
+    assert.deepEqual(v.missing, []);
+    assert.match(
+      v.reasons.join("\n"),
+      /recipes-support\/htop\/files\/fix\.patch/,
+    );
+  }
+});
+
 for (const path of [
   "meta-oe/classes/cmake.bbclass",
   "meta-oe/recipes-support/loose.inc",
   "meta-oe/lib/oe/utils.py",
+  "meta/files/fs-perms.txt",
+  "scripts/lib/wic/canned-wks/x.wks",
 ]) {
-  test(`${path} is not ignorable: package miss with no-cache-key and a null recipe`, () => {
+  test(`${path} is not ignorable: package miss, no missing package, a reason naming it`, () => {
     const v = verdictOf(base({ change: { paths: [path] } }));
     assert.equal(v.verdict, "package_miss");
-    assert.deepEqual(
-      v.missing.map((m) => [m.recipe, m.package, m.reason]),
-      [[null, path, "no-cache-key"]],
-    );
+    assert.deepEqual(v.missing, []);
     assert.match(v.reasons.join("\n"), new RegExp(path.replace(/\./g, "\\.")));
+    assert.match(v.reasons.join("\n"), /no-cache-key/);
   });
 }
 
-test("an unmapped build path beside a hit recipe still misses", () => {
+test("an unmapped build path beside a hit recipe still misses, with no missing package", () => {
   const v = verdictOf(
     base({
       change: {
@@ -867,9 +914,23 @@ test("an unmapped build path beside a hit recipe still misses", () => {
     }),
   );
   assert.equal(v.verdict, "package_miss");
-  assert.equal(v.missing.length, 1);
-  assert.equal(v.missing[0].recipe, null);
+  assert.deepEqual(v.missing, []);
 });
+
+for (const path of [
+  "meta-avocado/classes/image-os.bbclass",
+  "meta-avocado/classes/image-packages-only.bbclass",
+  "meta-avocado/classes/image-container-post-processing.bbclass",
+  "meta-avocado/classes/package-image.bbclass",
+  "meta-avocado/classes/avocado-kernel-feed.bbclass",
+  "meta-avocado/classes/avocado-kernel-builtin-provides.bbclass",
+  "meta-avocado-qcom/classes/image-avocado-qcom-deploy.bbclass",
+]) {
+  test(`${path} is image miss`, () => {
+    const v = verdictOf(base({ change: { paths: [path] } }));
+    assert.equal(v.verdict, "image_miss");
+  });
+}
 
 for (const path of [
   "docs/usage.rst",
@@ -877,6 +938,10 @@ for (const path of [
   "meta-oe/COPYING.MIT",
   ".github/workflows/ci.yml",
   "meta-oe/.gitignore",
+  "meta-avocado/tests/test_x.py",
+  "scripts/tests/golden/out.json",
+  "support/ci-build/Containerfile",
+  "meta-avocado-nvidia/recipes-core/swupdate/tests/t.sh",
 ]) {
   test(`${path} is ignorable`, () => {
     const v = verdictOf(base({ change: { paths: [path] } }));
