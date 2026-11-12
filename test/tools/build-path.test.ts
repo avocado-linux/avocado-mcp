@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
@@ -28,7 +28,8 @@ function project(yaml: string): { dir: string; done: () => void } {
   return { dir, done: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
-const NO_ENV = {};
+// A binary that does not exist: the version query fails quietly, never runs the real CLI.
+const NO_ENV = { AVOCADO_BINARY: "/nonexistent/avocado-for-tests" };
 
 test("unreachable remote returns verdict", async () => {
   const p = project("default_target: qemux86-64\n");
@@ -75,21 +76,62 @@ test("a throwing remote returns a verdict, not an exception", async () => {
   }
 });
 
+class RecordingRepo extends RepoClient {
+  calls: string[] = [];
+  override async getTargetManifest() {
+    this.calls.push("getTargetManifest");
+    return null;
+  }
+  override async fetchSnapshotPointer() {
+    this.calls.push("fetchSnapshotPointer");
+    return null;
+  }
+}
+
+function fakeAvocado(dir: string, version: string): string {
+  const bin = join(dir, "fake-avocado");
+  writeFileSync(bin, `#!/bin/sh\necho 'avocado ${version}'\n`);
+  chmodSync(bin, 0o755);
+  return bin;
+}
+
 test("an image-level path is an image_miss without reading the remote", async () => {
   const p = project("default_target: qemux86-64\n");
   try {
+    const repo = new RecordingRepo();
     const r = await checkBuildPath(
-      new ThrowingRepo(),
+      repo,
       {
         project_dir: p.dir,
         change: { paths: ["meta-avocado/conf/machine/qemux86-64.conf"] },
       },
-      NO_ENV,
+      { AVOCADO_BINARY: fakeAvocado(p.dir, "0.9.0") },
     );
     assert.equal(r.ok, true);
     if (!r.ok) return;
     assert.equal(r.verdict.verdict, "image_miss");
     assert.match(r.verdict.reasons[0], /machine configuration/);
+    assert.deepEqual(repo.calls, []);
+    assert.deepEqual(r.verdict.warnings, []);
+  } finally {
+    p.done();
+  }
+});
+
+test("the avocado version query uses the injected environment", async () => {
+  const p = project("default_target: qemux86-64\n");
+  try {
+    const r = await checkBuildPath(
+      new UnreachableRepo(),
+      { project_dir: p.dir, change: { recipes: ["hello"] } },
+      { AVOCADO_BINARY: fakeAvocado(p.dir, "0.9.0") },
+    );
+    assert.equal(r.ok, true);
+    if (!r.ok) return;
+    assert.ok(
+      r.verdict.warnings.some((w) => /0\.9\.0.*older than/.test(w)),
+      JSON.stringify(r.verdict.warnings),
+    );
   } finally {
     p.done();
   }

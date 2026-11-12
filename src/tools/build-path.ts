@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
   classifyBuildPath,
+  imageClassOf,
   type ChangeInput,
   type PackageInfo,
   type PublishedState,
@@ -66,6 +67,22 @@ export async function checkBuildPath(
   const feed = ctx.forTarget(target);
   const warnings: string[] = [];
 
+  // An image-level path wins over every recipe, so the answer needs no
+  // delta, workspace, published feed or CLI query: return before any of them.
+  if ((input.change?.paths ?? []).some((p) => imageClassOf(p) !== null)) {
+    return classifyBuildPath({
+      target,
+      release: feed.release ?? "",
+      channel: feed.channel ?? "",
+      change: input.change,
+      recipeMap: null,
+      delta: null,
+      workspace: null,
+      published: null,
+      feeds: verdictFeeds(feed, null, null),
+    });
+  }
+
   // Delta: path feeds of the project that sit below a delta.json.
   const feedDirs = (feed.extraFeeds ?? [])
     .map((f) => f.path)
@@ -116,7 +133,7 @@ export async function checkBuildPath(
     warnings.push(`the published feed could not be read: ${errText(e)}`);
   }
 
-  const cliWarning = await cliVersionWarning();
+  const cliWarning = await cliVersionWarning(undefined, env);
   if (cliWarning) warnings.push(cliWarning);
 
   const result = classifyBuildPath({
