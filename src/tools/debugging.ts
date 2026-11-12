@@ -137,9 +137,7 @@ export function registerDebuggingTools(server: McpServer): void {
       inputSchema: {
         target: z
           .string()
-          .describe(
-            "Target name (e.g. 'raspberrypi5', 'jetson-orin-nano-devkit').",
-          ),
+          .describe("Target name (e.g. 'raspberrypi5', 'jetson-orin-nano')."),
         board: z
           .string()
           .optional()
