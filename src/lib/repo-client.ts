@@ -50,12 +50,6 @@ export interface FeedPackage {
   sourcerpm?: string;
 }
 
-/** SHA-256 hex digests of the exact bytes of a repo's metadata index and primary. */
-export interface RepoDigests {
-  repomdSha256: string;
-  primarySha256: string;
-}
-
 /**
  * Result of reading a snapshot's `build.json`. `no-cache-key` covers a
  * missing, malformed or non-40-hex-commit manifest and never throws;
@@ -164,7 +158,6 @@ const MAX_REPOMD_BYTES = 1 * 1024 * 1024; // 1 MB
 const MAX_PRIMARY_DECOMPRESSED_BYTES = 256 * 1024 * 1024; // 256 MB safety net
 const MAX_POINTER_BYTES = 64 * 1024;
 const MAX_BUILD_JSON_BYTES = 1 * 1024 * 1024;
-const MAX_PRIMARY_GZ_BYTES = 256 * 1024 * 1024;
 const SAFE_FILE_PATH_RE =
   /^[A-Za-z0-9][A-Za-z0-9._-]*(\/[A-Za-z0-9][A-Za-z0-9._-]*){0,8}$/;
 const HEX40_RE = /^[0-9a-f]{40}$/;
@@ -732,20 +725,6 @@ export class RepoClient {
     return (await this.fetchRepoPackages(feed, repo)).map(toPackageInfo);
   }
 
-  /**
-   * Bounded GET of one file under `{baseUrl}/{releasever}/`. `path` is
-   * validated segment by segment, so no caller-supplied text reaches the URL
-   * unchecked. Throws on a bad path, an HTTP error, a timeout or an oversize
-   * body.
-   */
-  async fetchFeedFile(
-    feed: FeedSpec,
-    path: string,
-    maxBytes: number,
-  ): Promise<Uint8Array> {
-    return this.fetchFeedFileAt(feed, feed.releasever, path, maxBytes);
-  }
-
   private async fetchFeedFileAt(
     feed: FeedSpec,
     root: string,
@@ -763,29 +742,6 @@ export class RepoClient {
       path,
       this.timeoutMs,
     );
-  }
-
-  /**
-   * SHA-256 of the exact `repomd.xml` bytes and of the raw (compressed)
-   * primary file it names, for one repo of the feed.
-   */
-  async fetchRepoDigests(feed: FeedSpec, repo: string): Promise<RepoDigests> {
-    if (!isSafePath(repo)) throw new Error(`Invalid repo path: ${repo}`);
-    const repomd = await this.fetchFeedFile(
-      feed,
-      `${repo}/repodata/repomd.xml`,
-      MAX_REPOMD_BYTES,
-    );
-    const href = primaryHref(new TextDecoder("utf-8").decode(repomd), repo);
-    const primary = await this.fetchFeedFile(
-      feed,
-      `${repo}/${href}`,
-      MAX_PRIMARY_GZ_BYTES,
-    );
-    return {
-      repomdSha256: createHash("sha256").update(repomd).digest("hex"),
-      primarySha256: createHash("sha256").update(primary).digest("hex"),
-    };
   }
 
   /**

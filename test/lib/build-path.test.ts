@@ -157,9 +157,18 @@ test("changed recipe path counts as naming that recipe", () => {
   assert.equal(v.cache_keys.local.htop, "th-htop");
 });
 
-test("only ignored paths and no recipes is an error", () => {
-  const r = classifyBuildPath(base({ change: { paths: ["README.md"] } }));
+test("only ignored paths classify the recipes of the map", () => {
+  const v = verdictOf(base({ change: { paths: ["README.md"] } }));
+  assert.equal(v.verdict, "feed_hit");
+  assert.equal(v.cache_keys.local.htop, "th-htop");
+});
+
+test("only ignored paths with no recipe map is an error", () => {
+  const r = classifyBuildPath(
+    base({ change: { paths: ["README.md"] }, recipeMap: null }),
+  );
   assert.equal(r.ok, false);
+  if (!r.ok) assert.match(r.error, /nothing to classify/);
 });
 
 test("no recipe, no path and no recipe map is an error with no verdict", () => {
@@ -666,4 +675,102 @@ test("pin for another url falls back to the latest snapshot", () => {
 
 test("no pin selects the latest snapshot", () => {
   assert.equal(selectSnapshot(null, "http://f", "s9"), "s9");
+});
+
+// ---- review fixes ----
+
+test("published hit needs every package of the entry at the entry version", () => {
+  const v = verdictOf(
+    base({
+      ...noDelta,
+      recipeMap: {
+        schema_version: 1,
+        entries: [entry({ packages: ["htop", "htop-doc"] })],
+      },
+      published: publishedHit({
+        packages: [pkg("htop"), pkg("htop-doc", "3.2.0", "r0", 0, "htop")],
+      }),
+    }),
+  );
+  assert.equal(v.verdict, "package_miss");
+  assert.equal(v.missing[0].reason, "version-differs");
+});
+
+test("published hit with an entry package absent from the snapshot is a miss", () => {
+  const v = verdictOf(
+    base({
+      ...noDelta,
+      recipeMap: {
+        schema_version: 1,
+        entries: [entry({ packages: ["htop", "htop-doc"] })],
+      },
+      published: publishedHit({ packages: [pkg("htop")] }),
+    }),
+  );
+  assert.equal(v.verdict, "package_miss");
+  assert.equal(v.missing[0].reason, "no-cache-key");
+});
+
+test("published hit without an entry needs every sourced package current", () => {
+  const stale = {
+    name: "htop-doc",
+    epoch: 0,
+    version: "3.2.0",
+    release: "r0",
+    sourcerpm: "htop-3.3.0-r0.src.rpm",
+  };
+  const v = verdictOf(
+    base({
+      ...noDelta,
+      published: publishedHit({ packages: [pkg("htop"), stale] }),
+    }),
+  );
+  assert.equal(v.verdict, "package_miss");
+});
+
+test("an entry with no packages gives no local hit", () => {
+  const v = verdictOf(
+    base({
+      recipeMap: { schema_version: 1, entries: [entry({ packages: [] })] },
+    }),
+  );
+  assert.equal(v.verdict, "package_miss");
+  assert.equal(v.missing[0].reason, "no-cache-key");
+});
+
+test("an entry with no packages gives no published hit", () => {
+  const v = verdictOf(
+    base({
+      delta: null,
+      recipeMap: { schema_version: 1, entries: [entry({ packages: [] })] },
+      published: publishedHit(),
+    }),
+  );
+  assert.equal(v.verdict, "package_miss");
+  assert.equal(v.missing[0].reason, "no-cache-key");
+});
+
+test("an unproven ancestor test is no-cache-key, not stale-delta", () => {
+  const ws: Workspace = {
+    lastCommitFor: () => [{ commit: "abc1234", layer: "meta-oe" }],
+    isAncestor: () => null,
+  };
+  const v = verdictOf(base({ workspace: ws }));
+  assert.equal(v.verdict, "package_miss");
+  assert.equal(v.missing[0].reason, "no-cache-key");
+});
+
+test("a recipe found with no commit is no-cache-key, not unknown-recipe", () => {
+  const ws: Workspace = {
+    lastCommitFor: () => [{ commit: "", layer: "meta-oe" }],
+    isAncestor: () => true,
+  };
+  const local = verdictOf(base({ workspace: ws }));
+  assert.equal(local.missing[0].reason, "no-cache-key");
+  assert.notEqual(local.missing[0].recipe, null);
+  const pub = verdictOf(
+    base({ ...noDelta, workspace: ws, published: publishedHit() }),
+  );
+  assert.equal(pub.missing[0].reason, "no-cache-key");
+  assert.notEqual(pub.missing[0].recipe, null);
 });
