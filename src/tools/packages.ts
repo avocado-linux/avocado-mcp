@@ -469,7 +469,7 @@ export function registerPackageTools(
         nearMatches: z
           .array(z.string())
           .describe(
-            "Names within edit distance 2 of a query or equal to it ignoring case. Not the requested package.",
+            "Names within edit distance 2 of a query (1 for a query of up to 5 characters) or equal to it ignoring case. Not the requested package.",
           ),
         candidates: z
           .array(z.string())
