@@ -204,32 +204,11 @@ export function recipeOfPath(path: string): string | null {
  * (`Workspace.recipesInDir`), scoped to this layer and this exact directory.
  */
 export function recipeDirOfPath(path: string): string | null {
-  return splitRecipePath(path)?.dir ?? null;
-}
-
-/** The recipe directory of a path and the path segments below it. */
-function splitRecipePath(path: string): { dir: string; rest: string[] } | null {
   const parts = path.replace(/\\/g, "/").split("/");
   const i = parts.findIndex((x) => x.startsWith("recipes-"));
   // The recipe directory needs a name after recipes-<kind> and a file below it.
   if (i < 0 || parts.length < i + 3) return null;
-  return { dir: parts.slice(0, i + 2).join("/"), rest: parts.slice(i + 2) };
-}
-
-/**
- * A file in a `<pn>/` or `<pn>-<pv>/` subdirectory belongs to that recipe
- * alone. A directory-level file, `files/` and a subdirectory naming no
- * recipe are shared by every recipe of the directory.
- */
-function recipesAffectedBy(names: string[], rest: string[]): string[] {
-  if (rest.length < 2) return names;
-  const seg = rest[0];
-  const own = names.filter(
-    (n) =>
-      seg === n ||
-      (seg.startsWith(`${n}-`) && /^\d/.test(seg.slice(n.length + 1))),
-  );
-  return own.length > 0 ? own : names;
+  return parts.slice(0, i + 2).join("/");
 }
 
 /** Trees of tests and CI: they build nothing that ships. */
@@ -317,12 +296,15 @@ export function classifyBuildPath(input: ClassifyInput): ClassifyResult {
       continue;
     }
     if (matchesAny(TEST_TREES, p)) continue;
-    const split = splitRecipePath(p);
-    if (split) {
+    const dir = recipeDirOfPath(p);
+    if (dir) {
       // Without the workspace nothing says which recipes share the directory.
-      const names = input.workspace?.recipesInDir?.(split.dir) ?? [];
+      const names = input.workspace?.recipesInDir?.(dir) ?? [];
       if (names.length === 0) unmapped.push(p);
-      else pathRecipes.push(...recipesAffectedBy(names, split.rest));
+      // Every file below the directory names every recipe in it: a <pn>/
+      // subdirectory is on the file path of the sibling recipes (gcc-cross
+      // and libgcc search gcc/), so naming fewer would leave one stale.
+      else pathRecipes.push(...names);
       continue;
     }
     // Anything else under a layer (a bbclass, an include, a library file)
