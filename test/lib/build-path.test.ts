@@ -806,17 +806,17 @@ test("an unknown layer commit is no-cache-key and never reaches the ancestor tes
 test("recipeDirOfPath names the recipe directory of any file below it", () => {
   assert.equal(
     recipeDirOfPath("meta-oe/recipes-support/htop/files/fix.patch"),
-    "recipes-support/htop",
+    "meta-oe/recipes-support/htop",
   );
   assert.equal(
     recipeDirOfPath("meta-oe/recipes-support/htop/htop.inc"),
-    "recipes-support/htop",
+    "meta-oe/recipes-support/htop",
   );
   assert.equal(recipeDirOfPath("meta-oe/recipes-support/loose.inc"), null);
   assert.equal(recipeDirOfPath("meta-oe/classes/foo.bbclass"), null);
 });
 
-const HTOP_DIR = { "recipes-support/htop": ["htop"] };
+const HTOP_DIR = { "meta-oe/recipes-support/htop": ["htop"] };
 const htopWs = (commit = "abc1234") =>
   workspace(
     { htop: [{ commit, layer: "meta-oe" }] },
@@ -850,7 +850,7 @@ test("a shared .inc names the recipes of its directory and a stale delta is a mi
 });
 
 test("a file shared by several recipes of one directory classifies each of them", () => {
-  const dirs = { "recipes-core/glibc": ["glibc", "glibc-locale"] };
+  const dirs = { "meta-oe/recipes-core/glibc": ["glibc", "glibc-locale"] };
   const v = verdictOf(
     base({
       recipeMap: null,
@@ -893,7 +893,6 @@ for (const path of [
   "meta-oe/recipes-support/loose.inc",
   "meta-oe/lib/oe/utils.py",
   "meta/files/fs-perms.txt",
-  "scripts/lib/wic/canned-wks/x.wks",
 ]) {
   test(`${path} is not ignorable: package miss, no missing package, a reason naming it`, () => {
     const v = verdictOf(base({ change: { paths: [path] } }));
@@ -925,6 +924,10 @@ for (const path of [
   "meta-avocado/classes/avocado-kernel-feed.bbclass",
   "meta-avocado/classes/avocado-kernel-builtin-provides.bbclass",
   "meta-avocado-qcom/classes/image-avocado-qcom-deploy.bbclass",
+  "meta/classes-recipe/rootfs-postcommands.bbclass",
+  "meta/classes/populate_sdk_base.bbclass",
+  "scripts/lib/wic/canned-wks/x.wks",
+  "meta-avocado/wic/avocado.wks.in",
 ]) {
   test(`${path} is image miss`, () => {
     const v = verdictOf(base({ change: { paths: [path] } }));
@@ -948,3 +951,52 @@ for (const path of [
     assert.equal(v.verdict, "feed_hit");
   });
 }
+
+test("a patch in a <pn>/ subdirectory maps to that recipe alone", () => {
+  const dirs = {
+    "meta-oe/recipes-devtools/python": ["python3-numpy", "python3-scipy"],
+  };
+  const ws = workspace(
+    {
+      "python3-numpy": [{ commit: "abc1234", layer: "meta-oe" }],
+      "python3-scipy": [{ commit: "abc1234", layer: "meta-oe" }],
+    },
+    ["abc1234", "def5678"],
+    dirs,
+  );
+  const only = (path: string) =>
+    verdictOf(
+      base({
+        recipeMap: null,
+        delta: null,
+        change: { paths: [path] },
+        workspace: ws,
+      }),
+    )
+      .missing.map((m) => m.recipe)
+      .sort();
+  const dir = "meta-oe/recipes-devtools/python";
+  assert.deepEqual(only(`${dir}/python3-numpy/0001.patch`), ["python3-numpy"]);
+  assert.deepEqual(only(`${dir}/python3-numpy-1.26/0001.patch`), [
+    "python3-numpy",
+  ]);
+  // files/, a directory-level include and a subdirectory naming no recipe
+  // are shared, so every recipe of the directory is affected.
+  const both = ["python3-numpy", "python3-scipy"];
+  assert.deepEqual(only(`${dir}/files/0001.patch`), both);
+  assert.deepEqual(only(`${dir}/python-common.inc`), both);
+  assert.deepEqual(only(`${dir}/other/0001.patch`), both);
+});
+
+test("unmapped paths are listed in a structured field and an empty list otherwise", () => {
+  const v = verdictOf(
+    base({ change: { paths: ["meta-oe/classes/cmake.bbclass"] } }),
+  );
+  assert.deepEqual(v.unmapped, ["meta-oe/classes/cmake.bbclass"]);
+  assert.deepEqual(verdictOf(base()).unmapped, []);
+  assert.deepEqual(
+    verdictOf(base({ change: { paths: ["meta-avocado/conf/machine/x.conf"] } }))
+      .unmapped,
+    [],
+  );
+});

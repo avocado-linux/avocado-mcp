@@ -71,10 +71,10 @@ export interface Workspace {
    */
   lastCommitFor(recipe: string): LastCommit[];
   /**
-   * Names of the recipes whose `.bb` or `.bbappend` sits in a recipe
-   * directory (`recipes-<kind>/<dir>`, relative to a layer). A directory such
-   * as glibc holds several recipes sharing one files directory and `.inc`.
-   * Empty when the directory holds none.
+   * Names of the recipes whose `.bb` or `.bbappend` sits in exactly this
+   * recipe directory (`recipeDirOfPath` of a changed path, with the same
+   * layer prefix). A directory such as glibc holds several recipes sharing
+   * one files directory and `.inc`. Empty when the directory holds none.
    */
   recipesInDir?(recipeDir: string): string[];
   /**
@@ -138,6 +138,11 @@ export interface Verdict {
   verdict: VerdictKind;
   missing: MissingPackage[];
   reasons: string[];
+  /**
+   * Changed paths that map to no package: a package miss whose `missing`
+   * list says nothing about them. Empty for the other verdicts.
+   */
+  unmapped: string[];
   feeds: VerdictFeed[];
   cache_keys: {
     published: Record<string, string>;
@@ -169,8 +174,9 @@ const IMAGE_CLASSES: Array<{ name: string; re: RegExp; not?: RegExp }> = [
   { name: "image recipe", re: /(^|\/)recipes-[^/]+\/images\// },
   {
     name: "image or kernel class",
-    re: /(^|\/)classes[^/]*\/[^/]*(image|kernel)[^/]*\.bbclass$/,
+    re: /(^|\/)classes[^/]*\/[^/]*(image|kernel|rootfs|populate_sdk)[^/]*\.bbclass$/,
   },
+  { name: "wic image layout", re: /\.wks(\.in)?$/ },
 ];
 
 /** Returns the image-level class name of a path, or null. */
@@ -191,14 +197,39 @@ export function recipeOfPath(path: string): string | null {
 }
 
 /**
- * The recipe directory (`recipes-<kind>/<dir>`, without the layer prefix) of
- * any file below it: the files directory, patches and shared `.inc` files.
- * A directory can hold several recipes, so the name is the directory's and
- * the recipes come from the workspace (`Workspace.recipesInDir`).
+ * The recipe directory of any file below it, with whatever precedes
+ * `recipes-<kind>` in the path (the layer): `meta-oe/recipes-support/htop`.
+ * The files directory, patches and shared `.inc` files all lie below it. A
+ * directory can hold several recipes, so the recipes come from the workspace
+ * (`Workspace.recipesInDir`), scoped to this layer and this exact directory.
  */
 export function recipeDirOfPath(path: string): string | null {
-  const m = /(^|\/)(recipes-[^/]+\/[^/]+)\/.+/.exec(path.replace(/\\/g, "/"));
-  return m ? m[2] : null;
+  return splitRecipePath(path)?.dir ?? null;
+}
+
+/** The recipe directory of a path and the path segments below it. */
+function splitRecipePath(path: string): { dir: string; rest: string[] } | null {
+  const parts = path.replace(/\\/g, "/").split("/");
+  const i = parts.findIndex((x) => x.startsWith("recipes-"));
+  // The recipe directory needs a name after recipes-<kind> and a file below it.
+  if (i < 0 || parts.length < i + 3) return null;
+  return { dir: parts.slice(0, i + 2).join("/"), rest: parts.slice(i + 2) };
+}
+
+/**
+ * A file in a `<pn>/` or `<pn>-<pv>/` subdirectory belongs to that recipe
+ * alone. A directory-level file, `files/` and a subdirectory naming no
+ * recipe are shared by every recipe of the directory.
+ */
+function recipesAffectedBy(names: string[], rest: string[]): string[] {
+  if (rest.length < 2) return names;
+  const seg = rest[0];
+  const own = names.filter(
+    (n) =>
+      seg === n ||
+      (seg.startsWith(`${n}-`) && /^\d/.test(seg.slice(n.length + 1))),
+  );
+  return own.length > 0 ? own : names;
 }
 
 /** Trees of tests and CI: they build nothing that ships. */
@@ -286,12 +317,12 @@ export function classifyBuildPath(input: ClassifyInput): ClassifyResult {
       continue;
     }
     if (matchesAny(TEST_TREES, p)) continue;
-    const dir = recipeDirOfPath(p);
-    if (dir) {
+    const split = splitRecipePath(p);
+    if (split) {
       // Without the workspace nothing says which recipes share the directory.
-      const names = input.workspace?.recipesInDir?.(dir) ?? [];
-      if (names.length > 0) pathRecipes.push(...names);
-      else unmapped.push(p);
+      const names = input.workspace?.recipesInDir?.(split.dir) ?? [];
+      if (names.length === 0) unmapped.push(p);
+      else pathRecipes.push(...recipesAffectedBy(names, split.rest));
       continue;
     }
     // Anything else under a layer (a bbclass, an include, a library file)
@@ -304,6 +335,7 @@ export function classifyBuildPath(input: ClassifyInput): ClassifyResult {
     missing: MissingPackage[],
     reasons: string[],
     keys: Verdict["cache_keys"],
+    unmappedPaths: string[] = [],
   ): ClassifyResult => ({
     ok: true,
     verdict: {
@@ -311,6 +343,7 @@ export function classifyBuildPath(input: ClassifyInput): ClassifyResult {
       verdict,
       missing,
       reasons,
+      unmapped: unmappedPaths,
       feeds: input.feeds ?? [],
       cache_keys: keys,
       warnings,
@@ -399,7 +432,7 @@ export function classifyBuildPath(input: ClassifyInput): ClassifyResult {
   warnNewerPublished(input, warn);
 
   if (missing.length > 0 || unmapped.length > 0)
-    return result("package_miss", missing, reasons, keys);
+    return result("package_miss", missing, reasons, keys, unmapped);
   return result("feed_hit", [], [], keys);
 }
 
