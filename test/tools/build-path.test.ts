@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
+import { execFileSync } from "child_process";
 import { tmpdir } from "os";
 import { join } from "path";
 
@@ -133,6 +134,58 @@ test("the avocado version query uses the injected environment", async () => {
       JSON.stringify(r.verdict.warnings),
     );
   } finally {
+    p.done();
+  }
+});
+
+test("an uncommitted recipe file explains itself in the verdict warnings", async () => {
+  const p = project("default_target: qemux86-64\n");
+  const ws = mkdtempSync(join(tmpdir(), "build-path-ws-"));
+  try {
+    const layer = join(ws, "meta-a");
+    mkdirSync(join(layer, "recipes-x", "foo"), { recursive: true });
+    const git = (...a: string[]) =>
+      execFileSync("git", a, {
+        cwd: layer,
+        env: {
+          ...process.env,
+          GIT_CONFIG_GLOBAL: "/dev/null",
+          GIT_CONFIG_SYSTEM: "/dev/null",
+        },
+      });
+    git("init", "-q");
+    writeFileSync(join(layer, "README"), "x\n");
+    git("add", "-A");
+    git(
+      "-c",
+      "user.name=t",
+      "-c",
+      "user.email=t@example.com",
+      "-c",
+      "commit.gpgsign=false",
+      "commit",
+      "-q",
+      "-m",
+      "init",
+    );
+    writeFileSync(join(layer, "recipes-x", "foo", "foo_1.0.bb"), "# foo\n");
+    const r = await checkBuildPath(
+      new UnreachableRepo(),
+      {
+        project_dir: p.dir,
+        workspace_dir: ws,
+        change: { recipes: ["foo"] },
+      },
+      NO_ENV,
+    );
+    assert.equal(r.ok, true);
+    if (!r.ok) return;
+    assert.ok(
+      r.verdict.warnings.some((w) => /has no commit/.test(w)),
+      JSON.stringify(r.verdict.warnings),
+    );
+  } finally {
+    rmSync(ws, { recursive: true, force: true });
     p.done();
   }
 });

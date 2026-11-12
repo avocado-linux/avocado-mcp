@@ -101,10 +101,13 @@ export async function checkBuildPath(
   }
 
   let workspace: Workspace | null = null;
+  let workspaceFailures: string[] = [];
   if (input.workspace_dir) {
     const handle = createWorkspace(input.workspace_dir);
     workspace = handle.workspace;
-    warnings.push(...handle.failures);
+    // The workspace runs git lazily, while the classifier asks. Keep the
+    // list itself and read it after classification, not a copy taken now.
+    workspaceFailures = handle.failures;
   }
 
   const mirrorDir = mirrorDirFrom(input.mirror_dir, env);
@@ -149,6 +152,7 @@ export async function checkBuildPath(
     feeds: verdictFeeds(feed, published.snapshotId, commit),
   });
   if (!result.ok) return result;
+  warnings.push(...workspaceFailures);
   for (const w of warnings) {
     if (!result.verdict.warnings.includes(w)) result.verdict.warnings.push(w);
   }
