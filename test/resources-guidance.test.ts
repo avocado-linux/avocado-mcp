@@ -52,9 +52,11 @@ test("package coverage names the SDK route before a recipe ticket", async () => 
   assert.ok(step >= 0, "has the packaging signal step");
   const stepText = text.slice(step);
   const firstRecipe = stepText.search(/OpenEmbedded|Yocto recipe|feed request/);
-  assert.ok(stepText.indexOf("sdk compile") < firstRecipe);
-  assert.ok(stepText.indexOf("sdk package") < firstRecipe);
-  assert.ok(stepText.indexOf("ext package") < firstRecipe);
+  for (const command of ["sdk compile", "sdk package", "ext package"]) {
+    const at = stepText.indexOf(command);
+    assert.ok(at >= 0, `the packaging step names ${command}`);
+    assert.ok(at < firstRecipe, `${command} comes before the recipe route`);
+  }
   assert.doesNotMatch(text, /jetson-orin-nano-devkit/);
   assert.match(text, /2024\/edge/);
 });

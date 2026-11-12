@@ -45,6 +45,7 @@ export function classifyName(
       exact ??= name;
       continue;
     }
+    if (Math.abs(name.length - query.length) > maxDistance) continue;
     const distance = editDistance(lowerQuery, name.toLowerCase());
     if (distance <= maxDistance) scored.push({ name, distance });
   }

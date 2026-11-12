@@ -572,7 +572,7 @@ export function registerPackageTools(
       const listForm = requestedMany !== undefined && requestedMany.length > 0;
       if (
         (requestedOne === undefined) === !listForm ||
-        (requestedOne !== undefined && requestedMany !== undefined)
+        (requestedOne !== undefined && listForm)
       ) {
         return {
           content: [
@@ -712,8 +712,11 @@ export function registerPackageTools(
             let matchedQuery: string | null = null;
             const near = new Map<string, number>();
             const cands = new Map<string, number>();
-            for (const q of dep.queries) {
+            const exactNames = new Set<string>();
+            for (const rawQuery of dep.queries) {
+              const q = rawQuery.trim();
               const { exact, near: nearNames } = classifyName(q, names);
+              if (exact !== null) exactNames.add(exact);
               if (exact !== null && best === null) {
                 best = packages.find((p) => p.name === exact) ?? null;
                 matchedQuery = q;
@@ -730,7 +733,7 @@ export function registerPackageTools(
             }
             const taken = (n: string) => n === best?.name;
             const nearMatches = Array.from(near)
-              .filter(([n]) => !taken(n))
+              .filter(([n]) => !taken(n) && !exactNames.has(n))
               .sort((x, y) => x[1] - y[1] || (x[0] < y[0] ? -1 : 1))
               .map(([n]) => n)
               .slice(0, maxAlt);
