@@ -358,7 +358,9 @@ test("git exit 1 from the runner is false and records nothing; exit 128 is unpro
   const run = (_cwd: string, args: string[]): GitResult =>
     args.includes("merge-base")
       ? { status, stdout: "" }
-      : { status: 0, stdout: "a".repeat(40) + "\n" };
+      : args[0] === "status"
+        ? { status: 0, stdout: "" }
+        : { status: 0, stdout: "a".repeat(40) + "\n" };
   const w = createWorkspace(ws, run);
   w.workspace.lastCommitFor("htop");
   assert.equal(w.workspace.isAncestor("a".repeat(40), "b".repeat(40)), false);
@@ -375,6 +377,7 @@ test("isAncestor refuses a commit that is not hexadecimal", () => {
   const calls: string[][] = [];
   const run = (_cwd: string, args: string[]): GitResult => {
     calls.push(args);
+    if (args[0] === "status") return { status: 0, stdout: "" };
     return { status: 0, stdout: "a".repeat(40) + "\n" };
   };
   const w = createWorkspace(ws, run);
@@ -503,17 +506,241 @@ test("git is asked once per recipe and per commit pair", () => {
   let n = 0;
   const run = (_cwd: string, args: string[]): GitResult => {
     n++;
-    return args.includes("merge-base")
+    return args.includes("merge-base") || args[0] === "status"
       ? { status: 0, stdout: "" }
       : { status: 0, stdout: "a".repeat(40) + "\n" };
   };
   const w = createWorkspace(ws, run).workspace;
   w.lastCommitFor("htop");
   w.lastCommitFor("htop");
-  assert.equal(n, 1);
+  assert.equal(n, 2, "one git log and one git status for the group");
   w.isAncestor("a".repeat(40), "b".repeat(40));
   w.isAncestor("a".repeat(40), "b".repeat(40));
-  assert.equal(n, 2);
+  assert.equal(n, 3);
+  rmSync(ws, { recursive: true });
+});
+
+// ---- uncommitted changes in a file group -----------------------------------
+
+const GROUP = join("recipes-support", "htop");
+
+function dirtyGroup(setup: (repo: string) => void, expectNote: RegExp): void {
+  const ws = tmp();
+  const repo = layerWithHtop(ws, "meta-oe");
+  // Tracked siblings so a new file can sit next to one in an existing dir.
+  write(join(repo, GROUP, "files", "q.patch"), "q\n");
+  write(join(repo, GROUP, "htop.inc"), "# inc\n");
+  git(repo, "add", "-A");
+  commit(repo, "more htop");
+  setup(repo);
+  const h = createWorkspace(ws);
+  const groups = h.workspace.lastCommitFor("htop");
+  assert.deepEqual(groups, [{ commit: "", layer: "meta-oe" }]);
+  assert.ok(
+    h.failures.some((f) => expectNote.test(f) && /commit them/.test(f)),
+    h.failures.join("\n"),
+  );
+  rmSync(ws, { recursive: true });
+}
+
+test("a modified patch in files/ gives no commit and a note naming the file", () => {
+  dirtyGroup((repo) => {
+    write(join(repo, GROUP, "files", "p.patch"), "changed\n");
+  }, /files\/p\.patch/);
+});
+
+test("a staged-only change gives no commit", () => {
+  dirtyGroup((repo) => {
+    write(join(repo, GROUP, "files", "p.patch"), "staged\n");
+    git(repo, "add", "-A");
+  }, /files\/p\.patch/);
+});
+
+test("a deleted tracked file in the group gives no commit", () => {
+  dirtyGroup((repo) => {
+    rmSync(join(repo, GROUP, "files", "q.patch"));
+  }, /files\/q\.patch/);
+});
+
+test("a new untracked file beside a tracked one in the group gives no commit", () => {
+  dirtyGroup((repo) => {
+    write(join(repo, GROUP, "files", "new.patch"), "n\n");
+  }, /files\/new\.patch/);
+});
+
+test("a dirty .inc gives no commit", () => {
+  dirtyGroup((repo) => {
+    write(join(repo, GROUP, "htop.inc"), "# edited\n");
+  }, /htop\.inc/);
+});
+
+test("a dirty .bbappend in a second layer gives that group no commit", () => {
+  const ws = tmp();
+  layerWithHtop(ws, "meta-oe");
+  const other = join(ws, "meta-custom");
+  initRepo(other);
+  write(join(other, GROUP, "htop_%.bbappend"), "# a\n");
+  git(other, "add", "-A");
+  commit(other, "append");
+  write(join(other, GROUP, "htop_%.bbappend"), "# dirty\n");
+  const h = createWorkspace(ws);
+  const groups = h.workspace.lastCommitFor("htop");
+  assert.equal(groups.length, 2);
+  assert.match(
+    groups.find((g) => g.layer === "meta-oe")?.commit ?? "",
+    /^[0-9a-f]{40}$/,
+  );
+  assert.equal(groups.find((g) => g.layer === "meta-custom")?.commit, "");
+  assert.ok(
+    h.failures.some(
+      (f) => f.startsWith("meta-custom:") && /htop_%\.bbappend/.test(f),
+    ),
+    h.failures.join("\n"),
+  );
+  rmSync(ws, { recursive: true });
+});
+
+test("dirt only in an unrelated file keeps the real commit and adds no note", () => {
+  const ws = tmp();
+  const repo = layerWithHtop(ws, "meta-oe");
+  const head = git(repo, "rev-parse", "HEAD");
+  write(join(repo, "README"), "r\n");
+  write(join(repo, "recipes-support", "nano", "nano_8.0.bb"), "# nano\n");
+  const h = createWorkspace(ws);
+  assert.deepEqual(h.workspace.lastCommitFor("htop"), [
+    { commit: head, layer: "meta-oe" },
+  ]);
+  assert.deepEqual(h.failures, []);
+  rmSync(ws, { recursive: true });
+});
+
+test("a failed git status fails closed and is recorded", () => {
+  const ws = tmp();
+  layerWithHtop(ws, "meta-oe");
+  const run = (_cwd: string, args: string[]): GitResult =>
+    args[0] === "status"
+      ? { status: 128, stdout: "" }
+      : { status: 0, stdout: "a".repeat(40) + "\n" };
+  const h = createWorkspace(ws, run);
+  assert.deepEqual(h.workspace.lastCommitFor("htop"), [
+    { commit: "", layer: "meta-oe" },
+  ]);
+  assert.ok(h.failures.some((f) => /git status/.test(f) && /128/.test(f)));
+  rmSync(ws, { recursive: true });
+});
+
+test("a timed-out git status (null exit status) fails closed", () => {
+  const ws = tmp();
+  layerWithHtop(ws, "meta-oe");
+  const run = (_cwd: string, args: string[]): GitResult =>
+    args[0] === "status"
+      ? { status: null, stdout: "" }
+      : { status: 0, stdout: "a".repeat(40) + "\n" };
+  const h = createWorkspace(ws, run);
+  assert.equal(h.workspace.lastCommitFor("htop")[0].commit, "");
+  assert.ok(
+    h.failures.some((f) => /git status/.test(f) && /no exit status/.test(f)),
+  );
+  rmSync(ws, { recursive: true });
+});
+
+test("status output beyond ten paths names ten and counts the rest", () => {
+  const ws = tmp();
+  layerWithHtop(ws, "meta-oe");
+  const recs = Array.from({ length: 13 }, (_, i) => ` M f${i}.patch\0`).join(
+    "",
+  );
+  const run = (_cwd: string, args: string[]): GitResult =>
+    args[0] === "status"
+      ? { status: 0, stdout: recs }
+      : { status: 0, stdout: "a".repeat(40) + "\n" };
+  const h = createWorkspace(ws, run);
+  h.workspace.lastCommitFor("htop");
+  const w = h.failures.find((f) => /uncommitted/.test(f)) ?? "";
+  assert.match(w, /f9\.patch/);
+  assert.doesNotMatch(w, /f10\.patch/);
+  assert.match(w, /and 3 more/);
+  rmSync(ws, { recursive: true });
+});
+
+test("status is not run for a group whose log result was empty", () => {
+  const ws = tmp();
+  layerWithHtop(ws, "meta-oe");
+  const calls: string[] = [];
+  const run = (_cwd: string, args: string[]): GitResult => {
+    calls.push(args[0]);
+    return { status: 0, stdout: "" };
+  };
+  const h = createWorkspace(ws, run);
+  h.workspace.lastCommitFor("htop");
+  assert.deepEqual(calls, ["log"]);
+  assert.equal(h.failures.length, 1);
+  rmSync(ws, { recursive: true });
+});
+
+test("a dirty group is package_miss with no-cache-key on both rules, never a hit or stale-delta", () => {
+  const ws = tmp();
+  const repo = layerWithHtop(ws, "meta-oe");
+  const head = git(repo, "rev-parse", "HEAD");
+  write(join(repo, GROUP, "files", "p.patch"), "dirty\n");
+  const entry = {
+    recipe: "htop",
+    packages: ["htop"],
+    layer: "meta-oe",
+    epoch: 0,
+    pv: "3.5.0",
+    pr: "r0",
+    srcrev: "",
+    layer_commit: head,
+    machine: "q",
+    release: "2026",
+    task_hash: null,
+  };
+  const pkg = {
+    name: "htop",
+    epoch: 0,
+    version: "3.5.0",
+    release: "r0",
+    sourcerpm: "htop-3.5.0-r0.src.rpm",
+  };
+  const base = {
+    target: "q",
+    release: "2026",
+    channel: "edge",
+    change: { recipes: ["htop"] },
+    recipeMap: { schema_version: 1 as const, entries: [entry] },
+    workspace: createWorkspace(ws).workspace,
+    now: "x",
+  };
+  const local = classifyBuildPath({
+    ...base,
+    delta: {
+      manifest: {
+        schema_version: 1,
+        base: { release: "2026", channel: "edge", snapshot_id: null },
+        built_recipes: ["htop"],
+      },
+      packages: [pkg],
+    },
+    published: null,
+  });
+  const published = classifyBuildPath({
+    ...base,
+    delta: null,
+    published: {
+      reachable: true,
+      snapshotId: "s1",
+      packages: [pkg],
+      buildManifest: { layers: { "meta-oe": head } },
+    },
+  });
+  for (const r of [local, published]) {
+    assert.ok(r.ok);
+    if (!r.ok) return;
+    assert.equal(r.verdict.verdict, "package_miss");
+    assert.ok(r.verdict.missing.length > 0);
+    assert.ok(r.verdict.missing.every((m) => m.reason === "no-cache-key"));
+  }
   rmSync(ws, { recursive: true });
 });
 

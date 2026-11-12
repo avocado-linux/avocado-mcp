@@ -3,8 +3,8 @@
  * workspace and the published feed, and hands the pure classifier in
  * `build-path.ts` what it needs. Nothing here writes to a feed.
  *
- * The only processes started are `git log -1`, `git merge-base
- * --is-ancestor` and the `avocado --version` query. Every one is spawned
+ * The only processes started are `git log -1`, `git status --porcelain`,
+ * `git merge-base --is-ancestor` and the `avocado --version` query. Every one is spawned
  * without a shell, with a timeout.
  */
 
@@ -311,7 +311,8 @@ export interface WorkspaceHandle {
   workspace: Workspace;
   /**
    * Notes the tool surfaces as warnings: git runs that did not end with exit
-   * 0 or 1, a recipe found in two layers, and a recipe file with no commit.
+   * 0 or 1 (a failed `git status` among them), a recipe found in two layers,
+   * a recipe file with no commit, and a file group with uncommitted changes.
    */
   failures: string[];
 }
@@ -322,7 +323,8 @@ export interface WorkspaceHandle {
  * that is a repository (with its layer repositories ignored by it) does not
  * hide them. A recipe name found in two layers is unknown; append files are
  * collected from every layer. Answers are memoized per workspace, so a
- * recipe or commit pair costs one git run however often it is asked.
+ * recipe costs one `git log` and one `git status` per file group, and a
+ * commit pair one git run, however often it is asked.
  */
 export function createWorkspace(
   workspaceDir: string,
@@ -432,6 +434,39 @@ export function createWorkspace(
       failures.push(
         `git log in ${layer.name} ended with ${r.status === null ? "no exit status" : `exit ${r.status}`}`,
       );
+    }
+    // A commit for the group only describes the build when the group's files
+    // match it: an edit that is not committed is not in the commit, so the
+    // group fails closed to "no commit" like an untracked file does.
+    if (commit) {
+      const s = run(layer.dir, [
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "--no-renames",
+        "--untracked-files=normal",
+        "--",
+        ...paths.map((p) => `:(literal)${p}`),
+      ]);
+      if (s.status !== 0) {
+        failures.push(
+          `git status in ${layer.name} ended with ${s.status === null ? "no exit status" : `exit ${s.status}`}`,
+        );
+        commit = "";
+      } else if (s.stdout.length > 0) {
+        // -z records are "XY path", NUL separated.
+        const changed = s.stdout
+          .split("\0")
+          .filter((rec) => rec.length > 3)
+          .map((rec) => rec.slice(3));
+        const shown = changed.slice(0, 10).join(", ");
+        const more =
+          changed.length > 10 ? ` and ${changed.length - 10} more` : "";
+        note(
+          `${layer.name}: uncommitted changes in ${shown}${more}; commit them, then rebuild with bakar`,
+        );
+        commit = "";
+      }
     }
     if (commit) commitRepo.set(commit, layer.dir);
     return { commit, layer: layer.name };
