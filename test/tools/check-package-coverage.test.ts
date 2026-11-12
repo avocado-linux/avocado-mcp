@@ -262,6 +262,12 @@ test("an empty targets list is rejected", async () => {
   });
 });
 
+test("an empty targets list next to target runs the single-target form", async () => {
+  await withDocsFixture(async () => {
+    const { res } = await callWith({ target: "qemuarm64", targets: [] });
+    assert.notEqual(res.isError, true);
+  });
+});
 test("two entries that resolve to the same slug are evaluated once", async () => {
   await withDocsFixture(async () => {
     const { res, text, sc } = await callWith({
@@ -518,6 +524,29 @@ test("near matches come before candidates and are cut to maxAlternatives", async
     });
     assert.deepEqual(one.results[0].alternatives, ["zlibb"]);
     assert.deepEqual(one.results[0].candidates, []);
+  });
+});
+
+test("a query with surrounding whitespace still matches exactly", async () => {
+  await withDocsFixture(async () => {
+    const { results } = await coverage(
+      [pkg("openssl")],
+      [{ name: "libssl-dev", queries: ["openssl "] }],
+    );
+    assert.equal(results[0].status, "present");
+    assert.equal(results[0].match?.name, "openssl");
+    assert.equal(results[0].matchedQuery, "openssl");
+  });
+});
+
+test("a name that equals a later query exactly is not listed as a near match", async () => {
+  await withDocsFixture(async () => {
+    const { results } = await coverage(
+      [pkg("openssl"), pkg("openssl3")],
+      [{ name: "libssl-dev", queries: ["openssl", "openssl3"] }],
+    );
+    assert.equal(results[0].match?.name, "openssl");
+    assert.deepEqual(results[0].nearMatches, []);
   });
 });
 
