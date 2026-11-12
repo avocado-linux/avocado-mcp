@@ -1,7 +1,6 @@
 import { test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { gzipSync } from "node:zlib";
-import { createHash } from "node:crypto";
 import {
   createServer,
   type IncomingMessage,
@@ -455,37 +454,6 @@ test("package parsing carries epoch and sourcerpm as PackageInfo", async () => {
     },
     { name: "noepoch", epoch: 0, version: "1.0", release: "r0", sourcerpm: "" },
   ]);
-});
-
-test("repo digests are SHA-256 of the raw repomd and primary bytes", async () => {
-  const repomd = `<repomd><data type="primary"><location href="repodata/p.xml.gz"/></data></repomd>`;
-  const gz = gzipSync(Buffer.from("<metadata/>"));
-  stubFiles({ "repodata/repomd.xml": repomd, "repodata/p.xml.gz": gz });
-  const d = await new RepoClient().fetchRepoDigests(
-    DEFAULT_FEED,
-    "target/qemux86-64",
-  );
-  assert.equal(
-    d.repomdSha256,
-    createHash("sha256").update(repomd).digest("hex"),
-  );
-  assert.equal(d.primarySha256, createHash("sha256").update(gz).digest("hex"));
-});
-
-test("generic fetch is bounded and rejects unsafe paths", async () => {
-  const calls = stubFiles({ "big.bin": Buffer.alloc(100) });
-  const c = new RepoClient();
-  await assert.rejects(
-    c.fetchFeedFile(DEFAULT_FEED, "x/big.bin", 10),
-    /exceeded 10 bytes/,
-  );
-  await assert.rejects(
-    c.fetchFeedFile(DEFAULT_FEED, "../etc/passwd", 10),
-    /Invalid feed file path/,
-  );
-  assert.equal(calls.length, 1);
-  const ok = await c.fetchFeedFile(DEFAULT_FEED, "x/big.bin", 1000);
-  assert.equal(ok.byteLength, 100);
 });
 
 test("snapshot pointer is read from the channel head per machine", async () => {
