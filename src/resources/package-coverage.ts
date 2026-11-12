@@ -130,7 +130,7 @@ This is one tool call regardless of list size, and the feed is cached process-wi
 
 ## Step 3 — Research every MISSING dependency on the open web
 
-For each package marked MISSING, do light web research so the maintainer gets a self-contained ticket. Use \`WebSearch\` / \`WebFetch\` (and \`gh\`/\`curl\` per \`avocado://skills/upstream-sources\` if it's already an avocado-linux thing).
+For each package marked MISSING, do light web research so the maintainer gets a self-contained write-up. Use \`WebSearch\` / \`WebFetch\` (and \`gh\`/\`curl\` per \`avocado://skills/upstream-sources\` if it's already an avocado-linux thing).
 
 > **If web-research tools aren't available in this session** (no \`WebSearch\`/\`WebFetch\`, no network for \`gh\`/\`curl\`), do NOT stall and do NOT invent links. Still produce the report — list each missing package by name, note in its subsection that _"upstream research was not performed (no web access in this session)"_, and add a top-level note in the report so the maintainer knows the gap detail needs a follow-up pass.
 
@@ -168,6 +168,7 @@ Write the report to the current working directory (unless the user names another
 - **Not checked:** U (no match in the feeds read, and K feeds were not read)
 - **Coverage: Y% confirmed** (X/N present, U not checked)  ← headline number
 
+<One short paragraph: overall migration readiness, the biggest gaps, and any
 caveats about candidates the maintainer should confirm. Candidates and near
 matches are leads, not coverage, so say so in plain terms — e.g. "82% present
 by exact name; 3 of the missing packages have candidates a maintainer should
