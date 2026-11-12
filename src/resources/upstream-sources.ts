@@ -30,7 +30,7 @@ The MCP wraps two repos directly (\`references\` and the docs site). The Avocado
 | The kernel command line (\`isolcpus\`, \`earlycon\`, and so on) | No | \`kernel.cmdline\` replaces the board command line. \`kernel.cmdline_extra\` appends to it. Use one of the two, not both. A runtime value wins over the top-level value. Then \`avocado build\`. |
 | The **source** of a packaged component | **Yes** | \`bitbake <recipe>\` in a \`meta-avocado\` checkout |
 | A recipe, bbappend, packagegroup, or machine config | **Yes** | \`bitbake\` |
-| Kernel configuration or an in-tree driver | **Yes** | The "Custom kernel" guide |
+| Kernel configuration or an in-tree driver | No | \`kernel.compile\` in \`avocado.yaml\`: the SDK builds a custom kernel. Follow the "Custom kernel" guide. |
 
 The rows marked "No" are the common case. The CLI covers them. Do not send the user to Yocto for these.
 
@@ -177,7 +177,7 @@ Browse:
 gh api orgs/avocado-linux/repos --paginate --jq '.[] | select(.name | startswith("bsp-")) | .name'
 \`\`\`
 
-**Consult when** the user needs an *explanation* of target-specific behavior, for example "why does my rpi4 boot with this kernel cmdline?", "what BSP packages does \`jetson-orin-nano-devkit\` ship?", or "what's enabled in the default kernel config?". For a change, use the "What to rebuild" table above first.
+**Consult when** the user needs an *explanation* of target-specific behavior, for example "why does my rpi4 boot with this kernel cmdline?", "what BSP packages does \`jetson-orin-nano\` ship?", or "what's enabled in the default kernel config?". For a change, use the "What to rebuild" table above first.
 
 ### Other
 
