@@ -19,7 +19,7 @@ The MCP wraps two repos directly (\`references\` and the docs site). The Avocado
 
 ## What to rebuild: the CLI or Yocto
 
-\`meta-avocado\`, the \`bsp-*\` repos and \`vendor-openembedded-core\` are the Yocto / OpenEmbedded layers that build the packages in the Avocado feed. The CLI consumes RPMs from the feed. It does not produce them. Most work never touches Yocto. Before you propose a Yocto rebuild, find the change in this table (from the docs guide "Modifying OS components"):
+\`meta-avocado\`, the \`bsp-*\` repos and \`vendor-openembedded-core\` are the Yocto / OpenEmbedded layers that build the packages in the Avocado feed. The CLI installs RPMs from the feed, and the SDK can package your own build output into RPMs (\`avocado sdk compile\` then \`avocado sdk package\`, or \`avocado ext package\`). Most work never touches Yocto. Before you propose a Yocto rebuild, find the change in this table (from the docs guide "Modifying OS components"):
 
 | The user changed | Yocto needed | How |
 |---|---|---|
@@ -167,7 +167,7 @@ gh api orgs/avocado-linux/repos --paginate --jq '.[] | select(.name | startswith
 
 Per-target BSP repos. Each one is a **meta-layer used internally to build** the kernel binaries, device-tree blobs, bootloader bits, and \`avocado-bsp-<target>\` packages that ship in the feed. **~29 repos, naming pattern \`bsp-<target-slug>\`.**
 
-Users consume the already-built BSP package from the feed through \`avocado-bsp-<target>\` in their \`avocado.yaml\`. A kernel command line change needs only \`kernel.cmdline\` or \`kernel.cmdline_extra\`. A kernel configuration change needs Yocto: see the "Custom kernel" guide and the "What to rebuild" table above.
+Users consume the already-built BSP package from the feed through \`avocado-bsp-<target>\` in their \`avocado.yaml\`. A kernel command line change needs only \`kernel.cmdline\` or \`kernel.cmdline_extra\`. A kernel configuration change needs no Yocto: \`kernel.compile\` builds a custom kernel in the SDK (see the "Custom kernel" guide and the "What to rebuild" table above). Rebuilding the stock kernel of the base OS in place stays a Yocto change.
 
 The slug matches the canonical target slug (e.g. \`bsp-raspberrypi4\` → target \`raspberrypi4\`).
 
