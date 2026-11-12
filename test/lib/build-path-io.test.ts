@@ -20,6 +20,7 @@ import {
   projectBuildTarget,
   readMirrorMarker,
   readRecipeMap,
+  runGit,
   verdictFeeds,
   type GitResult,
   type PublishedClient,
@@ -590,6 +591,23 @@ test("a new untracked file beside a tracked one in the group gives no commit", (
   }, /files\/new\.patch/);
 });
 
+test("a new untracked directory in the group gives no commit and the note names the directory", () => {
+  dirtyGroup((repo) => {
+    // Normal untracked mode collapses the whole directory to `files/sub/`.
+    write(join(repo, GROUP, "files", "sub", "n.patch"), "n\n");
+  }, /files\/sub\//);
+});
+
+test("a changed file whose name has a space and a non-ASCII character is named as written", () => {
+  dirtyGroup((repo) => {
+    const odd = join(repo, GROUP, "files", "my fix é.patch");
+    write(odd, "a\n");
+    git(repo, "add", "-A");
+    commit(repo, "odd name");
+    write(odd, "b\n");
+  }, /files\/my fix é\.patch/);
+});
+
 test("a dirty .inc gives no commit", () => {
   dirtyGroup((repo) => {
     write(join(repo, GROUP, "htop.inc"), "# edited\n");
@@ -704,7 +722,6 @@ test("a dirty group is package_miss with no-cache-key on both rules, never a hit
   const ws = tmp();
   const repo = layerWithHtop(ws, "meta-oe");
   const head = git(repo, "rev-parse", "HEAD");
-  write(join(repo, GROUP, "files", "p.patch"), "dirty\n");
   const entry = {
     recipe: "htop",
     packages: ["htop"],
@@ -725,44 +742,68 @@ test("a dirty group is package_miss with no-cache-key on both rules, never a hit
     release: "r0",
     sourcerpm: "htop-3.5.0-r0.src.rpm",
   };
-  const base = {
-    target: "q",
-    release: "2026",
-    channel: "edge",
-    change: { recipes: ["htop"] },
-    recipeMap: { schema_version: 1 as const, entries: [entry] },
-    workspace: createWorkspace(ws).workspace,
-    now: "x",
+  // A fresh workspace per call: the answers are memoized per workspace, so one
+  // built before the edit would never see it.
+  const verdicts = () => {
+    const base = {
+      target: "q",
+      release: "2026",
+      channel: "edge",
+      change: { recipes: ["htop"] },
+      recipeMap: { schema_version: 1 as const, entries: [entry] },
+      workspace: createWorkspace(ws).workspace,
+      now: "x",
+    };
+    return [
+      classifyBuildPath({
+        ...base,
+        delta: {
+          manifest: {
+            schema_version: 1,
+            base: { release: "2026", channel: "edge", snapshot_id: null },
+            built_recipes: ["htop"],
+          },
+          packages: [pkg],
+        },
+        published: null,
+      }),
+      classifyBuildPath({
+        ...base,
+        delta: null,
+        published: {
+          reachable: true,
+          snapshotId: "s1",
+          packages: [pkg],
+          buildManifest: { layers: { "meta-oe": head } },
+        },
+      }),
+    ];
   };
-  const local = classifyBuildPath({
-    ...base,
-    delta: {
-      manifest: {
-        schema_version: 1,
-        base: { release: "2026", channel: "edge", snapshot_id: null },
-        built_recipes: ["htop"],
-      },
-      packages: [pkg],
-    },
-    published: null,
-  });
-  const published = classifyBuildPath({
-    ...base,
-    delta: null,
-    published: {
-      reachable: true,
-      snapshotId: "s1",
-      packages: [pkg],
-      buildManifest: { layers: { "meta-oe": head } },
-    },
-  });
-  for (const r of [local, published]) {
+  // Control: the same fixture on a clean tree is a hit on both rules, so the
+  // miss below comes from the dirty group and not from a fixture mistake.
+  for (const r of verdicts()) {
+    assert.ok(r.ok);
+    if (!r.ok) return;
+    assert.equal(r.verdict.verdict, "feed_hit");
+  }
+  write(join(repo, GROUP, "files", "p.patch"), "dirty\n");
+  for (const r of verdicts()) {
     assert.ok(r.ok);
     if (!r.ok) return;
     assert.equal(r.verdict.verdict, "package_miss");
     assert.ok(r.verdict.missing.length > 0);
     assert.ok(r.verdict.missing.every((m) => m.reason === "no-cache-key"));
   }
+  rmSync(ws, { recursive: true });
+});
+
+test("git runs with optional locks off, so status never rewrites the index", () => {
+  const ws = tmp();
+  const repo = layerWithHtop(ws, "meta-oe");
+  // An alias that runs `env` shows the environment git was started with.
+  const r = runGit(repo, ["-c", "alias.showenv=!env", "showenv"]);
+  assert.equal(r.status, 0);
+  assert.match(r.stdout, /^GIT_OPTIONAL_LOCKS=0$/m);
   rmSync(ws, { recursive: true });
 });
 
