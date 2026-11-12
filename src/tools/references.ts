@@ -2,12 +2,14 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
   listReferences,
-  searchReferences,
+  searchReferencesScored,
   fetchReferenceProject,
   fetchReferenceFile,
+  type ReferenceCompatibility,
   type ReferenceEntry,
   type ReferenceProject,
 } from "../lib/references-client.js";
+import { sameTarget } from "../lib/hardware-support.js";
 
 const referenceEntrySchema = z.object({
   slug: z.string(),
@@ -16,7 +18,45 @@ const referenceEntrySchema = z.object({
   summary: z.string(),
   hardware: z.array(z.string()),
   tags: z.array(z.string()),
+  compatibility: z
+    .enum(["generic", "listed", "unlisted"])
+    .optional()
+    .describe(
+      "Only set when a target was given: 'listed' (the reference lists the target or an equivalent slug), 'generic' (lists no target), 'unlisted' (lists only other targets).",
+    ),
 });
+
+type LabelledReference = ReferenceEntry & {
+  compatibility?: ReferenceCompatibility;
+};
+
+/**
+ * Label and filter references for a target. Equivalent slugs count as listed
+ * (a reference naming the old `-devkit` slug matches the new slug). Kept in
+ * the tool layer so the project initialization listing is unchanged.
+ */
+async function referencesForTarget(
+  query: string,
+  target: string | undefined,
+  includeIncompatible: boolean,
+): Promise<LabelledReference[]> {
+  const scored = await searchReferencesScored(query, target);
+  if (!target) return scored.map((s) => s.entry);
+  const labelled = scored.map(({ entry }): LabelledReference => {
+    const compatibility: ReferenceCompatibility =
+      entry.hardware.length === 0
+        ? "generic"
+        : entry.hardware.some(
+              (h) => sameTarget(h, target) || sameTarget(target, h),
+            )
+          ? "listed"
+          : "unlisted";
+    return { ...entry, compatibility };
+  });
+  return includeIncompatible
+    ? labelled
+    : labelled.filter((r) => r.compatibility !== "unlisted");
+}
 
 export function registerReferenceTools(server: McpServer): void {
   server.registerTool(
@@ -24,7 +64,7 @@ export function registerReferenceTools(server: McpServer): void {
     {
       title: "Browse or search Avocado references",
       description:
-        "Browse or search the catalog of Avocado OS reference projects (working starter projects in C, Python, Rust, Node, Elixir, etc.). With NO `query`, returns the full catalog as a browseable list. With `query`, returns ranked matches against slug, title, language, summary, and tags. Optionally filter by target. Use this whenever the user wants to see what examples exist, find one matching their task, or copy from one.",
+        "Browse or search the catalog of Avocado OS reference projects (working starter projects in C, Python, Rust, Node, Elixir, etc.). With NO `query`, returns the full catalog as a browseable list. With `query`, returns ranked matches against slug, title, language, summary, and tags. With a `target`, only references that list that target (or an equivalent slug) or list no target are returned; set `include_incompatible` to true to get every reference, each labelled generic, listed or unlisted. Without a target nothing is filtered. Use this whenever the user wants to see what examples exist, find one matching their task, or copy from one.",
       inputSchema: {
         query: z
           .string()
@@ -36,7 +76,13 @@ export function registerReferenceTools(server: McpServer): void {
           .string()
           .optional()
           .describe(
-            "Optional target to filter by (e.g. 'raspberrypi5'). Only matches references whose 'hardware' list either contains this target or is empty (generic).",
+            "Optional target to filter by (e.g. 'raspberrypi5'). Only matches references whose 'hardware' list either contains this target (or an equivalent slug) or is empty (generic), unless include_incompatible is true.",
+          ),
+        include_incompatible: z
+          .boolean()
+          .optional()
+          .describe(
+            "When true, also return references that list only other targets, each with its compatibility label. Default false. Has no effect without a target.",
           ),
       },
       outputSchema: {
@@ -56,13 +102,13 @@ export function registerReferenceTools(server: McpServer): void {
         openWorldHint: true,
       },
     },
-    async ({ query, target }) => {
+    async ({ query, target, include_incompatible }) => {
       const q = query?.trim() ?? "";
       try {
         if (q.length === 0) {
           // Catalog-browse mode
           const all = await (target
-            ? searchReferences("", target)
+            ? referencesForTarget("", target, include_incompatible === true)
             : listReferences());
           let out = `# search-references — catalog\n\n`;
           out += `**Total:** ${all.length}${target ? `  •  **Target filter:** \`${target}\`` : ""}\n\n`;
@@ -79,7 +125,11 @@ export function registerReferenceTools(server: McpServer): void {
         }
 
         // Ranked-search mode
-        const matches = await searchReferences(q, target);
+        const matches = await referencesForTarget(
+          q,
+          target,
+          include_incompatible === true,
+        );
         return {
           content: [
             {
@@ -200,7 +250,7 @@ export function registerReferenceTools(server: McpServer): void {
   );
 }
 
-function renderList(entries: ReferenceEntry[]): string {
+function renderList(entries: LabelledReference[]): string {
   if (entries.length === 0) return "_No references match._";
   let out = `| Slug | Title | Language | Hardware | Summary |\n`;
   out += `|------|-------|----------|----------|---------|\n`;
