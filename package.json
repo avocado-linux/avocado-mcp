@@ -50,7 +50,7 @@
     "node": ">=20"
   },
   "devDependencies": {
-    "@modelcontextprotocol/inspector": "^0.21.2",
+    "@modelcontextprotocol/inspector": "^2.15.0",
     "@types/node": "^22.10.0",
     "prettier": "^3.5.3",
     "typescript": "^5.7.2"
@@ -58,7 +58,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.4.0",
     "yaml": "^2.6.0",
-    "zod": "^3.25.76"
+    "zod": "^4.6.7"
   },
   "overrides": {
     "shell-quote": "^1.8.4"
