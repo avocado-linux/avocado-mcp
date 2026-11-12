@@ -162,6 +162,36 @@ test("recipe map reads entries and rejects a malformed file", () => {
   rmSync(bad, { recursive: true });
 });
 
+test("recipe map accepts a null layer commit and still rejects a non-string one", () => {
+  const entry = (layer_commit: unknown) => ({
+    recipe: "htop",
+    packages: ["htop"],
+    layer: "meta-oe",
+    epoch: 0,
+    pv: "3.5.0",
+    pr: "r0",
+    srcrev: "",
+    layer_commit,
+    machine: "qemux86-64",
+    release: "2026",
+    task_hash: null,
+  });
+  const read = (c: unknown) => {
+    const dir = tmp();
+    write(
+      join(dir, "recipe-map.json"),
+      JSON.stringify({ schema_version: 1, entries: [entry(c)] }),
+    );
+    const r = readRecipeMap(dir);
+    rmSync(dir, { recursive: true });
+    return r;
+  };
+  const ok = read(null);
+  assert.equal(ok.map?.entries[0].layer_commit, null);
+  assert.deepEqual(ok.warnings, []);
+  assert.equal(read(7).map, null);
+});
+
 // ---- workspace ------------------------------------------------------------
 
 function layerWithHtop(ws: string, name: string): string {
