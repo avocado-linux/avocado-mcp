@@ -150,3 +150,137 @@ test("a call with only target behaves as before", async () => {
     );
   });
 });
+
+interface Section {
+  target: string;
+  targetAvailable: boolean | null;
+  summary: { present: number; total: number };
+  results: unknown[];
+  feedErrors: string[];
+  notChecked: unknown[];
+}
+
+async function callWith(extra: Record<string, unknown>) {
+  const client = await connect();
+  const res = await client.callTool({
+    name: "check-package-coverage",
+    arguments: {
+      release: "2026",
+      channel: "edge",
+      dependencies: [{ name: "curl", queries: ["curl"] }],
+      ...extra,
+    },
+  });
+  return {
+    res,
+    text: (res.content as { text: string }[])[0].text,
+    sc: res.structuredContent as {
+      release: string;
+      channel: string;
+      feed: unknown;
+      targets: Section[];
+    },
+  };
+}
+
+test("two targets give one section per target in the order given", async () => {
+  await withDocsFixture(async () => {
+    const { res, text, sc } = await callWith({
+      targets: ["qemux86-64", "jetson-orin-nano"],
+    });
+    assert.notEqual(res.isError, true);
+    assert.deepEqual(
+      sc.targets.map((t) => t.target),
+      ["qemux86-64", "jetson-orin-nano"],
+    );
+    assert.deepEqual(asked, ["qemux86-64", "jetson-orin-nano"]);
+    assert.equal(sc.release, "2026");
+    assert.equal(sc.channel, "edge");
+    assert.ok(sc.feed);
+    for (const t of sc.targets) {
+      assert.deepEqual(Object.keys(t).sort(), [
+        "feedErrors",
+        "notChecked",
+        "results",
+        "summary",
+        "target",
+        "targetAvailable",
+      ]);
+      assert.equal(t.summary.present, 1);
+    }
+    assert.ok(
+      text.indexOf("`qemux86-64`") < text.indexOf("`jetson-orin-nano`"),
+    );
+  });
+});
+
+test("one unavailable target does not stop the others", async () => {
+  await withDocsFixture(async () => {
+    const { res, text, sc } = await callWith({
+      targets: ["no-such-board", "qemux86-64"],
+    });
+    assert.notEqual(res.isError, true);
+    assert.equal(sc.targets.length, 2);
+    assert.equal(sc.targets[0].target, "no-such-board");
+    assert.equal(sc.targets[0].targetAvailable, false);
+    assert.equal(sc.targets[1].targetAvailable, true);
+    assert.equal(sc.targets[1].summary.present, 1);
+    assert.deepEqual(asked, ["qemux86-64"]);
+    assert.match(text, /not available in the `2026\/edge` feed/);
+  });
+});
+
+test("both target and targets are rejected", async () => {
+  await withDocsFixture(async () => {
+    const { res, text } = await callWith({
+      target: "qemux86-64",
+      targets: ["qemux86-64"],
+    });
+    assert.equal(res.isError, true);
+    assert.match(text, /pass exactly one of target or targets/);
+    assert.deepEqual(asked, []);
+  });
+});
+
+test("neither target nor targets is rejected", async () => {
+  await withDocsFixture(async () => {
+    const { res, text } = await callWith({});
+    assert.equal(res.isError, true);
+    assert.match(text, /pass exactly one of target or targets/);
+  });
+});
+
+test("an empty targets list is rejected", async () => {
+  await withDocsFixture(async () => {
+    const { res, text } = await callWith({ targets: [] });
+    assert.equal(res.isError, true);
+    assert.match(text, /pass exactly one of target or targets/);
+  });
+});
+
+test("two entries that resolve to the same slug are evaluated once", async () => {
+  await withDocsFixture(async () => {
+    const { res, text, sc } = await callWith({
+      targets: ["jetson-orin-nano-devkit", "qemux86-64", "jetson-orin-nano"],
+    });
+    assert.notEqual(res.isError, true);
+    assert.deepEqual(
+      sc.targets.map((t) => t.target),
+      ["jetson-orin-nano", "qemux86-64"],
+    );
+    assert.deepEqual(asked, ["jetson-orin-nano", "qemux86-64"]);
+    assert.match(text, /duplicate.*merged/i);
+  });
+});
+
+test("isError is true only when no target could be evaluated", async () => {
+  await withDocsFixture(async () => {
+    const none = await callWith({ targets: ["no-such-board", "other-gone"] });
+    assert.equal(none.res.isError, true);
+    assert.equal(none.sc.targets.length, 2);
+    assert.ok(none.sc.targets.every((t) => t.targetAvailable === false));
+
+    const some = await callWith({ targets: ["no-such-board", "qemux86-64"] });
+    assert.notEqual(some.res.isError, true);
+  });
+});
