@@ -180,6 +180,31 @@ export function recipeOfPath(path: string): string | null {
 }
 
 /**
+ * Recipe name of any file below a recipe directory (`recipes-<kind>/<dir>/...`):
+ * the directory name. Covers the files directory, patches and shared `.inc`
+ * files. A directory whose name differs from the recipe it holds maps to a
+ * name the workspace does not know, which the classifier reports as an
+ * unknown recipe, never as a hit.
+ */
+export function recipeDirOfPath(path: string): string | null {
+  const m = /(^|\/)recipes-[^/]+\/([^/]+)\/.+/.exec(path.replace(/\\/g, "/"));
+  return m ? m[2] : null;
+}
+
+/** Paths that cannot change what a build produces: documentation and repository metadata. */
+const IGNORABLE: RegExp[] = [
+  /(^|\/)(docs?|\.github|\.gitlab)\//,
+  /\.(md|rst|txt)$/i,
+  /(^|\/)(README|LICENSE|COPYING|CONTRIBUTING|MAINTAINERS|CHANGELOG|NOTICE|AUTHORS)[^/]*$/,
+  /(^|\/)\.[^/]+$/,
+];
+
+const isIgnorable = (path: string): boolean => {
+  const p = path.replace(/\\/g, "/");
+  return IGNORABLE.some((re) => re.test(p));
+};
+
+/**
  * Pick the published snapshot: the pinned one when the pin matches the feed
  * URL now in use (a pin with no recorded URL matches), otherwise the latest.
  */
@@ -233,14 +258,18 @@ export function classifyBuildPath(input: ClassifyInput): ClassifyResult {
   // Image-level paths win over any recipe.
   const imageReasons: string[] = [];
   const pathRecipes: string[] = [];
+  const unmapped: string[] = [];
   for (const p of paths) {
     const cls = imageClassOf(p);
     if (cls) {
       imageReasons.push(`${cls}: ${p}`);
       continue;
     }
-    const r = recipeOfPath(p);
+    const r = recipeOfPath(p) ?? recipeDirOfPath(p);
     if (r) pathRecipes.push(r);
+    // Anything else under a layer (a bbclass, an include, a library file)
+    // can change what builds, and no cache key covers it: it fails closed.
+    else if (!isIgnorable(p)) unmapped.push(p);
   }
 
   const result = (
@@ -286,7 +315,8 @@ export function classifyBuildPath(input: ClassifyInput): ClassifyResult {
   // A path that names no recipe (documentation, say) is ignored, so it
   // leaves the recipe map to classify exactly as an empty change does.
   let recipes = [...new Set([...named, ...pathRecipes])];
-  if (recipes.length === 0) {
+  // Unmapped build paths are the change, so the recipe map has no say.
+  if (recipes.length === 0 && unmapped.length === 0) {
     const fromMap = input.recipeMap?.entries.map((e) => e.recipe) ?? [];
     recipes = [...new Set(fromMap)];
     if (recipes.length === 0) {
@@ -312,6 +342,13 @@ export function classifyBuildPath(input: ClassifyInput): ClassifyResult {
   const missing: MissingPackage[] = [];
   const reasons: string[] = [];
   const keys: Verdict["cache_keys"] = { published: {}, local: {} };
+
+  for (const p of unmapped) {
+    missing.push({ recipe: null, package: p, reason: "no-cache-key" });
+    reasons.push(
+      `${p}: no-cache-key: the path maps to no recipe and may change any build`,
+    );
+  }
 
   for (const recipe of recipes) {
     const o = evaluateRecipe(recipe, input, map);

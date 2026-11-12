@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   classifyBuildPath,
   imageClassOf,
+  recipeDirOfPath,
   recipeOfPath,
   selectSnapshot,
   type ClassifyInput,
@@ -797,3 +798,88 @@ test("an unknown layer commit is no-cache-key and never reaches the ancestor tes
   assert.equal(v.missing[0].reason, "no-cache-key");
   assert.equal(asked, 0);
 });
+
+// ---- paths that are neither image-level nor a recipe file ----
+
+test("a path below a recipe directory names the recipe of that directory", () => {
+  assert.equal(
+    recipeDirOfPath("meta-oe/recipes-support/htop/files/fix.patch"),
+    "htop",
+  );
+  assert.equal(
+    recipeDirOfPath("meta-oe/recipes-support/htop/htop.inc"),
+    "htop",
+  );
+  assert.equal(recipeDirOfPath("meta-oe/recipes-support/loose.inc"), null);
+  assert.equal(recipeDirOfPath("meta-oe/classes/foo.bbclass"), null);
+});
+
+test("a patch under the recipe's files directory classifies that recipe, not the map", () => {
+  const v = verdictOf(
+    base({
+      recipeMap: {
+        schema_version: 1,
+        entries: [entry(), entry({ recipe: "nano", packages: ["nano"] })],
+      },
+      change: { paths: ["meta-oe/recipes-support/htop/files/fix.patch"] },
+    }),
+  );
+  assert.deepEqual(Object.keys(v.cache_keys.local), ["htop"]);
+});
+
+test("a shared .inc names its directory's recipe and a stale delta is a miss", () => {
+  const v = verdictOf(
+    base({
+      change: { paths: ["meta-oe/recipes-support/htop/htop.inc"] },
+      workspace: workspace(
+        { htop: [{ commit: "def5678", layer: "meta-oe" }] },
+        ["abc1234", "def5678"],
+      ),
+    }),
+  );
+  assert.equal(v.verdict, "package_miss");
+  assert.equal(v.missing[0].reason, "stale-delta");
+});
+
+for (const path of [
+  "meta-oe/classes/cmake.bbclass",
+  "meta-oe/recipes-support/loose.inc",
+  "meta-oe/lib/oe/utils.py",
+]) {
+  test(`${path} is not ignorable: package miss with no-cache-key and a null recipe`, () => {
+    const v = verdictOf(base({ change: { paths: [path] } }));
+    assert.equal(v.verdict, "package_miss");
+    assert.deepEqual(
+      v.missing.map((m) => [m.recipe, m.package, m.reason]),
+      [[null, path, "no-cache-key"]],
+    );
+    assert.match(v.reasons.join("\n"), new RegExp(path.replace(/\./g, "\\.")));
+  });
+}
+
+test("an unmapped build path beside a hit recipe still misses", () => {
+  const v = verdictOf(
+    base({
+      change: {
+        recipes: ["htop"],
+        paths: ["meta-oe/classes/cmake.bbclass"],
+      },
+    }),
+  );
+  assert.equal(v.verdict, "package_miss");
+  assert.equal(v.missing.length, 1);
+  assert.equal(v.missing[0].recipe, null);
+});
+
+for (const path of [
+  "docs/usage.rst",
+  "meta-oe/README.md",
+  "meta-oe/COPYING.MIT",
+  ".github/workflows/ci.yml",
+  "meta-oe/.gitignore",
+]) {
+  test(`${path} is ignorable`, () => {
+    const v = verdictOf(base({ change: { paths: [path] } }));
+    assert.equal(v.verdict, "feed_hit");
+  });
+}
