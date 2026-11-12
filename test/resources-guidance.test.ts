@@ -67,3 +67,18 @@ test("package coverage describes candidates and near matches and no optimistic c
   assert.doesNotMatch(text, /optimistic/i);
   assert.doesNotMatch(text, /\b(fuzzy|strong)\b/i);
 });
+
+test("application development names the SDK route before vendoring", async () => {
+  const text = await readResource("avocado://skills/app-development");
+  const vendor = text.search(/vendor/i);
+  assert.ok(vendor >= 0, "still mentions vendoring");
+  assert.ok(
+    text.indexOf("sdk compile") >= 0 && text.indexOf("sdk compile") < vendor,
+  );
+  assert.ok(
+    text.indexOf("sdk package") >= 0 && text.indexOf("sdk package") < vendor,
+  );
+  assert.ok(
+    text.indexOf("ext package") >= 0 && text.indexOf("ext package") < vendor,
+  );
+});
