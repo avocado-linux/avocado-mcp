@@ -428,6 +428,28 @@ test("recipesInDir is scoped to the layer of the changed path", () => {
   rmSync(ws, { recursive: true });
 });
 
+test("a repository-relative path matches every layer holding the directory", () => {
+  const ws = tmp();
+  const a = join(ws, "meta-a");
+  const b = join(ws, "meta-b");
+  initRepo(a);
+  initRepo(b);
+  write(join(a, "recipes-core", "foo", "foo_1.bb"), "# a\n");
+  write(join(b, "recipes-core", "foo", "bar_1.bb"), "# b\n");
+  for (const r of [a, b]) {
+    git(r, "add", "-A");
+    commit(r, "x");
+  }
+  const w = createWorkspace(ws).workspace;
+  assert.deepEqual([...(w.recipesInDir?.("recipes-core/foo") ?? [])].sort(), [
+    "bar",
+    "foo",
+  ]);
+  assert.deepEqual(w.recipesInDir?.("meta-a/recipes-core/foo"), ["foo"]);
+  assert.deepEqual(w.recipesInDir?.("meta-b/recipes-core/foo"), ["bar"]);
+  rmSync(ws, { recursive: true });
+});
+
 test("recipesInDir finds a layer kept in a subdirectory of its repository", () => {
   const ws = tmp();
   const repo = join(ws, "meta-repo");
