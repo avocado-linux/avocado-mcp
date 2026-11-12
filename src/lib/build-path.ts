@@ -65,11 +65,17 @@ export interface LastCommit {
 export interface Workspace {
   /**
    * One entry per file group of the recipe: the recipe file with its files
-   * directory, and each append file. Empty when the recipe is not found.
+   * directory, and each append file. Empty when the recipe is not found. A
+   * group whose files have no commit (new or uncommitted) carries an empty
+   * `commit`: the recipe exists but cannot be proven against any layer commit.
    */
   lastCommitFor(recipe: string): LastCommit[];
-  /** True when commit `a` is an ancestor of (or equal to) commit `b`. */
-  isAncestor(a: string, b: string): boolean;
+  /**
+   * True when commit `a` is an ancestor of (or equal to) commit `b`, false
+   * when it is not, null when the answer could not be established (a git
+   * failure or an object the clone lacks).
+   */
+  isAncestor(a: string, b: string): boolean | null;
 }
 
 export interface PublishedState {
@@ -277,23 +283,17 @@ export function classifyBuildPath(input: ClassifyInput): ClassifyResult {
     warn("recipe map is missing; recipes fall to the published lookup");
   }
 
-  const explicit = named.length > 0 || pathRecipes.length > 0;
+  // A path that names no recipe (documentation, say) is ignored, so it
+  // leaves the recipe map to classify exactly as an empty change does.
   let recipes = [...new Set([...named, ...pathRecipes])];
-  if (!explicit) {
-    if (paths.length > 0 || named.length > 0) {
-      return {
-        ok: false,
-        error:
-          "nothing to classify: no changed path names a recipe and no recipe was given",
-      };
-    }
+  if (recipes.length === 0) {
     const fromMap = input.recipeMap?.entries.map((e) => e.recipe) ?? [];
     recipes = [...new Set(fromMap)];
     if (recipes.length === 0) {
       return {
         ok: false,
         error:
-          "nothing to classify: no recipe, no path and no recipe map; no verdict",
+          "nothing to classify: no recipe, no path that names one and no recipe map; no verdict",
       };
     }
   }
@@ -392,6 +392,8 @@ function localRule(
   ws: Workspace,
   recipe: string,
 ): MissReason | null {
+  // An entry that lists no package proves nothing about what was built.
+  if (entry.packages.length === 0) return "no-cache-key";
   for (const name of entry.packages) {
     const cands = deltaPackages.filter((p) => p.name === name);
     if (cands.length === 0) return "no-cache-key";
@@ -404,12 +406,15 @@ function localRule(
     if (!exact) return "version-differs";
   }
   const groups = ws.lastCommitFor(recipe);
-  if (groups.length === 0) return "no-cache-key";
+  if (groups.length === 0 || groups.some((g) => g.commit === ""))
+    return "no-cache-key";
   for (const g of groups) {
     // entry.layer_commit is the recipe layer's commit; a group in another
     // layer cannot be proven against it (rule (b) evaluates it per layer).
     if (g.layer !== entry.layer) return "no-cache-key";
-    if (!ws.isAncestor(g.commit, entry.layer_commit)) return "stale-delta";
+    const anc = ws.isAncestor(g.commit, entry.layer_commit);
+    if (anc === null) return "no-cache-key";
+    if (!anc) return "stale-delta";
   }
   return null;
 }
@@ -446,8 +451,13 @@ function publishedRule(
   const names = [...new Set(sourced.map((p) => p.name))];
   if (sourced.length === 0) return miss("no-cache-key");
 
-  // A package matches only at the same epoch, version and package release.
-  const matching = sourced.filter((p) => {
+  // Every package of the recipe must match at the same epoch, version and
+  // package release: the entry's packages when there is one, otherwise every
+  // package the snapshot sources from the recipe. One current package beside
+  // a stale sibling would let a hit hide a package that was not rebuilt.
+  if (entry && entry.packages.length === 0) return miss("no-cache-key", names);
+  const required = entry ? entry.packages : names;
+  const matches = (p: PackageInfo): boolean => {
     if (entry)
       return (
         Number(p.epoch) === Number(entry.epoch) &&
@@ -456,17 +466,23 @@ function publishedRule(
       );
     const sp = sourcerpmParts(p.sourcerpm);
     return sp !== null && sp.version === p.version && sp.release === p.release;
-  });
-  if (matching.length === 0) return miss("version-differs", names);
+  };
+  for (const name of required) {
+    const cands = sourced.filter((p) => p.name === name);
+    if (cands.length === 0) return miss("no-cache-key", names);
+    if (!cands.some(matches)) return miss("version-differs", names);
+  }
   if (!ws || !pub.buildManifest) return miss("no-cache-key", names);
 
   const groups = ws.lastCommitFor(recipe);
-  if (groups.length === 0) return miss("no-cache-key", names);
+  if (groups.length === 0 || groups.some((g) => g.commit === ""))
+    return miss("no-cache-key", names);
   const keys = new Set<string>();
   for (const g of groups) {
     const layerCommit = pub.buildManifest.layers[g.layer];
     if (!layerCommit) return miss("no-cache-key", names);
-    if (!ws.isAncestor(g.commit, layerCommit))
+    // false and unproven both leave the build without a proven cache key.
+    if (ws.isAncestor(g.commit, layerCommit) !== true)
       return miss("no-cache-key", names);
     keys.add(`${g.layer}@${layerCommit}`);
   }
