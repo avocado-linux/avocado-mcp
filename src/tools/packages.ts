@@ -3,9 +3,9 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
   RepoClient,
   rankMatches,
-  scoreToConfidence,
-  type SearchResult,
+  type FeedPackage,
 } from "../lib/repo-client.js";
+import { classifyName, editDistance } from "../lib/name-match.js";
 import type { FeedContext } from "../lib/feed-config.js";
 import { feedFetchLabel } from "../lib/feed-config.js";
 import {
@@ -437,19 +437,45 @@ export function registerPackageTools(
         .describe(
           "present / total, as a percentage: the share of dependencies confirmed present. Read it with `notChecked`.",
         ),
-      exact: z.number().int(),
-      strong: z.number().int(),
-      fuzzy: z.number().int(),
+      exact: z
+        .number()
+        .int()
+        .describe(
+          "Dependencies where a query equalled a package name exactly.",
+        ),
+      candidates: z
+        .number()
+        .int()
+        .describe(
+          "Missing dependencies that have at least one near match or candidate to check.",
+        ),
     }),
     results: z.array(
       z.object({
         name: z.string(),
         ecosystem: z.string().optional(),
         status: z.enum(["present", "missing", "not-checked"]),
-        confidence: z.enum(["exact", "strong", "fuzzy"]).nullable(),
+        confidence: z
+          .enum(["exact"])
+          .nullable()
+          .describe("`exact` for a covered row, null otherwise."),
         match: coverageMatchSchema.nullable(),
         matchedQuery: z.string().nullable(),
-        alternatives: z.array(z.string()),
+        alternatives: z
+          .array(z.string())
+          .describe(
+            "Near matches then candidates, capped at `maxAlternatives`.",
+          ),
+        nearMatches: z
+          .array(z.string())
+          .describe(
+            "Names within edit distance 2 of a query or equal to it ignoring case. Not the requested package.",
+          ),
+        candidates: z
+          .array(z.string())
+          .describe(
+            "Names containing a query or whose summary mentions it. Not the requested package.",
+          ),
       }),
     ),
     feedErrors: z.array(z.string()),
@@ -461,7 +487,7 @@ export function registerPackageTools(
     {
       title: "Batch-check dependencies against the Avocado feed",
       description:
-        'Check a WHOLE LIST of dependencies against one target\'s package feed in a SINGLE call. It is the batch engine behind the `/package-coverage` report. For each dependency you pass a display name plus one or more candidate feed search terms (`queries`); the tool warms the target\'s feed once and returns a present/missing/not-checked verdict per dependency (not-checked means no match in the feeds read while an enabled feed could not be read, such as a private `org:` feed or a feed that failed to load. The coverage percentage counts them as not present, and the summary reports them beside it) with a match-confidence tier (`exact`/`strong`/`fuzzy`), the best-matching feed package, and near-miss alternatives, plus an overall coverage summary. **Use this instead of calling `search-packages` once per dependency**. It collapses N round-trips into one and shares the exact `dnf search` scoring. YOU do the name normalization (Debian/Alpine/pip/npm → RPM/Yocto): put every plausible variant for a dependency in its `queries` array (e.g. for `libssl-dev`: `["openssl", "libssl", "ssl"]`). Matching is optimistic: any hit (including a summary-only hit) counts as present, flagged `fuzzy` so a maintainer can verify. See `avocado://skills/package-coverage`.',
+        'Check a WHOLE LIST of dependencies against one target\'s package feed in a SINGLE call. It is the batch engine behind the `/package-coverage` report. For each dependency you pass a display name plus one or more candidate feed search terms (`queries`); the tool warms the target\'s feed once and returns a present/missing/not-checked verdict per dependency (not-checked means no match in the feeds read while an enabled feed could not be read, such as a private `org:` feed or a feed that failed to load. The coverage percentage counts them as not present, and the summary reports them beside it) with the exact-name feed package that matched, and labelled near matches and candidates, plus an overall coverage summary. **Use this instead of calling `search-packages` once per dependency**. It collapses N round-trips into one and shares the exact `dnf search` scoring. YOU do the name normalization (Debian/Alpine/pip/npm → RPM/Yocto): put every plausible variant for a dependency in its `queries` array (e.g. for `libssl-dev`: `["openssl", "libssl", "ssl"]`). Coverage is by exact name: a dependency is present only when one of its `queries` equals a package name exactly (case-sensitive). Near matches (a typo or a letter-case difference) and candidates (a name containing the query, or a summary mentioning it) are listed with the labels "near match, not the requested package" and "candidate, not the requested package"; they are leads for a maintainer to check and never count as coverage. See `avocado://skills/package-coverage`.',
       inputSchema: {
         target: z
           .string()
@@ -493,7 +519,7 @@ export function registerPackageTools(
                 .array(z.string().min(1))
                 .min(1)
                 .describe(
-                  "Ordered candidate feed search terms to try for this dependency — YOUR normalized name variants. The best hit across all of them wins. Match summaries too, so a keyword like 'mqtt' can surface 'paho-mqtt'.",
+                  "Ordered candidate feed search terms to try for this dependency — YOUR normalized name variants. A dependency is covered when any one of them equals a package name exactly. A keyword like 'mqtt' can surface 'paho-mqtt' as a candidate.",
                 ),
             }),
           )
@@ -506,7 +532,7 @@ export function registerPackageTools(
           .positive()
           .optional()
           .describe(
-            "How many near-miss alternative package names to surface per dependency (for maintainer review). Default 3.",
+            "How many near matches and candidates to list per dependency (near matches first, for maintainer review). Default 3.",
           ),
       },
       // Accepts both shapes: the flat single-target result, and
@@ -574,8 +600,7 @@ export function registerPackageTools(
         notChecked: 0,
         coveragePercent: 0,
         exact: 0,
-        strong: 0,
-        fuzzy: 0,
+        candidates: 0,
       };
 
       // One feed manifest read serves every target of the call.
@@ -681,27 +706,44 @@ export function registerPackageTools(
             };
           }
 
+          const names = Array.from(new Set(packages.map((p) => p.name)));
           const results = dependencies.map((dep) => {
-            let best: SearchResult | null = null;
+            let best: FeedPackage | null = null;
             let matchedQuery: string | null = null;
-            const altNames = new Set<string>();
+            const near = new Map<string, number>();
+            const cands = new Map<string, number>();
             for (const q of dep.queries) {
-              const ranked = rankMatches(packages, q);
-              if (ranked.length > 0) {
-                if (!best || ranked[0].score > best.score) {
-                  best = ranked[0];
-                  matchedQuery = q;
-                }
-                for (const r of ranked.slice(0, maxAlt + 1))
-                  altNames.add(r.name);
+              const { exact, near: nearNames } = classifyName(q, names);
+              if (exact !== null && best === null) {
+                best = packages.find((p) => p.name === exact) ?? null;
+                matchedQuery = q;
+              }
+              const lowerQ = q.toLowerCase();
+              for (const n of nearNames) {
+                const d = editDistance(lowerQ, n.toLowerCase());
+                near.set(n, Math.min(near.get(n) ?? d, d));
+              }
+              for (const r of rankMatches(packages, q)) {
+                if (r.name === q) continue;
+                cands.set(r.name, Math.max(cands.get(r.name) ?? 0, r.score));
               }
             }
-            if (best) altNames.delete(best.name);
+            const taken = (n: string) => n === best?.name;
+            const nearMatches = Array.from(near)
+              .filter(([n]) => !taken(n))
+              .sort((x, y) => x[1] - y[1] || (x[0] < y[0] ? -1 : 1))
+              .map(([n]) => n)
+              .slice(0, maxAlt);
+            const candidates = Array.from(cands)
+              .filter(([n]) => !taken(n) && !near.has(n))
+              .sort((x, y) => y[1] - x[1] || (x[0] < y[0] ? -1 : 1))
+              .map(([n]) => n)
+              .slice(0, maxAlt - nearMatches.length);
             return {
               name: dep.name,
               ecosystem: dep.ecosystem,
               status: best ? ("present" as const) : noMatch,
-              confidence: best ? scoreToConfidence(best.score) : null,
+              confidence: best ? ("exact" as const) : null,
               match: best
                 ? {
                     name: best.name,
@@ -714,7 +756,9 @@ export function registerPackageTools(
                   }
                 : null,
               matchedQuery,
-              alternatives: Array.from(altNames).slice(0, maxAlt),
+              alternatives: [...nearMatches, ...candidates],
+              nearMatches,
+              candidates,
             };
           });
 
@@ -741,9 +785,10 @@ export function registerPackageTools(
             missing,
             notChecked: notCheckedCount,
             coveragePercent,
-            exact: results.filter((r) => r.confidence === "exact").length,
-            strong: results.filter((r) => r.confidence === "strong").length,
-            fuzzy: results.filter((r) => r.confidence === "fuzzy").length,
+            exact: present,
+            candidates: results.filter(
+              (r) => r.status === "missing" && r.alternatives.length > 0,
+            ).length,
           };
 
           return {
@@ -839,9 +884,11 @@ interface CoverageRow {
   name: string;
   ecosystem?: string;
   status: "present" | "missing" | "not-checked";
-  confidence: "exact" | "strong" | "fuzzy" | null;
+  confidence: "exact" | null;
   match: { name: string; version: string } | null;
   alternatives: string[];
+  nearMatches: string[];
+  candidates: string[];
 }
 
 function renderCoverage(
@@ -855,8 +902,7 @@ function renderCoverage(
     notChecked: number;
     coveragePercent: number;
     exact: number;
-    strong: number;
-    fuzzy: number;
+    candidates: number;
   },
   results: CoverageRow[],
   errors: string[],
@@ -869,11 +915,11 @@ function renderCoverage(
   }
   out += feedDescription;
   out += `**Coverage:** ${summary.coveragePercent}% confirmed (${summary.present}/${summary.total} present)`;
-  if (summary.fuzzy > 0) {
-    out += ` — of which ${summary.exact} exact, ${summary.strong} strong, **${summary.fuzzy} fuzzy** (verify before relying on the number)`;
-  }
   if (summary.notChecked > 0) {
     out += `, ${summary.notChecked} not checked because ${unreadFeeds} ${unreadFeeds === 1 ? "feed was" : "feeds were"} not read`;
+  }
+  if (summary.candidates > 0) {
+    out += `; ${summary.candidates} missing ${summary.candidates === 1 ? "has" : "have"} near matches or candidates to check`;
   }
   out += `\n**Missing:** ${summary.missing}\n`;
 
@@ -885,7 +931,7 @@ function renderCoverage(
   // newlines so a stray `|` or line break can't break the markdown table.
   const cell = (s: string): string =>
     s.replace(/\r?\n/g, " ").replace(/\|/g, "\\|").trim();
-  out += `\n| Dependency | Ecosystem | Status | Feed package | Version | Confidence | Alternatives |\n`;
+  out += `\n| Dependency | Ecosystem | Status | Feed package | Version | Confidence | Near matches and candidates |\n`;
   out += `|---|---|---|---|---|---|---|\n`;
   for (const r of results) {
     const status =
@@ -894,12 +940,17 @@ function renderCoverage(
     const ver = r.match ? r.match.version : "—";
     const conf = r.confidence ?? "—";
     const alts =
-      r.alternatives.length > 0
-        ? r.alternatives.map((a) => `\`${a}\``).join(", ")
-        : "—";
+      [
+        ...r.nearMatches.map(
+          (a) => `\`${a}\` (near match, not the requested package)`,
+        ),
+        ...r.candidates.map(
+          (a) => `\`${a}\` (candidate, not the requested package)`,
+        ),
+      ].join(", ") || "—";
     out += `| ${cell(r.name)} | ${r.ecosystem ? cell(r.ecosystem) : "—"} | ${status} | ${pkg} | ${ver} | ${conf} | ${alts} |\n`;
   }
-  out += `\n_\`fuzzy\` = summary-only hit, optimistically counted as present — a maintainer should confirm. Missing rows need upstream research (see the \`/package-coverage\` flow)._`;
+  out += `\n_Coverage counts exact package names only. Near matches and candidates are leads for a maintainer to check; they are not coverage. Missing rows need upstream research (see the \`/package-coverage\` flow)._`;
   return out;
 }
 
