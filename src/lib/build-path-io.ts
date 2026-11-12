@@ -504,10 +504,12 @@ export function createWorkspace(
         const names = new Set<string>();
         for (const l of layers)
           for (const rel of filesOf(l)) {
-            // A repository can hold the layer in a subdirectory, so the
-            // directory is matched from its recipes-<kind> segment on.
+            // Exactly this layer and this directory: the changed path names it
+            // from the workspace root (`<layer>/<dir>`) or from the layer
+            // repository (`<dir>`, which holds a layer kept in a subdirectory).
+            // A same-named directory of another layer is another recipe set.
             const d = dirname(rel);
-            if (d !== recipeDir && !d.endsWith(`/${recipeDir}`)) continue;
+            if (d !== recipeDir && `${l.name}/${d}` !== recipeDir) continue;
             const name = recipeOfPath(rel);
             if (name) names.add(name);
           }
