@@ -97,7 +97,7 @@ export const feedSummarySchema = z
       insecure: z.string().optional(),
     }),
     snapshots: z
-      .record(z.string())
+      .record(z.string(), z.string())
       .describe("Per-target lock-file snapshot pins that were applied."),
     notes: z.array(z.string()),
     feeds: z
