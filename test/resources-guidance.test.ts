@@ -92,5 +92,10 @@ test("feeds resource has the distro feeds list form and the overlay recipe", asy
   assert.match(text, /distro\.feeds: \[/);
   assert.match(text, /Using a locally built package/);
   assert.match(text, /sdk package/);
-  assert.match(text, /not yet verified/i);
+  // The recipe states what a run confirmed and what it did not, and tells the
+  // reader to unlock after the local feed changes.
+  assert.match(text, /Confirmed with a local `path:` feed/);
+  assert.match(text, /Not\s+confirmed/);
+  assert.match(text, /avocado unlock/);
+  assert.doesNotMatch(text, /not yet verified/i);
 });
