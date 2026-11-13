@@ -251,8 +251,8 @@ export function registerBuildPathTool(
         unmapped: z.array(z.string()),
         feeds: z.array(feedSchema),
         cache_keys: z.object({
-          published: z.record(z.string()),
-          local: z.record(z.string()),
+          published: z.record(z.string(), z.string()),
+          local: z.record(z.string(), z.string()),
         }),
         warnings: z.array(z.string()),
         target: z.string(),
