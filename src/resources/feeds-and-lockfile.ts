@@ -93,8 +93,8 @@ The feed grammar belongs to the CLI; the steps here only use what it accepts.
    \`package\` block). To package an extension sysroot, run
    \`avocado ext package <name> --out-dir <dir>\`. Without an output
    directory the RPM stays inside the container.
-2. Put the RPM in a directory and make it an RPM repository (see the
-   unverified note below).
+2. Put the RPM in a directory and make it an RPM repository, for example
+   with \`createrepo_c <dir>\` (see what was confirmed below).
 3. Declare the directory under \`repos:\` with \`path:\`.
 4. List it before the distro feed, as \`distro.feeds: [local-rpms, avocado]\`.
    The first feed that has the package name wins.
@@ -110,11 +110,18 @@ repos:
     path: rpms
 \`\`\`
 
-Not yet verified: the repository metadata step (\`createrepo_c <dir>\`) and
-installing a local RPM through a \`path:\` feed have not been confirmed by a
-full install, build and provision run. Treat step 2 and the install result as
-unconfirmed until they are, and check the \`avocado install\` output for the
-package before relying on it.
+A locked package keeps its locked version. After the local feed changes, run
+\`avocado unlock\` (or \`avocado unlock --extension <name>\` for one extension)
+so \`avocado install\` selects the new RPM; a locked package that left the feed
+makes \`avocado install\` fail with "Unable to find a match".
+
+Confirmed with a local \`path:\` feed on qemux86-64: a package that only the local
+feed carried installed through the feed, and \`avocado install\`,
+\`avocado build\` and \`avocado provision --profile img\` completed. Not
+confirmed: a local RPM replacing a package the distro feed also carries, and
+indexing a hand-made directory with \`createrepo_c <dir>\` (the feed in that run
+was indexed by bakar). Check the \`avocado install\` output for the package
+before relying on a replacement.
 
 ### Private \`org:\` feeds
 
