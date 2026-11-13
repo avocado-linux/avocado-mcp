@@ -12,13 +12,31 @@ import { RepoClient, validateFeed } from "../../src/lib/repo-client.js";
 
 const cfg = (y: string) => parse(y);
 
-test("defaults to repo.avocadolinux.org 2024/edge with no project", () => {
+test("defaults to repo.avocadolinux.org 2026/edge with no project", () => {
   const f = resolveFeed({ env: {} });
   assert.equal(f.baseUrl, "https://repo.avocadolinux.org");
-  assert.equal(f.releasever, "2024/edge");
-  assert.equal(f.manifestPath, "2024/edge");
+  assert.equal(f.releasever, "2026/edge");
+  assert.equal(f.manifestPath, "2026/edge");
   assert.equal(f.sources.repoUrl, "default");
   assert.deepEqual(f.notes, []);
+});
+
+test("channel only uses default release 2026", () => {
+  const f = resolveFeed({
+    env: {},
+    config: cfg("distro:\n  channel: apollo\n"),
+  });
+  assert.equal(f.releasever, "2026/apollo");
+  assert.equal(f.release, "2026");
+});
+
+test("project release wins", () => {
+  const f = resolveFeed({
+    env: {},
+    config: cfg("distro:\n  release: 2024\n  channel: edge\n"),
+  });
+  assert.equal(f.releasever, "2024/edge");
+  assert.equal(f.release, "2024");
 });
 
 test("reads distro.release (int) and channel from avocado.yaml", () => {

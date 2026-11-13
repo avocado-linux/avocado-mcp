@@ -19,7 +19,7 @@ The MCP wraps two repos directly (\`references\` and the docs site). The Avocado
 
 ## What to rebuild: the CLI or Yocto
 
-\`meta-avocado\`, the \`bsp-*\` repos and \`vendor-openembedded-core\` are the Yocto / OpenEmbedded layers that build the packages in the Avocado feed. The CLI consumes RPMs from the feed. It does not produce them. Most work never touches Yocto. Before you propose a Yocto rebuild, find the change in this table (from the docs guide "Modifying OS components"):
+\`meta-avocado\`, the \`bsp-*\` repos and \`vendor-openembedded-core\` are the Yocto / OpenEmbedded layers that build the packages in the Avocado feed. The CLI installs RPMs from the feed, and the SDK can package your own build output into RPMs (\`avocado sdk compile\` then \`avocado sdk package\`, or \`avocado ext package\`). Most work never touches Yocto. Before you propose a Yocto rebuild, find the change in this table (from the docs guide "Modifying OS components"):
 
 | The user changed | Yocto needed | How |
 |---|---|---|
@@ -30,7 +30,7 @@ The MCP wraps two repos directly (\`references\` and the docs site). The Avocado
 | The kernel command line (\`isolcpus\`, \`earlycon\`, and so on) | No | \`kernel.cmdline\` replaces the board command line. \`kernel.cmdline_extra\` appends to it. Use one of the two, not both. A runtime value wins over the top-level value. Then \`avocado build\`. |
 | The **source** of a packaged component | **Yes** | \`bitbake <recipe>\` in a \`meta-avocado\` checkout |
 | A recipe, bbappend, packagegroup, or machine config | **Yes** | \`bitbake\` |
-| Kernel configuration or an in-tree driver | **Yes** | The "Custom kernel" guide |
+| Kernel configuration or an in-tree driver | No | \`kernel.compile\` in \`avocado.yaml\`: the SDK builds a custom kernel. Follow the "Custom kernel" guide. |
 
 The rows marked "No" are the common case. The CLI covers them. Do not send the user to Yocto for these.
 
@@ -167,7 +167,7 @@ gh api orgs/avocado-linux/repos --paginate --jq '.[] | select(.name | startswith
 
 Per-target BSP repos. Each one is a **meta-layer used internally to build** the kernel binaries, device-tree blobs, bootloader bits, and \`avocado-bsp-<target>\` packages that ship in the feed. **~29 repos, naming pattern \`bsp-<target-slug>\`.**
 
-Users consume the already-built BSP package from the feed through \`avocado-bsp-<target>\` in their \`avocado.yaml\`. A kernel command line change needs only \`kernel.cmdline\` or \`kernel.cmdline_extra\`. A kernel configuration change needs Yocto: see the "Custom kernel" guide and the "What to rebuild" table above.
+Users consume the already-built BSP package from the feed through \`avocado-bsp-<target>\` in their \`avocado.yaml\`. A kernel command line change needs only \`kernel.cmdline\` or \`kernel.cmdline_extra\`. A kernel configuration change needs no Yocto: \`kernel.compile\` builds a custom kernel in the SDK (see the "Custom kernel" guide and the "What to rebuild" table above). Rebuilding the stock kernel of the base OS in place stays a Yocto change.
 
 The slug matches the canonical target slug (e.g. \`bsp-raspberrypi4\` → target \`raspberrypi4\`).
 
@@ -177,7 +177,7 @@ Browse:
 gh api orgs/avocado-linux/repos --paginate --jq '.[] | select(.name | startswith("bsp-")) | .name'
 \`\`\`
 
-**Consult when** the user needs an *explanation* of target-specific behavior, for example "why does my rpi4 boot with this kernel cmdline?", "what BSP packages does \`jetson-orin-nano-devkit\` ship?", or "what's enabled in the default kernel config?". For a change, use the "What to rebuild" table above first.
+**Consult when** the user needs an *explanation* of target-specific behavior, for example "why does my rpi4 boot with this kernel cmdline?", "what BSP packages does \`jetson-orin-nano\` ship?", or "what's enabled in the default kernel config?". For a change, use the "What to rebuild" table above first.
 
 ### Other
 

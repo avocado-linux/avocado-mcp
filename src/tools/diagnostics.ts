@@ -144,7 +144,7 @@ export function registerDiagnosticsTools(
           .array(z.string())
           .optional()
           .describe(
-            "Target(s) the user was building for (e.g. ['jetson-orin-nano-devkit']). Strongly recommended. Enables a package lookup on the project's configured feeds plus every live stream that carries the target, which often surfaces the actual cause when patterns alone are inconclusive.",
+            "Target(s) the user was building for (e.g. ['jetson-orin-nano']). Strongly recommended. Enables a package lookup on the project's configured feeds plus every live stream that carries the target, which often surfaces the actual cause when patterns alone are inconclusive.",
           ),
         ...feedArgsShape,
       },

@@ -19,7 +19,7 @@ The split of labor: **you** read the input, reason about names, and write the ma
    - A **Dockerfile** (path or pasted contents).
    - A **CycloneDX SBOM** (JSON; the default from \`syft\`, \`trivy\`, \`docker sbom\`).
    - An **SPDX SBOM** (JSON or tag-value).
-2. **A hardware target + feed stream** — a target slug (e.g. \`jetson-orin-nano-devkit\`) AND the release + channel to evaluate against. The feed is per-(target, release, channel), so coverage is meaningless without all three. Resolving the stream is **Step 0** below — do it before anything else.
+2. **A hardware target + feed stream** — a target slug (e.g. \`jetson-orin-nano\`) AND the release + channel to evaluate against. The feed is per-(target, release, channel), so coverage is meaningless without all three. Resolving the stream is **Step 0** below — do it before anything else.
 
 If the dependency source is missing, stop and ask. Don't analyze against a default target.
 
@@ -82,7 +82,7 @@ Read \`packages[]\`. Use \`name\`, \`versionInfo\`, \`downloadLocation\`/\`exter
 
 ## Step 2 — Batch-check the whole list against the feed
 
-Use the **\`check-package-coverage\`** tool — one call for the entire dependency list, not one \`search-packages\` per dependency. It warms the target's feed once and returns a present/missing verdict, a confidence tier, the best feed match, and near-miss alternatives for every dependency, plus an overall coverage summary.
+Use the **\`check-package-coverage\`** tool — one call for the entire dependency list, not one \`search-packages\` per dependency. It warms the target's feed once and returns, for every dependency, an exact-name verdict, the best match, and labelled near matches and candidates, plus an overall coverage summary.
 
 \`\`\`
 check-package-coverage({
@@ -108,17 +108,17 @@ check-package-coverage({
 | \`<x>-bin\` / \`<x>-utils\` | \`<x>\` |
 | A provider vs the thing (\`default-jre\` → \`openjdk\`) | the concrete implementation name |
 
-Include a keyword form too — the feed search matches summaries, so \`mqtt\` can surface \`paho-mqtt\` even when the source name was \`libmosquitto1\`.
+Include a keyword form too — the feed search matches summaries, so \`mqtt\` can surface \`paho-mqtt\` as a candidate even when the source name was \`libmosquitto1\`. A candidate is a lead to confirm, not a covered row.
 
 ### What the tool returns
 
 Each dependency comes back with:
 
-- \`status\`: \`present\` (any hit), \`missing\` (no hit across all its queries), or \`not-checked\` (no hit, but the project enables a feed the MCP can't read, such as a private \`org:\` feed). Report \`not-checked\` rows as unknown, not as gaps. They are not confirmed, so they lower the coverage percentage. Matching is **optimistic**: a summary-only hit still counts as present.
-- \`confidence\`: \`exact\` (feed name == query), \`strong\` (name prefix/substring match), or \`fuzzy\` (summary-only hit — optimistically counted, but a maintainer should verify). Carry this straight into the report's Match-confidence column.
-- \`match\`: the best feed package (name + version + repo) for PRESENT rows.
-- \`alternatives\`: near-miss package names — useful context for the maintainer and for spotting a better match.
-- \`summary\`: totals, \`coveragePercent\` (present / total, the share confirmed present), \`notChecked\`, and the exact/strong/fuzzy breakdown. This feeds the report's headline.
+- \`status\`: \`present\` (a query equalled a package name exactly), \`missing\` (no exact name across all its queries), or \`not-checked\` (no exact name, but the project enables a feed the MCP can't read, such as a private \`org:\` feed). Report \`not-checked\` rows as unknown, not as gaps. They are not confirmed, so they lower the coverage percentage.
+- \`confidence\`: \`exact\` for every present row, null otherwise. Carry this straight into the report's Match-confidence column.
+- \`match\` and \`matchedQuery\`: the exact feed package (name + version + repo) and the query that matched it, for PRESENT rows.
+- \`alternatives\`: the \`nearMatches\` followed by the \`candidates\`, capped at \`maxAlternatives\`. \`nearMatches\` are names within edit distance 2 of a query (1 for a query of up to 5 characters) or equal to it ignoring case. \`candidates\` are names containing a query or whose summary mentions it. Each is labelled "near match, not the requested package" or "candidate, not the requested package". They are leads for the maintainer, not coverage.
+- \`summary\`: totals, \`coveragePercent\` (present / total, the share confirmed present), \`notChecked\`, \`exact\` (dependencies matched by exact name) and \`candidates\` (missing dependencies that have at least one near match or candidate to check). This feeds the report's headline.
 
 If \`targetAvailable\` comes back **false**, the target isn't in that stream (the Thor-on-2024 case). Go back to Step 0, pick the release that supports it, and re-run.
 
@@ -130,7 +130,7 @@ This is one tool call regardless of list size, and the feed is cached process-wi
 
 ## Step 3 — Research every MISSING dependency on the open web
 
-For each package marked MISSING, do light web research so the maintainer gets a self-contained ticket. Use \`WebSearch\` / \`WebFetch\` (and \`gh\`/\`curl\` per \`avocado://skills/upstream-sources\` if it's already an avocado-linux thing).
+For each package marked MISSING, do light web research so the maintainer gets a self-contained write-up. Use \`WebSearch\` / \`WebFetch\` (and \`gh\`/\`curl\` per \`avocado://skills/upstream-sources\` if it's already an avocado-linux thing).
 
 > **If web-research tools aren't available in this session** (no \`WebSearch\`/\`WebFetch\`, no network for \`gh\`/\`curl\`), do NOT stall and do NOT invent links. Still produce the report — list each missing package by name, note in its subsection that _"upstream research was not performed (no web access in this session)"_, and add a top-level note in the report so the maintainer knows the gap detail needs a follow-up pass.
 
@@ -140,7 +140,7 @@ Capture, per missing package:
 - **Canonical upstream source** — the GitHub/GitLab repo URL (primary link). Add a second link where useful: the project homepage, the PyPI/npm/crates.io page, or the Debian/Fedora package page.
 - **License** (SPDX id if determinable) — maintainers need this for feed inclusion.
 - **Latest / relevant version.**
-- **Packaging signal** — is there an existing OpenEmbedded/Yocto recipe (e.g. in \`openembedded-core\`, \`meta-openembedded\`) or a Fedora/RPM spec? A "recipe already exists upstream" note dramatically lowers the cost of adding it. Note native-extension/build complexity if obvious (pure-Python vs C-extension, etc.).
+- **Packaging signal** — the first remedy for a missing dependency is the SDK route: build it in the SDK with \`avocado sdk compile\` then \`avocado sdk package\`, or with \`avocado ext package\`, and use the local feed recipe in \`avocado://skills/feeds-and-lockfile\`. Only after that, note whether a feed request or an OpenEmbedded/Yocto recipe makes sense (e.g. an existing recipe in \`openembedded-core\` or \`meta-openembedded\`, or a Fedora/RPM spec); a "recipe already exists upstream" note dramatically lowers the cost of adding it to the feed. Note native-extension/build complexity if obvious (pure-Python vs C-extension, etc.).
 
 Prefer 1–3 high-quality links per package over a link dump. If a package is truly obscure and you can't find a canonical source, say so explicitly rather than inventing a link.
 
@@ -163,22 +163,23 @@ Write the report to the current working directory (unless the user names another
 ## Summary
 
 - **Total runtime dependencies analyzed:** N
-- **Present in feed:** X (Y%) — of which E exact, S strong, F fuzzy/unverified
-- **Missing from feed:** Z
+- **Present in feed:** X (Y%) — all by exact package name (E exact)
+- **Missing from feed:** Z — of which C have candidates or near matches to confirm
 - **Not checked:** U (no match in the feeds read, and K feeds were not read)
 - **Coverage: Y% confirmed** (X/N present, U not checked)  ← headline number
 
 <One short paragraph: overall migration readiness, the biggest gaps, and any
-caveats about fuzzy matches the maintainer should verify. If any 'present'
-count is fuzzy, say so here in plain terms — e.g. "82% present, but 3 of those
-are fuzzy matches a maintainer should confirm before relying on the number.">
+caveats about candidates the maintainer should confirm. Candidates and near
+matches are leads, not coverage, so say so in plain terms — e.g. "82% present
+by exact name; 3 of the missing packages have candidates a maintainer should
+confirm before the row is upgraded.">
 
 ## Coverage detail
 
 | # | Dependency | Ecosystem | Status | Feed package | Version | Match confidence | Notes |
 |---|---|---|---|---|---|---|---|
 | 1 | openssl | system-apt | ✅ Present | openssl | 3.x | exact | |
-| 2 | paho-mqtt | pip | ✅ Present | python3-paho-mqtt | ... | strong | pip name → python3- prefix |
+| 2 | paho-mqtt | pip | ✅ Present | python3-paho-mqtt | ... | exact | matched on the query python3-paho-mqtt |
 | 3 | libfoobar | system-apt | ❌ Missing | — | — | — | see gap #1 |
 ...
 
@@ -208,9 +209,9 @@ Compute coverage as \`present / total\` over the **runtime** table, rounded to a
 
 ## Guardrails
 
-- **Never fabricate a feed match or an upstream link.** If a lookup is inconclusive, mark it fuzzy (with a note) or missing — don't upgrade a guess to "present" without a plausible hit, and don't invent GitHub URLs. A maintainer acts on this report; a made-up link costs them real time.
+- **Never fabricate a feed match or an upstream link.** If a lookup is inconclusive, mark the row missing and list the candidates or near matches as leads (with a note) — don't upgrade a guess to "present", and don't invent GitHub URLs. A maintainer acts on this report; a made-up link costs them real time.
 - **One target per report.** If the user runs multiple boards, produce one report each (the feed differs per target).
 - **Runtime-only by default.** Keep build-time deps out of the coverage denominator unless the user asks; if included, they go in their own table.
-- **Optimistic ≠ careless.** Optimistic matching means a plausible hit counts as covered — it does **not** mean skipping the normalization variants. Always try them before declaring missing, and always stamp a confidence so the optimism is auditable.
+- **Coverage counts exact names.** Candidates and near matches are leads a maintainer confirms before a row is upgraded; they never raise the percentage. Always try the normalization variants in \`queries\` before declaring a dependency missing, and keep the confidence column honest.
 - **This is analysis, not modification.** The report is a shareable artifact. Don't edit the user's \`avocado.yaml\` or install anything as part of coverage analysis — that's a separate follow-up once the maintainer has closed the gaps. (See \`avocado://skills/app-development\` for the feed-first add-a-library workflow once coverage is understood.)
 `;
