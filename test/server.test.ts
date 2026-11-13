@@ -16,6 +16,7 @@ import { join, relative } from "path";
 import { RepoClient } from "../src/lib/repo-client.js";
 import { registerConfigTools } from "../src/tools/config.js";
 import { registerPackageTools } from "../src/tools/packages.js";
+import { registerBuildPathTool } from "../src/tools/build-path.js";
 import { registerDiscoveryTools } from "../src/tools/discovery.js";
 import { registerReferenceTools } from "../src/tools/references.js";
 import { registerProjectTools } from "../src/tools/project.js";
@@ -42,6 +43,7 @@ async function connect(repoClient = new RepoClient()) {
   registerReferenceTools(server);
   registerConfigTools(server);
   registerPackageTools(server, repoClient);
+  registerBuildPathTool(server, repoClient);
   registerProjectTools(server, repoClient);
   registerDiagnosticsTools(server, repoClient);
   registerDebuggingTools(server);
@@ -55,6 +57,15 @@ async function connect(repoClient = new RepoClient()) {
   return { client, server };
 }
 
+test("check-build-path is registered", async () => {
+  const { client } = await connect();
+  const { tools } = await client.listTools();
+  assert.ok(
+    tools.some((t) => t.name === "check-build-path"),
+    "check-build-path missing from listTools",
+  );
+});
+
 test("every tool/resource/prompt registers without collision", async () => {
   const { client } = await connect();
   const { tools } = await client.listTools();
@@ -63,7 +74,7 @@ test("every tool/resource/prompt registers without collision", async () => {
   // Exact counts, not floors: a `>=` below actual lets a small drop pass
   // silently. Bump these deliberately when adding a tool/resource/prompt —
   // the change is the point where you confirm the registration is intended.
-  assert.equal(names.length, 28, `tool count changed: ${names.join(", ")}`);
+  assert.equal(names.length, 29, `tool count changed: ${names.join(", ")}`);
   console.log(`  ${names.length} tools:`, names.join(", "));
 
   const { resources } = await client.listResources();

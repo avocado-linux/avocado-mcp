@@ -1,5 +1,6 @@
 import { test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { gzipSync } from "node:zlib";
 import {
   createServer,
@@ -395,4 +396,166 @@ test("default feed matches resolved default", () => {
   assert.equal(DEFAULT_FEED.baseUrl, f.baseUrl);
   assert.equal(DEFAULT_FEED.releasever, f.releasever);
   assert.equal(DEFAULT_FEED.manifestPath, f.manifestPath);
+});
+
+const HEX_A = "a".repeat(40);
+const HEX_B = "b".repeat(40);
+
+/** Serve fixed bodies by URL suffix; anything else is a 404. */
+function stubFiles(files: Record<string, string | Buffer>) {
+  const calls: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    calls.push(url);
+    for (const [suffix, payload] of Object.entries(files)) {
+      if (url.endsWith(suffix))
+        return new Response(new Uint8Array(Buffer.from(payload)), {
+          status: 200,
+        });
+    }
+    return new Response("nope", { status: 404 });
+  }) as typeof fetch;
+  return calls;
+}
+
+const SNAP_FEED = {
+  baseUrl: "https://feed.test",
+  releasever: "2026/edge/snapshots/140",
+  manifestPath: "2026/edge",
+};
+
+test("package parsing carries epoch and sourcerpm as PackageInfo", async () => {
+  const primary = `<metadata xmlns:rpm="http://rpm">
+  <package type="rpm">
+    <name>curl</name><arch>aarch64</arch>
+    <version epoch="2" ver="8.5.0" rel="r1"/>
+    <summary>s</summary><description/>
+    <location href="curl.rpm"/>
+    <format><rpm:sourcerpm>curl-8.5.0-r1.src.rpm</rpm:sourcerpm></format>
+  </package>
+  <package type="rpm">
+    <name>noepoch</name><arch>noarch</arch>
+    <version ver="1.0" rel="r0"/>
+    <summary>s</summary><description/>
+    <location href="n.rpm"/>
+  </package>
+</metadata>`;
+  stubFeed({ primaryXml: primary });
+  const infos = await new RepoClient().fetchRepoPackageInfos(
+    DEFAULT_FEED,
+    "target/qemux86-64",
+  );
+  assert.deepEqual(infos, [
+    {
+      name: "curl",
+      epoch: 2,
+      version: "8.5.0",
+      release: "r1",
+      sourcerpm: "curl-8.5.0-r1.src.rpm",
+    },
+    { name: "noepoch", epoch: 0, version: "1.0", release: "r0", sourcerpm: "" },
+  ]);
+});
+
+test("repomd digest makes one request, for repomd.xml only", async () => {
+  const repomd = `<repomd><data type="primary"><location href="repodata/p.xml.gz"/></data></repomd>`;
+  const calls = stubFiles({ "repodata/repomd.xml": repomd });
+  const d = await new RepoClient().fetchRepomdDigest(
+    DEFAULT_FEED,
+    "target/qemux86-64",
+  );
+  assert.equal(d, createHash("sha256").update(repomd).digest("hex"));
+  assert.equal(calls.length, 1);
+  assert.ok(calls[0].endsWith("target/qemux86-64/repodata/repomd.xml"));
+  await assert.rejects(
+    new RepoClient().fetchRepomdDigest(DEFAULT_FEED, "../x"),
+    /Invalid repo path/,
+  );
+});
+
+test("snapshot pointer is read from the channel head per machine", async () => {
+  const calls = stubFiles({
+    "target/qemux86-64/snapshots-latest.json": JSON.stringify({ id: "149" }),
+  });
+  const id = await new RepoClient().fetchSnapshotPointer(
+    SNAP_FEED,
+    "qemux86-64",
+  );
+  assert.equal(id, "149");
+  assert.equal(
+    calls[0],
+    "https://feed.test/2026/edge/target/qemux86-64/snapshots-latest.json",
+  );
+});
+
+test("snapshot pointer is null when absent or naming an unsafe id", async () => {
+  stubFiles({});
+  assert.equal(
+    await new RepoClient().fetchSnapshotPointer(SNAP_FEED, "qemux86-64"),
+    null,
+  );
+  stubFiles({
+    "snapshots-latest.json": JSON.stringify({ id: "../evil" }),
+  });
+  assert.equal(
+    await new RepoClient().fetchSnapshotPointer(SNAP_FEED, "qemux86-64"),
+    null,
+  );
+});
+
+test("build json with a 40-hex commit and layer map is returned", async () => {
+  const calls = stubFiles({
+    "snapshots/140/build.json": JSON.stringify({
+      schema_version: 1,
+      branch: "main",
+      commit: HEX_A,
+      layers: { "meta-avocado": HEX_A, "meta-x": HEX_B },
+      run_id: "42",
+    }),
+  });
+  const r = await new RepoClient().fetchBuildManifest(SNAP_FEED, "140");
+  assert.deepEqual(r, {
+    kind: "manifest",
+    commit: HEX_A,
+    layers: { "meta-avocado": HEX_A, "meta-x": HEX_B },
+  });
+  assert.equal(
+    calls[0],
+    "https://feed.test/2026/edge/snapshots/140/build.json",
+  );
+});
+
+test("missing build json is no cache key", async () => {
+  stubFiles({});
+  const r = await new RepoClient().fetchBuildManifest(SNAP_FEED, "140");
+  assert.equal(r.kind, "no-cache-key");
+});
+
+test("malformed build json is no cache key and never throws", async () => {
+  for (const body of [
+    "not json",
+    "[]",
+    JSON.stringify({ commit: "main", layers: {} }),
+    JSON.stringify({ commit: HEX_A.toUpperCase(), layers: {} }),
+    JSON.stringify({ commit: HEX_A }),
+    JSON.stringify({ commit: HEX_A, layers: { l: "short" } }),
+  ]) {
+    stubFiles({ "build.json": body });
+    const r = await new RepoClient().fetchBuildManifest(SNAP_FEED, "140");
+    assert.equal(r.kind, "no-cache-key", body);
+  }
+});
+
+test("empty layer map is still a manifest", async () => {
+  stubFiles({ "build.json": JSON.stringify({ commit: HEX_A, layers: {} }) });
+  const r = await new RepoClient().fetchBuildManifest(SNAP_FEED, "140");
+  assert.deepEqual(r, { kind: "manifest", commit: HEX_A, layers: {} });
+});
+
+test("build json transport failure is unreachable, not thrown", async () => {
+  globalThis.fetch = (async () => {
+    throw new Error("connect ECONNREFUSED");
+  }) as typeof fetch;
+  const r = await new RepoClient().fetchBuildManifest(SNAP_FEED, "140");
+  assert.equal(r.kind, "unreachable");
 });

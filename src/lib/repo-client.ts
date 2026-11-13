@@ -30,6 +30,7 @@
  */
 
 import { createHash } from "crypto";
+import type { PackageInfo } from "./build-path.js";
 
 export interface FeedPackage {
   name: string;
@@ -43,7 +44,21 @@ export interface FeedPackage {
   href: string;
   /** Name of the feed that served the package (`avocado` for the distro feed). */
   feed?: string;
+  /** RPM epoch from `<version epoch=>`; 0 when the attribute is absent. */
+  epoch?: number;
+  /** Source package file name from `<rpm:sourcerpm>`; empty when absent. */
+  sourcerpm?: string;
 }
+
+/**
+ * Result of reading a snapshot's `build.json`. `no-cache-key` covers a
+ * missing, malformed or non-40-hex-commit manifest and never throws;
+ * `unreachable` means the remote could not be read at all.
+ */
+export type BuildManifestResult =
+  | { kind: "manifest"; commit: string; layers: Record<string, string> }
+  | { kind: "no-cache-key"; reason: string }
+  | { kind: "unreachable"; reason: string };
 
 export type TargetManifest = Record<string, string[]>;
 
@@ -141,6 +156,11 @@ const SAFE_HREF_RE = /^repodata\/[A-Za-z0-9][A-Za-z0-9._-]*\.xml\.gz$/;
 const MAX_MANIFEST_BYTES = 1 * 1024 * 1024; // 1 MB
 const MAX_REPOMD_BYTES = 1 * 1024 * 1024; // 1 MB
 const MAX_PRIMARY_DECOMPRESSED_BYTES = 256 * 1024 * 1024; // 256 MB safety net
+const MAX_POINTER_BYTES = 64 * 1024;
+const MAX_BUILD_JSON_BYTES = 1 * 1024 * 1024;
+const SAFE_FILE_PATH_RE =
+  /^[A-Za-z0-9][A-Za-z0-9._-]*(\/[A-Za-z0-9][A-Za-z0-9._-]*){0,8}$/;
+const HEX40_RE = /^[0-9a-f]{40}$/;
 const MAX_SEGMENT_LEN = 64;
 const MAX_PATH_LEN = 128;
 
@@ -408,6 +428,24 @@ async function readBounded(
   return out;
 }
 
+/** GET a feed file and return its raw body, bounded by `maxBytes`. */
+async function fetchBoundedBytes(
+  url: string,
+  conn: FeedConn,
+  maxBytes: number,
+  label: string,
+  timeoutMs: number,
+): Promise<Uint8Array> {
+  return withDeadline(url, conn, timeoutMs, async (signal) => {
+    const res = await feedFetch(url, conn, signal);
+    if (!res.ok) throw new FeedHttpError(url, res.status, conn.masks);
+    if (!res.body) {
+      throw new Error(`${shownUrl(url, conn.masks)} returned no body`);
+    }
+    return readBounded(res.body, maxBytes, label, signal);
+  });
+}
+
 /** GET a feed file and return its body as text, or gunzipped text. */
 async function fetchBoundedText(
   url: string,
@@ -484,6 +522,10 @@ function parsePrimaryXml(
     const version = versionMatch?.[1] ?? "";
     const release = versionMatch?.[2] ?? "";
     const href = inner.match(/<location\s+href="([^"]+)"/)?.[1] ?? "";
+    const epochRaw = inner.match(/<version[^>]*\bepoch="(\d+)"/)?.[1];
+    const sourcerpm = unescapeXml(
+      inner.match(/<rpm:sourcerpm>([^<]*)<\/rpm:sourcerpm>/)?.[1] ?? "",
+    );
     out.push({
       name,
       summary,
@@ -494,6 +536,8 @@ function parsePrimaryXml(
       repo,
       href,
       feed,
+      epoch: epochRaw === undefined ? 0 : Number(epochRaw),
+      sourcerpm,
     });
   }
   return out;
@@ -535,6 +579,17 @@ async function readLocalRepo(
     `primary.xml (${feed})`,
   );
   return parsePrimaryXml(xml, feed, feed);
+}
+
+/** The package shape the build-path verdict classifier consumes. */
+export function toPackageInfo(p: FeedPackage): PackageInfo {
+  return {
+    name: p.name,
+    epoch: p.epoch ?? 0,
+    version: p.version,
+    release: p.release,
+    sourcerpm: p.sourcerpm ?? "",
+  };
 }
 
 /** A feed for every target, or a per-target resolver (snapshot pins are per target). */
@@ -660,6 +715,139 @@ export class RepoClient {
       name,
       `${feedKey(feed)}::${name}::${repo}`,
     );
+  }
+
+  /** Same as `fetchRepoPackages`, in the shape the verdict classifier takes. */
+  async fetchRepoPackageInfos(
+    feed: FeedSpec,
+    repo: string,
+  ): Promise<PackageInfo[]> {
+    return (await this.fetchRepoPackages(feed, repo)).map(toPackageInfo);
+  }
+
+  private async fetchFeedFileAt(
+    feed: FeedSpec,
+    root: string,
+    path: string,
+    maxBytes: number,
+  ): Promise<Uint8Array> {
+    const base = validateFeed(feed);
+    if (!SAFE_FILE_PATH_RE.test(path) || path.includes("..")) {
+      throw new Error(`Invalid feed file path: ${path}`);
+    }
+    return fetchBoundedBytes(
+      `${base}/${root}/${path}`,
+      feed,
+      maxBytes,
+      path,
+      this.timeoutMs,
+    );
+  }
+
+  /**
+   * SHA-256 of the exact `repomd.xml` bytes of one repo of the feed. One
+   * request; the freshness check of a mirror needs nothing more.
+   */
+  async fetchRepomdDigest(feed: FeedSpec, repo: string): Promise<string> {
+    if (!isSafePath(repo)) throw new Error(`Invalid repo path: ${repo}`);
+    const repomd = await this.fetchFeedFileAt(
+      feed,
+      feed.releasever,
+      `${repo}/repodata/repomd.xml`,
+      MAX_REPOMD_BYTES,
+    );
+    return createHash("sha256").update(repomd).digest("hex");
+  }
+
+  /**
+   * The snapshot id the latest pointer names for one machine, read from the
+   * live channel head (`{manifestPath}/target/<machine>/snapshots-latest.json`).
+   * Null when the pointer is absent, unreadable or names an unsafe id.
+   */
+  async fetchSnapshotPointer(
+    feed: FeedSpec,
+    machine: string,
+  ): Promise<string | null> {
+    if (!isSafeSegment(machine)) return null;
+    try {
+      const bytes = await this.fetchFeedFileAt(
+        feed,
+        feed.manifestPath,
+        `target/${machine}/snapshots-latest.json`,
+        MAX_POINTER_BYTES,
+      );
+      const parsed: unknown = JSON.parse(
+        new TextDecoder("utf-8").decode(bytes),
+      );
+      const id = (parsed as { id?: unknown } | null)?.id;
+      return isSafeSegment(id) ? id : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Read `build.json` at the root of one published snapshot. A missing,
+   * malformed or non-40-hex-commit manifest is `no-cache-key`, never a
+   * thrown error; a transport failure is `unreachable`.
+   */
+  async fetchBuildManifest(
+    feed: FeedSpec,
+    snapshotId: string,
+  ): Promise<BuildManifestResult> {
+    if (!isSafeSegment(snapshotId)) {
+      return { kind: "no-cache-key", reason: "unsafe snapshot id" };
+    }
+    let bytes: Uint8Array;
+    try {
+      bytes = await this.fetchFeedFileAt(
+        feed,
+        feed.manifestPath,
+        `snapshots/${snapshotId}/build.json`,
+        MAX_BUILD_JSON_BYTES,
+      );
+    } catch (e) {
+      if (
+        e instanceof FeedHttpError &&
+        (e.status === 404 || e.status === 410)
+      ) {
+        return { kind: "no-cache-key", reason: "build.json is absent" };
+      }
+      return {
+        kind: "unreachable",
+        reason: maskText(String((e as Error)?.message ?? e), feed.masks),
+      };
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(new TextDecoder("utf-8").decode(bytes));
+    } catch {
+      return { kind: "no-cache-key", reason: "build.json is not valid JSON" };
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return { kind: "no-cache-key", reason: "build.json is not an object" };
+    }
+    const o = parsed as Record<string, unknown>;
+    if (typeof o.commit !== "string" || !HEX40_RE.test(o.commit)) {
+      return {
+        kind: "no-cache-key",
+        reason: "build.json commit is not 40 hexadecimal characters",
+      };
+    }
+    if (!o.layers || typeof o.layers !== "object" || Array.isArray(o.layers)) {
+      return { kind: "no-cache-key", reason: "build.json has no layer map" };
+    }
+    const layers: Record<string, string> = {};
+    for (const [name, commit] of Object.entries(o.layers)) {
+      if (typeof commit !== "string" || !HEX40_RE.test(commit)) {
+        return {
+          kind: "no-cache-key",
+          reason: `build.json layer ${name} commit is not 40 hexadecimal characters`,
+        };
+      }
+      layers[name] = commit;
+    }
+    return { kind: "manifest", commit: o.commit, layers };
   }
 
   /** Fetch + parse one named feed from `repos:`. */
