@@ -63,7 +63,7 @@ test("every tool/resource/prompt registers without collision", async () => {
   // Exact counts, not floors: a `>=` below actual lets a small drop pass
   // silently. Bump these deliberately when adding a tool/resource/prompt —
   // the change is the point where you confirm the registration is intended.
-  assert.equal(names.length, 28, `tool count changed: ${names.join(", ")}`);
+  assert.equal(names.length, 29, `tool count changed: ${names.join(", ")}`);
   console.log(`  ${names.length} tools:`, names.join(", "));
 
   const { resources } = await client.listResources();
