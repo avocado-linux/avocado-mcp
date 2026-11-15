@@ -492,7 +492,7 @@ export function createWorkspace(
         const more =
           changed.length > 10 ? ` and ${changed.length - 10} more` : "";
         note(
-          `${layer.name}: uncommitted changes in ${shown}${more}; commit them, then rebuild with bakar`,
+          `${layer.name}: uncommitted changes in ${shown}${more}; commit them, then rebuild`,
         );
         commit = "";
       }
@@ -735,8 +735,11 @@ export async function loadPublishedState(input: {
     if (b.kind === "manifest") {
       buildManifest = { layers: b.layers };
       commit = b.commit;
-    } else if (b.kind === "unreachable") {
-      manifestDown = true;
+    } else {
+      // A hit needs build.json, so say why it is missing: otherwise the
+      // agent cannot tell a feed that cannot answer from a recipe that moved.
+      warnings.push(`build.json for snapshot ${snapshotId}: ${b.reason}`);
+      if (b.kind === "unreachable") manifestDown = true;
     }
   }
   let reachable = !remoteDown && !manifestDown;
