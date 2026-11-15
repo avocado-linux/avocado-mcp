@@ -443,6 +443,18 @@ export function registerPackageTools(
         .describe(
           "Dependencies where a query equalled a package name exactly.",
         ),
+      strong: z
+        .number()
+        .int()
+        .describe(
+          "Deprecated: always 0. Kept for one release so clients reading it do not see undefined; coverage is exact-only.",
+        ),
+      fuzzy: z
+        .number()
+        .int()
+        .describe(
+          "Deprecated: always 0. Kept for one release so clients reading it do not see undefined; coverage is exact-only.",
+        ),
       candidates: z
         .number()
         .int()
@@ -600,6 +612,8 @@ export function registerPackageTools(
         notChecked: 0,
         coveragePercent: 0,
         exact: 0,
+        strong: 0,
+        fuzzy: 0,
         candidates: 0,
       };
 
@@ -795,6 +809,8 @@ export function registerPackageTools(
             notChecked: notCheckedCount,
             coveragePercent,
             exact: present,
+            strong: 0,
+            fuzzy: 0,
             candidates: results.filter(
               (r) => r.status === "missing" && r.alternatives.length > 0,
             ).length,

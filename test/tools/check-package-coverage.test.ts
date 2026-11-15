@@ -313,6 +313,8 @@ interface Summary {
   notChecked: number;
   coveragePercent: number;
   exact: number;
+  strong: number;
+  fuzzy: number;
   candidates: number;
 }
 
@@ -350,6 +352,22 @@ test("an exact name is covered", async () => {
     assert.equal(summary.exact, 1);
     assert.equal(summary.coveragePercent, 100);
     assert.match(text, /candidate, not the requested package/);
+  });
+});
+
+test("deprecated summary.strong and summary.fuzzy stay at 0", async () => {
+  await withDocsFixture(async () => {
+    const { summary } = await coverage(
+      [pkg("openssl"), pkg("openssl-dev")],
+      [
+        { name: "libssl-dev", queries: ["openssl"] },
+        { name: "libssl", queries: ["openssl-d"] },
+      ],
+    );
+    assert.equal(summary.present, 1);
+    assert.equal(summary.exact, summary.present);
+    assert.equal(summary.strong, 0);
+    assert.equal(summary.fuzzy, 0);
   });
 });
 
