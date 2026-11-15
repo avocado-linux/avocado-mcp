@@ -93,10 +93,15 @@ test("feeds resource has the distro feeds list form and the overlay recipe", asy
   assert.match(text, /distro\.feeds: \[/);
   assert.match(text, /Using a locally built package/);
   assert.match(text, /sdk package/);
-  // The recipe states what a run confirmed and what it did not, and tells the
-  // reader to unlock after the local feed changes.
-  assert.match(text, /Confirmed with a local `path:` feed/);
-  assert.match(text, /Not\s+confirmed/);
+  // The recipe keeps the caveat that a local RPM replacing a distro-feed
+  // package is unconfirmed, carries no test-run log or bakar mention, and
+  // tells the reader to unlock after the local feed changes.
+  assert.match(
+    text,
+    /replacing a package the distro feed also carries is not\s+confirmed/,
+  );
+  assert.doesNotMatch(text, /Confirmed with a local `path:` feed/);
+  assert.doesNotMatch(text, /bakar/i);
   assert.match(text, /avocado unlock/);
   assert.doesNotMatch(text, /not yet verified/i);
 });
