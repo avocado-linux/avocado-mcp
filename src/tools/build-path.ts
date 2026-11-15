@@ -202,10 +202,15 @@ const feedSchema = z.object({
   commit: z.string().nullable(),
 });
 
+/** The tool needs a build manifest the feed does not publish yet: opt in. */
+export const BUILD_PATH_ENV = "AVOCADO_MCP_BUILD_PATH";
+
 export function registerBuildPathTool(
   server: McpServer,
   repoClient: RepoClient,
+  vars: Record<string, string | undefined> = process.env,
 ): void {
+  if (vars[BUILD_PATH_ENV] !== "1") return;
   server.registerTool(
     "check-build-path",
     {

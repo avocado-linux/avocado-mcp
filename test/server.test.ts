@@ -35,7 +35,10 @@ import { fakeAvocado, fakeCli, setReport } from "./lib/fake-cli.js";
 // A fake CLI for the schema and validation. The CLI tests what it reports.
 process.env.AVOCADO_BINARY = fakeAvocado();
 
-async function connect(repoClient = new RepoClient()) {
+async function connect(
+  repoClient = new RepoClient(),
+  vars: Record<string, string | undefined> = {},
+) {
   const server = new McpServer({ name: "avocado-os", version: "test" });
   registerSkillResources(server);
   registerPrompts(server);
@@ -43,7 +46,7 @@ async function connect(repoClient = new RepoClient()) {
   registerReferenceTools(server);
   registerConfigTools(server);
   registerPackageTools(server, repoClient);
-  registerBuildPathTool(server, repoClient);
+  registerBuildPathTool(server, repoClient, vars);
   registerProjectTools(server, repoClient);
   registerDiagnosticsTools(server, repoClient);
   registerDebuggingTools(server);
@@ -57,13 +60,30 @@ async function connect(repoClient = new RepoClient()) {
   return { client, server };
 }
 
-test("check-build-path is registered", async () => {
-  const { client } = await connect();
+test("check-build-path is registered with AVOCADO_MCP_BUILD_PATH=1", async () => {
+  const { client } = await connect(new RepoClient(), {
+    AVOCADO_MCP_BUILD_PATH: "1",
+  });
   const { tools } = await client.listTools();
   assert.ok(
     tools.some((t) => t.name === "check-build-path"),
     "check-build-path missing from listTools",
   );
+});
+
+test("check-build-path is absent without AVOCADO_MCP_BUILD_PATH=1", async () => {
+  for (const vars of [
+    {},
+    { AVOCADO_MCP_BUILD_PATH: "0" },
+    { AVOCADO_MCP_BUILD_PATH: "" },
+  ]) {
+    const { client } = await connect(new RepoClient(), vars);
+    const { tools } = await client.listTools();
+    assert.ok(
+      !tools.some((t) => t.name === "check-build-path"),
+      `check-build-path listed for ${JSON.stringify(vars)}`,
+    );
+  }
 });
 
 test("every tool/resource/prompt registers without collision", async () => {
@@ -74,7 +94,7 @@ test("every tool/resource/prompt registers without collision", async () => {
   // Exact counts, not floors: a `>=` below actual lets a small drop pass
   // silently. Bump these deliberately when adding a tool/resource/prompt —
   // the change is the point where you confirm the registration is intended.
-  assert.equal(names.length, 29, `tool count changed: ${names.join(", ")}`);
+  assert.equal(names.length, 28, `tool count changed: ${names.join(", ")}`);
   console.log(`  ${names.length} tools:`, names.join(", "));
 
   const { resources } = await client.listResources();
