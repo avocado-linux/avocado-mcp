@@ -86,6 +86,18 @@ export interface Workspace {
    * failure or an object the clone lacks).
    */
   isAncestor(a: string, b: string): boolean | null;
+  /**
+   * True when the recipe's files in every workspace layer that
+   * `layerCommits` names (layer name to commit) are the same at that commit
+   * and at the workspace HEAD, deletions included; false when any differs,
+   * null when git could not say. An ancestor test cannot see a `.bbappend`
+   * removed by a commit, nor a published commit that is newer than the
+   * workspace and changed the recipe.
+   */
+  unchangedSince(
+    recipe: string,
+    layerCommits: Record<string, string>,
+  ): boolean | null;
 }
 
 export interface PublishedState {
@@ -583,6 +595,11 @@ function publishedRule(
       return miss("no-cache-key", names);
     keys.add(`${g.layer}@${layerCommit}`);
   }
+  // The ancestor tests above hold for a group that a later commit deleted
+  // or that the published commit changed after the workspace's own: compare
+  // the recipe's files at the published commits with the workspace's.
+  if (ws.unchangedSince(recipe, pub.buildManifest.layers) !== true)
+    return miss("no-cache-key", names);
   const key = [...keys].sort().join(",");
   return { hit: true, key, reason: "no-cache-key", packages: names };
 }

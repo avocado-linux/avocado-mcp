@@ -409,6 +409,9 @@ export function createWorkspace(
     return out;
   };
 
+  // Escape glob characters in the names so only the wildcards added here act.
+  const esc = (p: string) => p.replace(/[*?[\\]/g, "\\$&");
+
   /**
    * Glob pathspecs for what sits beside a recipe file: git matches them
    * against the index and HEAD as well as the disk, so a member that was
@@ -425,8 +428,6 @@ export function createWorkspace(
    * root-level `.inc` files plus files/ and <pn>/.
    */
   const besides = (recipe: string, f: RecipeFile): string[] => {
-    // Escape glob characters in the names so only the wildcards added here act.
-    const esc = (p: string) => p.replace(/[*?[\\]/g, "\\$&");
     if (!f.dir)
       return [":(glob)*.inc", ":(glob)files/**", `:(glob)${esc(recipe)}/**`];
     const d = esc(f.dir);
@@ -505,6 +506,7 @@ export function createWorkspace(
   const duplicateMemo = new Map<string, string[]>();
   const dirMemo = new Map<string, string[]>();
   const ancestorMemo = new Map<string, boolean | null>();
+  const unchangedMemo = new Map<string, boolean | null>();
 
   const computeLastCommits = (recipe: string): LastCommit[] => {
     const withBb = layers.filter((l) =>
@@ -553,6 +555,46 @@ export function createWorkspace(
     return null;
   };
 
+  const computeUnchanged = (
+    recipe: string,
+    layerCommits: Record<string, string>,
+  ): boolean | null => {
+    for (const l of layers) {
+      const at = layerCommits[l.name];
+      if (at === undefined) continue;
+      if (!COMMIT_RE.test(at)) return null;
+      // The recipe's files by name as well as by what is on disk: a
+      // `.bbappend` that a commit removed is in no group of the workspace.
+      const specs = [
+        `:(glob)**/${esc(recipe)}.bb`,
+        `:(glob)**/${esc(recipe)}_*.bb`,
+        `:(glob)**/${esc(recipe)}.bbappend`,
+        `:(glob)**/${esc(recipe)}_*.bbappend`,
+      ];
+      for (const f of recipeFiles(recipe, filesOf(l)))
+        specs.push(`:(literal)${f.rel}`, ...besides(recipe, f));
+      const r = run(l.dir, [
+        ...GIT_BASE,
+        "diff",
+        "--quiet",
+        "--no-renames",
+        at,
+        "HEAD",
+        "--",
+        ...specs,
+      ]);
+      if (r.status === 1) return false;
+      if (r.status !== 0) {
+        // An object the clone lacks (a shallow clone) lands here too.
+        failures.push(
+          `git diff in ${l.name} ended with ${r.status === null ? "no exit status" : `exit ${r.status}`}`,
+        );
+        return null;
+      }
+    }
+    return true;
+  };
+
   const memo = <T>(m: Map<string, T>, key: string, compute: () => T): T => {
     if (m.has(key)) return m.get(key) as T;
     const v = compute();
@@ -590,6 +632,10 @@ export function createWorkspace(
       }),
     isAncestor: (a, b) =>
       memo(ancestorMemo, `${a}\0${b}`, () => computeAncestor(a, b)),
+    unchangedSince: (recipe, layerCommits) =>
+      memo(unchangedMemo, `${recipe}\0${JSON.stringify(layerCommits)}`, () =>
+        computeUnchanged(recipe, layerCommits),
+      ),
   };
   return { workspace, failures };
 }

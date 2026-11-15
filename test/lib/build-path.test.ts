@@ -47,10 +47,12 @@ function workspace(
   groups: Record<string, Array<{ commit: string; layer: string }>>,
   history: string[],
   dirs: Record<string, string[]> = {},
+  unchanged: boolean | null = true,
 ): Workspace {
   return {
     lastCommitFor: (r) => groups[r] ?? [],
     recipesInDir: (d) => dirs[d] ?? [],
+    unchangedSince: () => unchanged,
     isAncestor: (a, b) => {
       const i = history.findIndex((h) => h.startsWith(a) || a.startsWith(h));
       const j = history.findIndex((h) => h.startsWith(b) || b.startsWith(h));
@@ -773,16 +775,37 @@ test("an unproven ancestor test is no-cache-key, not stale-delta", () => {
   const ws: Workspace = {
     lastCommitFor: () => [{ commit: "abc1234", layer: "meta-oe" }],
     isAncestor: () => null,
+    unchangedSince: () => true,
   };
   const v = verdictOf(base({ workspace: ws }));
   assert.equal(v.verdict, "package_miss");
   assert.equal(v.missing[0].reason, "no-cache-key");
 });
 
+test("a recipe whose files differ from the published commit is no hit", () => {
+  for (const unchanged of [false, null]) {
+    const v = verdictOf(
+      base({
+        ...noDelta,
+        published: publishedHit(),
+        workspace: workspace(
+          { htop: [{ commit: "abc1234", layer: "meta-oe" }] },
+          ["abc1234", "def5678"],
+          {},
+          unchanged,
+        ),
+      }),
+    );
+    assert.equal(v.verdict, "package_miss");
+    assert.equal(v.missing[0].reason, "no-cache-key");
+  }
+});
+
 test("a recipe found with no commit is no-cache-key, not unknown-recipe", () => {
   const ws: Workspace = {
     lastCommitFor: () => [{ commit: "", layer: "meta-oe" }],
     isAncestor: () => true,
+    unchangedSince: () => true,
   };
   const local = verdictOf(base({ workspace: ws }));
   assert.equal(local.missing[0].reason, "no-cache-key");
@@ -802,6 +825,7 @@ test("an unknown layer commit is no-cache-key and never reaches the ancestor tes
       asked++;
       return true;
     },
+    unchangedSince: () => true,
   };
   const v = verdictOf(
     base({
