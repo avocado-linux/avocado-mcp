@@ -547,6 +547,61 @@ test("git is asked once per recipe and per commit pair", () => {
   rmSync(ws, { recursive: true });
 });
 
+// ---- the recipe's files against the published commits ---------------------
+
+test("unchangedSince is true when the recipe's files match the published commit", () => {
+  const ws = tmp();
+  const repo = layerWithHtop(ws, "meta-oe");
+  const head = git(repo, "rev-parse", "HEAD");
+  assert.equal(
+    createWorkspace(ws).workspace.unchangedSince("htop", { "meta-oe": head }),
+    true,
+  );
+  rmSync(ws, { recursive: true });
+});
+
+test("unchangedSince is false after a commit deletes a bbappend", () => {
+  const ws = tmp();
+  const repo = layerWithHtop(ws, "meta-oe");
+  write(join(repo, "recipes-support", "htop", "htop_%.bbappend"), "# a\n");
+  git(repo, "add", "-A");
+  const published = commit(repo, "add append");
+  git(repo, "rm", "-q", "recipes-support/htop/htop_%.bbappend");
+  commit(repo, "drop append");
+  const w = createWorkspace(ws).workspace;
+  // The group list no longer has the append, so the ancestor test passes.
+  assert.equal(w.lastCommitFor("htop").length, 1);
+  assert.equal(w.unchangedSince("htop", { "meta-oe": published }), false);
+  rmSync(ws, { recursive: true });
+});
+
+test("unchangedSince is false when the published commit changed the recipe after the workspace", () => {
+  const ws = tmp();
+  const repo = layerWithHtop(ws, "meta-oe");
+  const older = git(repo, "rev-parse", "HEAD");
+  write(join(repo, "recipes-support", "htop", "files", "p.patch"), "newer\n");
+  git(repo, "add", "-A");
+  const published = commit(repo, "change patch");
+  git(repo, "checkout", "-q", older);
+  const w = createWorkspace(ws).workspace;
+  assert.equal(w.lastCommitFor("htop")[0].commit, older);
+  assert.equal(w.isAncestor(older, published), true);
+  assert.equal(w.unchangedSince("htop", { "meta-oe": published }), false);
+  rmSync(ws, { recursive: true });
+});
+
+test("unchangedSince is null when the published commit is not in the clone", () => {
+  const ws = tmp();
+  layerWithHtop(ws, "meta-oe");
+  const w = createWorkspace(ws);
+  assert.equal(
+    w.workspace.unchangedSince("htop", { "meta-oe": "a".repeat(40) }),
+    null,
+  );
+  assert.equal(w.failures.length, 1);
+  rmSync(ws, { recursive: true });
+});
+
 // ---- uncommitted changes in a file group -----------------------------------
 
 const GROUP = join("recipes-support", "htop");
