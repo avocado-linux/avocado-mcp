@@ -98,6 +98,14 @@ export interface Workspace {
     recipe: string,
     layerCommits: Record<string, string>,
   ): boolean | null;
+  /**
+   * Paths that differ between the commit `layerCommits` names for each
+   * workspace layer and that layer's HEAD, each prefixed with the layer name
+   * and `/`; null when git could not say. `unchangedSince` sees only the
+   * recipe's own files, so an include or class that lies outside the recipe
+   * directory shows only here.
+   */
+  changedSince?(layerCommits: Record<string, string>): string[] | null;
 }
 
 export interface PublishedState {
@@ -224,6 +232,20 @@ export function recipeDirOfPath(path: string): string | null {
   // The recipe directory needs a name after recipes-<kind> and a file below it.
   if (i < 0 || parts.length < i + 3) return null;
   return parts.slice(0, i + 2).join("/");
+}
+
+/**
+ * A changed path that no recipe group covers and that can still change what a
+ * recipe builds: an include, a class, a configuration or any other build file
+ * outside a recipe directory. Recipe files and the files below a recipe
+ * directory belong to their recipe's own groups; documentation and test trees
+ * change no build.
+ */
+export function isSharedBuildPath(path: string): boolean {
+  if (matchesAny(TEST_TREES, path) || matchesAny(IGNORABLE, path)) return false;
+  if (recipeOfPath(path)) return false;
+  if (/\.inc$/.test(path)) return true;
+  return recipeDirOfPath(path) === null;
 }
 
 /** Trees of tests and CI: they build nothing that ships. */
@@ -599,6 +621,12 @@ function publishedRule(
   // or that the published commit changed after the workspace's own: compare
   // the recipe's files at the published commits with the workspace's.
   if (ws.unchangedSince(recipe, pub.buildManifest.layers) !== true)
+    return miss("no-cache-key", names);
+  // A shared include or a class is outside every recipe group, and a recipe
+  // can pull either in: any such path changed since the published build
+  // leaves the recipe without a proven cache key.
+  const changed = ws.changedSince?.(pub.buildManifest.layers);
+  if (changed === null || changed?.some(isSharedBuildPath))
     return miss("no-cache-key", names);
   const key = [...keys].sort().join(",");
   return { hit: true, key, reason: "no-cache-key", packages: names };

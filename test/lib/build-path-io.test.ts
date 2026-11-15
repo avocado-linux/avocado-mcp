@@ -602,6 +602,95 @@ test("unchangedSince is null when the published commit is not in the clone", () 
   rmSync(ws, { recursive: true });
 });
 
+function sharedIncScenario(change: (repo: string) => void) {
+  const ws = tmp();
+  const repo = layerWithHtop(ws, "meta-oe");
+  write(
+    join(repo, "recipes-support", "htop", "htop_3.5.0.bb"),
+    "require ../common/shared.inc\n",
+  );
+  write(join(repo, "recipes-support", "common", "shared.inc"), "A = 1\n");
+  git(repo, "add", "-A");
+  const published = commit(repo, "htop requires a shared include");
+  change(repo);
+  const w = createWorkspace(ws).workspace;
+  const r = classifyBuildPath({
+    target: "qemux86-64",
+    release: "2026",
+    channel: "edge",
+    change: { recipes: ["htop"] },
+    recipeMap: null,
+    delta: null,
+    workspace: w,
+    published: {
+      reachable: true,
+      snapshotId: "s1",
+      packages: [
+        {
+          name: "htop",
+          epoch: 0,
+          version: "3.5.0",
+          release: "r0",
+          sourcerpm: "htop-3.5.0-r0.src.rpm",
+        },
+      ],
+      buildManifest: { layers: { "meta-oe": published } },
+    },
+    now: "2026-11-11T00:00:00.000Z",
+  });
+  assert.equal(r.ok, true);
+  rmSync(ws, { recursive: true });
+  return r.ok ? r.verdict : null;
+}
+
+test("a recipe whose workspace matches the published build is a feed_hit", () => {
+  assert.equal(sharedIncScenario(() => {})?.verdict, "feed_hit");
+});
+
+test("a shared .inc outside the recipe directory changed after the published build is a miss", () => {
+  const v = sharedIncScenario((repo) => {
+    write(join(repo, "recipes-support", "common", "shared.inc"), "A = 2\n");
+    git(repo, "add", "-A");
+    commit(repo, "change the shared include");
+  });
+  assert.equal(v?.verdict, "package_miss");
+  assert.equal(v?.missing[0].reason, "no-cache-key");
+});
+
+test("a class changed after the published build is a miss", () => {
+  const v = sharedIncScenario((repo) => {
+    write(join(repo, "classes", "mine.bbclass"), "A = 2\n");
+    git(repo, "add", "-A");
+    commit(repo, "add a class");
+  });
+  assert.equal(v?.verdict, "package_miss");
+});
+
+test("another recipe's patch changed after the published build still leaves a hit", () => {
+  const v = sharedIncScenario((repo) => {
+    write(join(repo, "recipes-core", "other", "other_1.bb"), "# o\n");
+    write(join(repo, "recipes-core", "other", "files", "o.patch"), "p\n");
+    git(repo, "add", "-A");
+    commit(repo, "add another recipe");
+  });
+  assert.equal(v?.verdict, "feed_hit");
+});
+
+test("changedSince lists layer-prefixed paths and is null for a commit the clone lacks", () => {
+  const ws = tmp();
+  const repo = layerWithHtop(ws, "meta-oe");
+  const before = git(repo, "rev-parse", "HEAD");
+  write(join(repo, "classes", "mine.bbclass"), "A = 2\n");
+  git(repo, "add", "-A");
+  commit(repo, "add a class");
+  const w = createWorkspace(ws);
+  assert.deepEqual(w.workspace.changedSince?.({ "meta-oe": before }), [
+    "meta-oe/classes/mine.bbclass",
+  ]);
+  assert.equal(w.workspace.changedSince?.({ "meta-oe": "a".repeat(40) }), null);
+  rmSync(ws, { recursive: true });
+});
+
 // ---- uncommitted changes in a file group -----------------------------------
 
 const GROUP = join("recipes-support", "htop");
