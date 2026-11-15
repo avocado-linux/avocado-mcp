@@ -120,6 +120,7 @@ export async function checkBuildPath(
       feed,
       target,
       mirrorDir,
+      workspace: workspace !== null,
     });
     published = loaded.published;
     mirrorConfigured = loaded.mirrorConfigured;
