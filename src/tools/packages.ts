@@ -733,7 +733,9 @@ export function registerPackageTools(
             }
             const taken = (n: string) => n === best?.name;
             const rankedCandidates = Array.from(cands)
-              .filter(([n]) => !taken(n) && !near.has(n))
+              .filter(
+                ([n]) => !taken(n) && !near.has(n) && !exactNames.has(n),
+              )
               .sort((x, y) => y[1] - x[1] || (x[0] < y[0] ? -1 : 1))
               .map(([n]) => n);
             // Near matches come first, but a top candidate keeps one slot so
