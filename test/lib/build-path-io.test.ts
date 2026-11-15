@@ -1400,7 +1400,45 @@ test("missing build manifest leaves the manifest null and the remote reachable",
   });
   assert.equal(r.published.reachable, true);
   assert.equal(r.published.buildManifest, null);
-  assert.deepEqual(r.warnings, ["build.json for snapshot snap-latest: absent"]);
+  assert.deepEqual(r.warnings, [
+    "build.json for snapshot snap-latest: absent",
+    "package metadata was not read: a feed hit needs a workspace and a build manifest",
+  ]);
+});
+
+test("no build manifest reads no package metadata from the remote", async () => {
+  const { client, calls } = stub({ build: "none" });
+  const r = await loadPublishedState({
+    client,
+    feed: feed(),
+    target: "qemux86-64",
+  });
+  assert.equal(calls.remotePackages, 0);
+  assert.deepEqual(r.published.packages, []);
+});
+
+test("no workspace reads no package metadata from the remote", async () => {
+  const { client, calls } = stub();
+  const r = await loadPublishedState({
+    client,
+    feed: feed(),
+    target: "qemux86-64",
+    workspace: false,
+  });
+  assert.equal(calls.remotePackages, 0);
+  assert.deepEqual(r.published.packages, []);
+  assert.equal(r.published.buildManifest !== null, true);
+});
+
+test("a workspace and a build manifest read the package metadata", async () => {
+  const { client, calls } = stub();
+  await loadPublishedState({
+    client,
+    feed: feed(),
+    target: "qemux86-64",
+    workspace: true,
+  });
+  assert.equal(calls.remotePackages, 1);
 });
 
 test("build manifest layers reach the published state", async () => {

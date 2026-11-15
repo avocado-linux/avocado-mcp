@@ -783,6 +783,12 @@ export async function loadPublishedState(input: {
   feed: ResolvedFeed;
   target: string;
   mirrorDir?: string;
+  /**
+   * Whether the caller has a workspace (default true). A feed hit needs both
+   * a workspace and a build manifest, so without either the remote package
+   * metadata (about 7 MB for a target) is not read.
+   */
+  workspace?: boolean;
 }): Promise<PublishedLoad> {
   const { client, feed, target } = input;
   const mirrorDir = input.mirrorDir;
@@ -942,7 +948,11 @@ export async function loadPublishedState(input: {
     }
   }
 
-  if (!served && !remoteDown) {
+  if (!served && !remoteDown && !((input.workspace ?? true) && buildManifest)) {
+    warnings.push(
+      "package metadata was not read: a feed hit needs a workspace and a build manifest",
+    );
+  } else if (!served && !remoteDown) {
     const repos = manifest?.[target] ?? [];
     // The head is read through the snapshot the pointer named, so the
     // packages are the ones the build manifest just fetched describes; the
