@@ -1256,6 +1256,7 @@ test("missing build manifest leaves the manifest null and the remote reachable",
   });
   assert.equal(r.published.reachable, true);
   assert.equal(r.published.buildManifest, null);
+  assert.deepEqual(r.warnings, ["build.json for snapshot snap-latest: absent"]);
 });
 
 test("build manifest layers reach the published state", async () => {
