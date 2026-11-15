@@ -5,6 +5,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
 import { registerSkillResources } from "../src/tools/resources.js";
+import { registerPrompts } from "../src/tools/prompts.js";
 
 // Reads a skill resource's text through an in-memory server, the way a model
 // client does. Later guidance tests append to this file and reuse the helper.
@@ -98,4 +99,23 @@ test("feeds resource has the distro feeds list form and the overlay recipe", asy
   assert.match(text, /Not\s+confirmed/);
   assert.match(text, /avocado unlock/);
   assert.doesNotMatch(text, /not yet verified/i);
+});
+
+test("the package-coverage prompt matches the exact-only tool and names no old tiers", async () => {
+  const server = new McpServer({ name: "avocado-os", version: "test" });
+  registerPrompts(server);
+  const client = new Client({ name: "test-client", version: "1.0.0" });
+  const [c, s] = InMemoryTransport.createLinkedPair();
+  await Promise.all([client.connect(c), server.connect(s)]);
+  try {
+    const res = await client.getPrompt({
+      name: "package-coverage",
+      arguments: {},
+    });
+    const text = (res.messages[0].content as { text: string }).text;
+    assert.match(text, /check-package-coverage/);
+    assert.doesNotMatch(text, /\b(fuzzy|strong)\b/i);
+  } finally {
+    await client.close();
+  }
 });
