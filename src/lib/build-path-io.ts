@@ -507,6 +507,7 @@ export function createWorkspace(
   const dirMemo = new Map<string, string[]>();
   const ancestorMemo = new Map<string, boolean | null>();
   const unchangedMemo = new Map<string, boolean | null>();
+  const changedMemo = new Map<string, string[] | null>();
 
   const computeLastCommits = (recipe: string): LastCommit[] => {
     const withBb = layers.filter((l) =>
@@ -595,6 +596,36 @@ export function createWorkspace(
     return true;
   };
 
+  const computeChangedSince = (
+    layerCommits: Record<string, string>,
+  ): string[] | null => {
+    const out: string[] = [];
+    for (const l of layers) {
+      const at = layerCommits[l.name];
+      if (at === undefined) continue;
+      if (!COMMIT_RE.test(at)) return null;
+      const r = run(l.dir, [
+        ...GIT_BASE,
+        "diff",
+        "--name-only",
+        "-z",
+        "--no-renames",
+        at,
+        "HEAD",
+      ]);
+      if (r.status !== 0) {
+        // An object the clone lacks (a shallow clone) lands here too.
+        failures.push(
+          `git diff in ${l.name} ended with ${r.status === null ? "no exit status" : `exit ${r.status}`}`,
+        );
+        return null;
+      }
+      for (const rel of r.stdout.split("\0"))
+        if (rel) out.push(`${l.name}/${rel}`);
+    }
+    return out;
+  };
+
   const memo = <T>(m: Map<string, T>, key: string, compute: () => T): T => {
     if (m.has(key)) return m.get(key) as T;
     const v = compute();
@@ -635,6 +666,10 @@ export function createWorkspace(
     unchangedSince: (recipe, layerCommits) =>
       memo(unchangedMemo, `${recipe}\0${JSON.stringify(layerCommits)}`, () =>
         computeUnchanged(recipe, layerCommits),
+      ),
+    changedSince: (layerCommits) =>
+      memo(changedMemo, JSON.stringify(layerCommits), () =>
+        computeChangedSince(layerCommits),
       ),
   };
   return { workspace, failures };
