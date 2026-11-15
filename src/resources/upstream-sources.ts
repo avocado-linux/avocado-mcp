@@ -30,7 +30,7 @@ The MCP wraps two repos directly (\`references\` and the docs site). The Avocado
 | The kernel command line (\`isolcpus\`, \`earlycon\`, and so on) | No | \`kernel.cmdline\` replaces the board command line. \`kernel.cmdline_extra\` appends to it. Use one of the two, not both. A runtime value wins over the top-level value. Then \`avocado build\`. |
 | The **source** of a packaged component | **Yes** | \`bitbake <recipe>\` in a \`meta-avocado\` checkout |
 | A recipe, bbappend, packagegroup, or machine config | **Yes** | \`bitbake\` |
-| Kernel configuration or an in-tree driver | No | \`kernel.compile\` in \`avocado.yaml\`: the SDK builds a custom kernel. Follow the "Custom kernel" guide. |
+| Kernel configuration or an in-tree driver | No | \`kernel.compile\` plus \`install\` in \`avocado.yaml\` (the CLI rejects \`compile\` without \`install\`): the SDK builds a custom kernel that replaces the BSP kernel. A BSP with out-of-tree vendor modules in the feed can still need Yocto. Follow the "Custom kernel" guide. |
 
 The rows marked "No" are the common case. The CLI covers them. Do not send the user to Yocto for these.
 
@@ -167,7 +167,7 @@ gh api orgs/avocado-linux/repos --paginate --jq '.[] | select(.name | startswith
 
 Per-target BSP repos. Each one is a **meta-layer used internally to build** the kernel binaries, device-tree blobs, bootloader bits, and \`avocado-bsp-<target>\` packages that ship in the feed. **~29 repos, naming pattern \`bsp-<target-slug>\`.**
 
-Users consume the already-built BSP package from the feed through \`avocado-bsp-<target>\` in their \`avocado.yaml\`. A kernel command line change needs only \`kernel.cmdline\` or \`kernel.cmdline_extra\`. A kernel configuration change needs no Yocto: \`kernel.compile\` builds a custom kernel in the SDK (see the "Custom kernel" guide and the "What to rebuild" table above). Rebuilding the stock kernel of the base OS in place stays a Yocto change.
+Users consume the already-built BSP package from the feed through \`avocado-bsp-<target>\` in their \`avocado.yaml\`. A kernel command line change needs only \`kernel.cmdline\` or \`kernel.cmdline_extra\`. A kernel configuration change needs no Yocto when you replace the BSP kernel: \`kernel.compile\` plus \`install\` builds a custom kernel in the SDK. A BSP with out-of-tree vendor modules in the feed can still need Yocto (see the "Custom kernel" guide and the "What to rebuild" table above). Rebuilding the stock kernel of the base OS in place stays a Yocto change.
 
 The slug matches the canonical target slug (e.g. \`bsp-raspberrypi4\` → target \`raspberrypi4\`).
 
