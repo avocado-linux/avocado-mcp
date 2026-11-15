@@ -21,6 +21,32 @@ export interface PackageInfo {
   sourcerpm: string;
 }
 
+/*
+ * Schemas of the three files the verdict reads. The types below are the
+ * contract; the readers that enforce it are `parseDelta` and `readRecipeMap`
+ * in build-path-io.ts and `RepoClient.fetchBuildManifest` in repo-client.ts.
+ *
+ * delta.json (next to the delta feed, at most three directory levels above a
+ * path feed): `schema_version` (number, 1 when absent); `base` with `release`
+ * and `channel` (strings) and `snapshot_id` (string or null); `built_recipes`
+ * (array of recipe names); optional `bakar_run_id` and `delta_path` (strings).
+ * A file missing `base.release`, `base.channel` or `built_recipes` is ignored
+ * with a warning.
+ *
+ * recipe-map.json (same directory as delta.json): `schema_version` (number, 1
+ * when absent) and `entries`, each a `RecipeMapEntry`. One malformed entry
+ * ignores the whole file with a warning. `layer` is the NAME of the layer
+ * checkout folder, not a layer collection or a remote URL; it is compared
+ * with the folder names `createWorkspace` finds, so a layer cloned into a
+ * folder with another name never matches and fails closed to `no-cache-key`.
+ *
+ * build.json (published per snapshot at `snapshots/<id>/build.json`): `commit`
+ * (the meta-avocado commit, 40 hexadecimal characters) and `layers`, a map from
+ * layer name (the same folder-name key) to that layer's 40-hexadecimal-
+ * character commit. Absent, unparsable or malformed is `no-cache-key` with the
+ * reason in the verdict warnings.
+ */
+
 /** One entry of bakar's recipe-map.json. */
 export interface RecipeMapEntry {
   recipe: string;
