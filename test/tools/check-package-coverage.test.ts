@@ -592,3 +592,15 @@ test("search-packages output for the same query is unchanged", async () => {
     assert.doesNotMatch(text, /near match|candidate|not the requested/);
   });
 });
+
+test("a second exact name is not listed as a candidate for the first", async () => {
+  await withDocsFixture(async () => {
+    const { results } = await coverage(
+      [pkg("openssl"), pkg("openssl-dev", "development files for openssl")],
+      [{ name: "ssl", queries: ["openssl", "openssl-dev"] }],
+    );
+    assert.equal(results[0].status, "present");
+    assert.equal(results[0].match?.name, "openssl");
+    assert.deepEqual(results[0].candidates, []);
+  });
+});
