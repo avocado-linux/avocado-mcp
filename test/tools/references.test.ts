@@ -244,3 +244,18 @@ test("project initialization still lists unlisted references with their label", 
   clearHardwareDataCache();
   clearSelectableCache();
 });
+
+test("a target that names no slug drops nothing and labels the mismatch", async () => {
+  await withReferencesFixture(async () => {
+    const labels = await searchLabels({
+      query: "python",
+      target: "zz-no-such-board",
+    });
+    assert.deepEqual(labels, {
+      "py-generic": "generic",
+      "py-new": "unlisted",
+      "py-old": "unlisted",
+      "py-pi": "unlisted",
+    });
+  });
+});

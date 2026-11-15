@@ -50,9 +50,8 @@ async function referencesForTarget(
     ...new Set((await listReferences()).flatMap((r) => r.hardware)),
   ];
   const typed = target.trim().toLowerCase();
-  const wanted = (
-    resolveTargetInput(target, slugs).target ?? typed
-  ).toLowerCase();
+  const resolved = resolveTargetInput(target, slugs).target;
+  const wanted = (resolved ?? typed).toLowerCase();
   const labelled = scored.map(({ entry }): LabelledReference => {
     const compatibility: ReferenceCompatibility =
       entry.hardware.length === 0
@@ -65,7 +64,11 @@ async function referencesForTarget(
           : "unlisted";
     return { ...entry, compatibility };
   });
-  if (includeIncompatible) return { references: labelled, omitted: 0 };
+  // A target that names no single slug ("jetson", "imx93") cannot rule a
+  // reference out, so nothing is dropped; the labels still show the mismatch.
+  if (includeIncompatible || !resolved) {
+    return { references: labelled, omitted: 0 };
+  }
   const kept = labelled.filter((r) => r.compatibility !== "unlisted");
   return { references: kept, omitted: labelled.length - kept.length };
 }
