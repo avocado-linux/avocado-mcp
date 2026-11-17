@@ -214,7 +214,7 @@ class DeltaRepo extends UnreachableRepo {
 
 test("a modified patch in a committed recipe group is a no-cache-key miss that says to commit", async () => {
   const p = project(
-    "default_target: qemux86-64\ndistro:\n  release: 2026\n  channel: edge\n  feeds: [local]\nrepos:\n  local:\n    path: delta/target/qemux86-64\n",
+    "default_target: qemux86-64\ndistro:\n  release: 2026\n  channel: edge\n  feeds: [local, avocado]\nrepos:\n  local:\n    path: delta/target/qemux86-64\n",
   );
   const ws = mkdtempSync(join(tmpdir(), "build-path-ws-"));
   try {
@@ -347,10 +347,10 @@ function commitIn(cwd: string, msg: string): void {
 // a miss after `edit` comes from the edit and not from the fixture.
 async function deltaScenario(
   edit: (ctx: { ws: string; layer: string }) => void,
-  opts: { pv?: string } = {},
+  opts: { pv?: string; feeds?: string } = {},
 ) {
   const p = project(
-    "default_target: qemux86-64\ndistro:\n  release: 2026\n  channel: edge\n  feeds: [local]\nrepos:\n  local:\n    path: delta/target/qemux86-64\n",
+    `default_target: qemux86-64\ndistro:\n  release: 2026\n  channel: edge\n  feeds: [${opts.feeds ?? "local, avocado"}]\nrepos:\n  local:\n    path: delta/target/qemux86-64\n`,
   );
   const ws = mkdtempSync(join(tmpdir(), "build-path-ws-"));
   try {
@@ -408,7 +408,8 @@ async function deltaScenario(
       if (!r.ok) throw new Error("checkBuildPath failed");
       return r.verdict;
     };
-    if (!opts.pv) assert.equal((await run()).verdict, "feed_hit");
+    if (!opts.pv && !opts.feeds)
+      assert.equal((await run()).verdict, "feed_hit");
     edit({ ws, layer });
     return await run();
   } finally {
@@ -529,4 +530,31 @@ test("a missing project directory is an error", async () => {
   assert.equal(r.ok, false);
   if (r.ok) return;
   assert.match(r.error, /no avocado\.yaml/);
+});
+
+test("a class added untracked after the recorded build is a no-cache-key miss for a delta hit", async () => {
+  const v = await deltaScenario(({ layer }) => {
+    mkdirSync(join(layer, "classes"), { recursive: true });
+    writeFileSync(join(layer, "classes", "mine.bbclass"), "A = 1\n");
+  });
+  assert.equal(v.verdict, "package_miss");
+  assert.deepEqual(reasons(v), [["foo", "no-cache-key"]]);
+});
+
+test("a class committed after the recorded build is a no-cache-key miss for a delta hit", async () => {
+  const v = await deltaScenario(({ layer }) => {
+    mkdirSync(join(layer, "classes"), { recursive: true });
+    writeFileSync(join(layer, "classes", "mine.bbclass"), "A = 1\n");
+    gitIn(layer, "add", "-A");
+    commitIn(layer, "add a class");
+  });
+  assert.equal(v.verdict, "package_miss");
+  assert.deepEqual(reasons(v), [["foo", "no-cache-key"]]);
+});
+
+test("a delta listed alone sits behind the distro feed, so its hit is unverified", async () => {
+  const v = await deltaScenario(() => {}, { feeds: "local" });
+  assert.equal(v.verdict, "package_miss");
+  assert.deepEqual(reasons(v), [["foo", "no-cache-key"]]);
+  assert.match(v.reasons.join("\n"), /distro feed \(priority 10\) outranks/);
 });

@@ -1056,3 +1056,170 @@ test("unmapped paths are listed in a structured field and an empty list otherwis
     [],
   );
 });
+
+// ---- shared paths against the recorded build, both rules ----
+
+test("a delta hit is a miss when a class changed since the recorded layer commit", () => {
+  const asked: Array<Record<string, string>> = [];
+  const ws: Workspace = {
+    ...workspace({ htop: [{ commit: "abc1234", layer: "meta-oe" }] }, [
+      "abc1234",
+      "def5678",
+    ]),
+    changedSince: (layerCommits) => {
+      asked.push(layerCommits);
+      return ["meta-oe/classes/mine.bbclass"];
+    },
+  };
+  const v = verdictOf(base({ workspace: ws }));
+  assert.equal(v.verdict, "package_miss");
+  assert.equal(v.missing[0].reason, "no-cache-key");
+  assert.deepEqual(asked, [{ "meta-oe": "abc1234" }]);
+});
+
+test("a delta hit stays a hit when only another recipe's files changed", () => {
+  const ws: Workspace = {
+    ...workspace({ htop: [{ commit: "abc1234", layer: "meta-oe" }] }, [
+      "abc1234",
+      "def5678",
+    ]),
+    changedSince: () => ["meta-oe/recipes-core/other/files/o.patch"],
+  };
+  assert.equal(verdictOf(base({ workspace: ws })).verdict, "feed_hit");
+});
+
+test("a delta hit is a miss when the changed paths could not be listed", () => {
+  const ws: Workspace = {
+    ...workspace({ htop: [{ commit: "abc1234", layer: "meta-oe" }] }, [
+      "abc1234",
+      "def5678",
+    ]),
+    changedSince: () => null,
+  };
+  assert.equal(verdictOf(base({ workspace: ws })).verdict, "package_miss");
+});
+
+// ---- dnf feed priority ----
+
+const prio = (over = {}) => ({
+  distro: 20,
+  delta: 10,
+  others: [] as Array<{
+    name: string;
+    priority: number;
+    packages: PackageInfo[] | null;
+  }>,
+  ...over,
+});
+
+test("a delta hit stands when the delta outranks the distro feed", () => {
+  const v = verdictOf(
+    base({
+      feedPriorities: prio(),
+      published: publishedHit(),
+    }),
+  );
+  assert.equal(v.verdict, "feed_hit");
+  assert.deepEqual(v.cache_keys.local, { htop: "th-htop" });
+});
+
+test("a delta hit loses to a distro feed that outranks it and carries the package", () => {
+  const v = verdictOf(
+    base({
+      feedPriorities: prio({ distro: 10, delta: 20 }),
+      published: publishedHit(),
+    }),
+  );
+  // The distro feed serves the package and proves it, so the hit is its own.
+  assert.equal(v.verdict, "feed_hit");
+  assert.deepEqual(v.cache_keys.local, {});
+  assert.equal(v.cache_keys.published.htop, "meta-oe@def5678");
+});
+
+test("a shadowed delta hit is a miss when the distro feed cannot prove the package", () => {
+  const v = verdictOf(
+    base({
+      feedPriorities: prio({ distro: 10, delta: 20 }),
+      published: publishedHit({ buildManifest: null }),
+    }),
+  );
+  assert.equal(v.verdict, "package_miss");
+  assert.equal(v.missing[0].reason, "no-cache-key");
+  assert.match(v.reasons.join("\n"), /htop is also in the distro feed/);
+});
+
+test("a delta hit stays a hit when the outranking distro feed lacks the package", () => {
+  const v = verdictOf(
+    base({
+      feedPriorities: prio({ distro: 10, delta: 20 }),
+      published: publishedHit({ packages: [pkg("other")] }),
+    }),
+  );
+  assert.equal(v.verdict, "feed_hit");
+});
+
+test("a delta hit is unverified when the outranking distro feed was not read", () => {
+  const v = verdictOf(
+    base({
+      feedPriorities: prio({ distro: 10, delta: 20 }),
+      published: publishedHit({ packages: [], packagesRead: false }),
+    }),
+  );
+  assert.equal(v.verdict, "package_miss");
+  assert.equal(v.missing[0].reason, "no-cache-key");
+  assert.match(v.reasons.join("\n"), /could not be read/);
+});
+
+test("a published hit loses to a delta that outranks the distro feed and carries the package", () => {
+  const v = verdictOf(
+    base({
+      recipeMap: null,
+      delta: {
+        manifest: {
+          schema_version: 1,
+          base: { release: "2026", channel: "edge", snapshot_id: null },
+          built_recipes: [],
+        },
+        packages: [pkg("htop")],
+      },
+      feedPriorities: prio(),
+      published: publishedHit(),
+    }),
+  );
+  assert.equal(v.verdict, "package_miss");
+  assert.equal(v.missing[0].reason, "no-cache-key");
+  assert.match(v.reasons.join("\n"), /htop is also in the delta feed/);
+});
+
+test("a published hit stands when the distro feed outranks the delta", () => {
+  const v = verdictOf(
+    base({
+      recipeMap: null,
+      feedPriorities: prio({ distro: 10, delta: 20 }),
+      published: publishedHit(),
+    }),
+  );
+  assert.equal(v.verdict, "feed_hit");
+  assert.equal(v.cache_keys.published.htop, "meta-oe@def5678");
+});
+
+test("a hit is unverified when an outranking feed the tool cannot read exists", () => {
+  for (const [dist, delta] of [
+    [20, 30],
+    [30, 20],
+  ]) {
+    const v = verdictOf(
+      base({
+        feedPriorities: prio({
+          distro: dist,
+          delta,
+          others: [{ name: "private", priority: 10, packages: null }],
+        }),
+        published: publishedHit(),
+      }),
+    );
+    assert.equal(v.verdict, "package_miss");
+    assert.equal(v.missing[0].reason, "no-cache-key");
+    assert.match(v.reasons.join("\n"), /private/);
+  }
+});

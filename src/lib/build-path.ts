@@ -126,7 +126,8 @@ export interface Workspace {
   ): boolean | null;
   /**
    * Paths that differ between the commit `layerCommits` names for each
-   * workspace layer and that layer's HEAD, each prefixed with the layer name
+   * workspace layer and that layer's working tree (commits, staged and
+   * unstaged edits, and untracked files), each prefixed with the layer name
    * and `/`; null when git could not say. `unchangedSince` sees only the
    * recipe's own files, so an include or class that lies outside the recipe
    * directory shows only here.
@@ -143,6 +144,29 @@ export interface PublishedState {
   packages: PackageInfo[];
   /** Layer map of the build manifest; null when missing or malformed. */
   buildManifest: { layers: Record<string, string> } | null;
+  /**
+   * False when `packages` is empty because the metadata was not read, not
+   * because the feed lacks the packages. Absent means read.
+   */
+  packagesRead?: boolean;
+}
+
+/**
+ * dnf priorities of the feeds a project installs from; the lowest number
+ * wins, whatever the version. A package a higher-priority feed carries is
+ * installed from there, so a hit in a lower-priority feed proves nothing.
+ */
+export interface FeedPriorities {
+  distro: number;
+  /** Lowest number among the delta's path feeds; null without a delta. */
+  delta: number | null;
+  /** Feeds that are neither the distro feed nor the delta. */
+  others: Array<{
+    name: string;
+    priority: number;
+    /** Null when the tool does not read this feed. */
+    packages: PackageInfo[] | null;
+  }>;
 }
 
 export interface VerdictFeed {
@@ -172,6 +196,8 @@ export interface ClassifyInput {
   /** A mirror holds no snapshot content, so it cannot prove a hit. */
   mirrorConfigured?: boolean;
   feeds?: VerdictFeed[];
+  /** Without it no feed outranks another and every hit stands. */
+  feedPriorities?: FeedPriorities;
   /** ISO timestamp; defaults to the current time. */
   now?: string;
 }
@@ -511,9 +537,14 @@ function evaluateRecipe(
     } else {
       localReason = localRule(entry, input.delta.packages, ws, recipe);
       if (localReason === null) {
-        out.hit = true;
-        out.localKey = localKey(entry);
-        return out;
+        const shadow = outrankedBy("delta", entry.packages, input);
+        if (shadow === null) {
+          out.hit = true;
+          out.localKey = localKey(entry);
+          return out;
+        }
+        localReason = "no-cache-key";
+        out.extraReasons.push(`${recipe}: delta: ${shadow}`);
       }
     }
   }
@@ -524,6 +555,7 @@ function evaluateRecipe(
     out.publishedKey = pub.key;
     return out;
   }
+  if (pub.note) out.extraReasons.push(`${recipe}: published: ${pub.note}`);
   if (pub.packages.length > 0 && out.packages.length === 0)
     out.packages = pub.packages;
 
@@ -573,6 +605,61 @@ function localRule(
     if (anc === null) return "no-cache-key";
     if (!anc) return "stale-delta";
   }
+  // A shared include or class lies outside every recipe group: any such path
+  // that differs from the recorded layer commit, in the commits or in the
+  // working tree, leaves the delta without a proven build.
+  const changed = ws.changedSince?.({ [entry.layer]: entry.layer_commit });
+  if (changed === null || changed?.some(isSharedBuildPath))
+    return "no-cache-key";
+  return null;
+}
+
+/**
+ * Why a hit in the `own` feed cannot be trusted, or null: a feed that
+ * outranks it carries one of the packages (dnf installs that one), or cannot
+ * be read to tell.
+ */
+function outrankedBy(
+  own: "delta" | "distro",
+  names: string[],
+  input: ClassifyInput,
+): string | null {
+  const fp = input.feedPriorities;
+  if (!fp) return null;
+  const mine = own === "delta" ? fp.delta : fp.distro;
+  if (mine === null) return null;
+  const carried = (pkgs: PackageInfo[]) =>
+    names.find((n) => pkgs.some((p) => p.name === n));
+  const outranks = (
+    label: string,
+    priority: number,
+    pkgs: PackageInfo[] | null,
+  ) => {
+    if (priority >= mine) return null;
+    if (pkgs === null)
+      return `the ${label} feed (priority ${priority}) outranks the ${own} feed (priority ${mine}) and could not be read`;
+    const hit = carried(pkgs);
+    return hit === undefined
+      ? null
+      : `${hit} is also in the ${label} feed (priority ${priority}), which outranks the ${own} feed (priority ${mine})`;
+  };
+  if (own === "delta") {
+    const pub = input.published;
+    const read = Boolean(pub?.reachable) && pub?.packagesRead !== false;
+    const r = outranks(
+      "distro",
+      fp.distro,
+      read ? (pub?.packages ?? []) : null,
+    );
+    if (r) return r;
+  } else if (fp.delta !== null && input.delta) {
+    const r = outranks("delta", fp.delta, input.delta.packages);
+    if (r) return r;
+  }
+  for (const o of fp.others) {
+    const r = outranks(o.name, o.priority, o.packages);
+    if (r) return r;
+  }
   return null;
 }
 
@@ -581,6 +668,8 @@ interface PublishedOutcome {
   key?: string;
   reason: MissReason;
   packages: string[];
+  /** Why a proven hit was not accepted. */
+  note?: string;
 }
 
 /** Rule (b): the published layer-manifest ancestor test. */
@@ -654,6 +743,8 @@ function publishedRule(
   const changed = ws.changedSince?.(pub.buildManifest.layers);
   if (changed === null || changed?.some(isSharedBuildPath))
     return miss("no-cache-key", names);
+  const shadow = outrankedBy("distro", required, input);
+  if (shadow !== null) return { ...miss("no-cache-key", names), note: shadow };
   const key = [...keys].sort().join(",");
   return { hit: true, key, reason: "no-cache-key", packages: names };
 }

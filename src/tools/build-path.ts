@@ -1,9 +1,11 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { resolve } from "path";
 import {
   classifyBuildPath,
   imageClassOf,
   type ChangeInput,
+  type FeedPriorities,
   type PackageInfo,
   type PublishedState,
   type RecipeMap,
@@ -22,8 +24,43 @@ import {
   verdictFeeds,
   type PublishedClient,
 } from "../lib/build-path-io.js";
+import type { ResolvedFeed } from "../lib/feed-config.js";
 import type { RepoClient } from "../lib/repo-client.js";
 import { feedContextFrom } from "./feed-args.js";
+
+/**
+ * The dnf priorities of the feeds the project installs from. The delta's path
+ * feeds are the ones `findDelta` located; every other enabled feed is one the
+ * tool does not read, so a hit it could shadow stays unverified.
+ */
+function feedPrioritiesOf(
+  feed: ResolvedFeed,
+  deltaDirs: string[],
+): FeedPriorities | undefined {
+  if (feed.priority === undefined || !feed.feeds) return undefined;
+  const deltaNames = new Set(
+    (feed.extraFeeds ?? [])
+      .filter(
+        (f) => f.path !== undefined && deltaDirs.includes(resolve(f.path)),
+      )
+      .map((f) => f.name),
+  );
+  const deltaPriorities = feed.feeds
+    .filter((f) => deltaNames.has(f.name))
+    .map((f) => f.priority);
+  return {
+    distro: feed.priority,
+    delta: deltaPriorities.length > 0 ? Math.min(...deltaPriorities) : null,
+    others: feed.feeds
+      .filter(
+        (f) =>
+          f.kind !== "distro" &&
+          f.status !== "excluded" &&
+          !deltaNames.has(f.name),
+      )
+      .map((f) => ({ name: f.name, priority: f.priority, packages: null })),
+  };
+}
 
 export interface CheckBuildPathInput {
   project_dir: string;
@@ -151,6 +188,7 @@ export async function checkBuildPath(
     published,
     mirrorConfigured,
     feeds: verdictFeeds(feed, published.snapshotId, commit),
+    feedPriorities: feedPrioritiesOf(feed, found?.feedDirs ?? []),
   });
   if (!result.ok) return result;
   warnings.push(...workspaceFailures);
@@ -217,7 +255,7 @@ export function registerBuildPathTool(
     {
       title: "Check whether a change needs an image build",
       description:
-        "Decide the build path for a change before building anything. Returns `feed_hit` (every package is served by the published feed or the project's local delta: use `avocado install` and `avocado build`, no Yocto), `package_miss` (named packages are not served: build those recipes into the delta feed; a recipe whose file groups have uncommitted changes is a miss until the changes are committed, with `no-cache-key` (or `version-differs` when the version also moved) and a warning naming the changed files, so the remedy is: commit, then rebuild, not a rebuild alone; a recipe's file groups include every `.inc` beside it and every subdirectory of its directory (for a recipe at the layer root: the root `.inc` files, `files/` and `<recipe>/`), so a change in a sibling recipe's subdirectory counts too, and a deleted member counts as a change) or `image_miss` (the change touches machine, kernel, board-support, layer, distro, package-group or image paths: a full image build is needed). Pass `change.recipes` and/or `change.paths` (paths changed in the layer workspace). `workspace_dir` is the layers checkout, used to prove a delta or published package was built from the current recipe commits. `mirror_dir` (or AVOCADO_FEED_MIRROR_DIR) names a local feed mirror, used for package metadata only when its marker digest matches both the remote head's and the pointed snapshot's metadata index (head only when no pointer exists), and never for a pinned snapshot. A changed path that maps to no recipe (a bbclass, a library file, or a shared include the workspace cannot place) and is not documentation or a test file gives `package_miss` whose `missing` list does not name it: the path is in `unmapped` instead. Read an empty `missing` with a non-empty `unmapped` as: the change cannot be mapped to packages, so build with Yocto as for `image_miss`, or name the affected recipes in `change.recipes` and call again. `missing[].package` only ever holds package names. Image and kernel classes, rootfs and SDK classes and wic layouts give `image_miss`. An unreachable remote still returns a verdict: `feed-unreachable` when no mirror is configured, `no-cache-key` when one is (a mirror carries no snapshot content), and a recipe hit by the local delta stays a hit. An `image_miss` is returned before the remote and the avocado CLI version are read, so it never carries the old-CLI warning. Read-only: it never builds, writes a feed or touches a device.",
+        "Decide the build path for a change before building anything. Returns `feed_hit` (every package is served by the published feed or the project's local delta: use `avocado install` and `avocado build`, no Yocto), `package_miss` (packages are not proven to be served; read `missing[].reason` and `reasons` before recommending a rebuild: `no-cache-key` means the tool could not prove coverage, not that the package is absent, for example when the snapshot publishes no `build.json`, when a feed that outranks the one holding the package in `avocado install` carries it or cannot be read, or when a shared include or class changed since the recorded build; `version-differs`, `stale-delta` and `unknown-recipe` mean the package or recipe was found and does not match, so build those recipes into the delta feed; a recipe whose file groups have uncommitted changes is a miss until the changes are committed, with `no-cache-key` (or `version-differs` when the version also moved) and a warning naming the changed files, so the remedy is: commit, then rebuild, not a rebuild alone; a recipe's file groups include every `.inc` beside it and every subdirectory of its directory (for a recipe at the layer root: the root `.inc` files, `files/` and `<recipe>/`), so a change in a sibling recipe's subdirectory counts too, and a deleted member counts as a change) or `image_miss` (the change touches machine, kernel, board-support, layer, distro, package-group or image paths: a full image build is needed). Pass `change.recipes` and/or `change.paths` (paths changed in the layer workspace). `workspace_dir` is the layers checkout, used to prove a delta or published package was built from the current recipe commits. `mirror_dir` (or AVOCADO_FEED_MIRROR_DIR) names a local feed mirror, used for package metadata only when its marker digest matches both the remote head's and the pointed snapshot's metadata index (head only when no pointer exists), and never for a pinned snapshot. A changed path that maps to no recipe (a bbclass, a library file, or a shared include the workspace cannot place) and is not documentation or a test file gives `package_miss` whose `missing` list does not name it: the path is in `unmapped` instead. Read an empty `missing` with a non-empty `unmapped` as: the change cannot be mapped to packages, so build with Yocto as for `image_miss`, or name the affected recipes in `change.recipes` and call again. `missing[].package` only ever holds package names. Image and kernel classes, rootfs and SDK classes and wic layouts give `image_miss`. An unreachable remote still returns a verdict: `feed-unreachable` when no mirror is configured, `no-cache-key` when one is (a mirror carries no snapshot content), and a recipe hit by the local delta stays a hit. An `image_miss` is returned before the remote and the avocado CLI version are read, so it never carries the old-CLI warning. Read-only: it never builds, writes a feed or touches a device.",
       inputSchema: {
         project_dir: z
           .string()

@@ -4,7 +4,8 @@
  * `build-path.ts` what it needs. Nothing here writes to a feed.
  *
  * The only processes started are `git log -1`, `git status --porcelain`,
- * `git merge-base --is-ancestor` and the `avocado --version` query. Every one is spawned
+ * `git diff`, `git ls-files`, `git ls-tree`, `git merge-base --is-ancestor` and
+ * the `avocado --version` query. Every one is spawned
  * without a shell, with a timeout.
  */
 
@@ -604,6 +605,9 @@ export function createWorkspace(
       const at = layerCommits[l.name];
       if (at === undefined) continue;
       if (!COMMIT_RE.test(at)) return null;
+      // Against the working tree, not HEAD: a staged or unstaged edit to a
+      // tracked file differs from the commit too, and an untracked file is
+      // listed by the second run.
       const r = run(l.dir, [
         ...GIT_BASE,
         "diff",
@@ -611,16 +615,23 @@ export function createWorkspace(
         "-z",
         "--no-renames",
         at,
-        "HEAD",
       ]);
-      if (r.status !== 0) {
+      const u = run(l.dir, [
+        ...GIT_BASE,
+        "ls-files",
+        "--others",
+        "--exclude-standard",
+        "-z",
+      ]);
+      const bad = r.status !== 0 ? r : u.status !== 0 ? u : null;
+      if (bad) {
         // An object the clone lacks (a shallow clone) lands here too.
         failures.push(
-          `git diff in ${l.name} ended with ${r.status === null ? "no exit status" : `exit ${r.status}`}`,
+          `git diff in ${l.name} ended with ${bad.status === null ? "no exit status" : `exit ${bad.status}`}`,
         );
         return null;
       }
-      for (const rel of r.stdout.split("\0"))
+      for (const rel of [...r.stdout.split("\0"), ...u.stdout.split("\0")])
         if (rel) out.push(`${l.name}/${rel}`);
     }
     return out;
@@ -862,6 +873,7 @@ export async function loadPublishedState(input: {
   }
 
   let served = false;
+  let packagesFetched = false;
   if (mirrorUsable) {
     const repos = remoteDown
       ? mirrorRepos(
@@ -965,6 +977,7 @@ export async function loadPublishedState(input: {
             releasever: `${feed.manifestPath}/snapshots/${snapshotId}`,
           }
         : headFeed;
+    packagesFetched = true;
     const results = await Promise.allSettled(
       repos.map((r) => client.fetchRepoPackageInfos(source, r)),
     );
@@ -981,7 +994,13 @@ export async function loadPublishedState(input: {
     warnings.push("the published feed could not be read");
 
   return {
-    published: { reachable, snapshotId, packages, buildManifest },
+    published: {
+      reachable,
+      snapshotId,
+      packages,
+      buildManifest,
+      packagesRead: served || packagesFetched,
+    },
     mirrorConfigured: Boolean(mirrorDir),
     warnings,
     commit,
