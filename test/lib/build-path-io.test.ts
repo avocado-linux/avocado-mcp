@@ -676,6 +676,53 @@ test("another recipe's patch changed after the published build still leaves a hi
   assert.equal(v?.verdict, "feed_hit");
 });
 
+test("a class edited in the working tree after the published build is a miss", () => {
+  const edits: Array<[string, (repo: string) => void]> = [
+    [
+      "untracked",
+      (repo) => write(join(repo, "classes", "mine.bbclass"), "A = 2\n"),
+    ],
+    [
+      "staged",
+      (repo) => {
+        write(join(repo, "classes", "mine.bbclass"), "A = 2\n");
+        git(repo, "add", "classes/mine.bbclass");
+      },
+    ],
+    [
+      "unstaged",
+      (repo) =>
+        write(join(repo, "recipes-support", "common", "shared.inc"), "A = 2\n"),
+    ],
+  ];
+  for (const [label, edit] of edits) {
+    const v = sharedIncScenario(edit);
+    assert.equal(v?.verdict, "package_miss", label);
+    assert.equal(v?.missing[0].reason, "no-cache-key", label);
+  }
+});
+
+test("changedSince lists staged, unstaged and untracked files of the working tree", () => {
+  const ws = tmp();
+  const repo = layerWithHtop(ws, "meta-oe");
+  write(join(repo, "classes", "tracked.bbclass"), "A = 1\n");
+  git(repo, "add", "-A");
+  const before = commit(repo, "add a class");
+  write(join(repo, "classes", "tracked.bbclass"), "A = 2\n");
+  write(join(repo, "classes", "staged.bbclass"), "A = 1\n");
+  git(repo, "add", "classes/staged.bbclass");
+  write(join(repo, "classes", "new.bbclass"), "A = 1\n");
+  const got = createWorkspace(ws).workspace.changedSince?.({
+    "meta-oe": before,
+  });
+  assert.deepEqual(got?.slice().sort(), [
+    "meta-oe/classes/new.bbclass",
+    "meta-oe/classes/staged.bbclass",
+    "meta-oe/classes/tracked.bbclass",
+  ]);
+  rmSync(ws, { recursive: true });
+});
+
 test("changedSince lists layer-prefixed paths and is null for a commit the clone lacks", () => {
   const ws = tmp();
   const repo = layerWithHtop(ws, "meta-oe");
