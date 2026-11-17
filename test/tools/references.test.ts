@@ -26,10 +26,26 @@ function readme(slug: string): string {
   return `${fm}# ${slug}\n\nA python starter for ${slug}. More text.\n`;
 }
 
-async function withReferencesFixture<T>(run: () => Promise<T>): Promise<T> {
+/** Docs support-matrix targets served by the fixture; none by default. */
+async function withReferencesFixture<T>(
+  run: () => Promise<T>,
+  matrixTargets: string[] = [],
+): Promise<T> {
   const realFetch = globalThis.fetch;
+  clearSelectableCache();
   globalThis.fetch = (async (url: RequestInfo | URL) => {
     const u = String(url);
+    if (
+      matrixTargets.length > 0 &&
+      /\/(supported|virtual-environment)\.json$/.test(u)
+    ) {
+      return new Response(
+        JSON.stringify({
+          devices: matrixTargets.map((target) => ({ target })),
+        }),
+        { status: 200 },
+      );
+    }
     if (u.includes("api.github.com")) {
       const tree = Object.keys(FIXTURE).flatMap((slug) => [
         { path: `${slug}/README.md`, type: "blob" },
@@ -47,6 +63,7 @@ async function withReferencesFixture<T>(run: () => Promise<T>): Promise<T> {
     return await run();
   } finally {
     globalThis.fetch = realFetch;
+    clearSelectableCache();
   }
 }
 
@@ -257,5 +274,70 @@ test("a target that names no slug drops nothing and labels the mismatch", async 
       "py-old": "unlisted",
       "py-pi": "unlisted",
     });
+  });
+});
+
+test("a known target absent from the catalog still filters", async () => {
+  await withReferencesFixture(async () => {
+    const labels = await searchLabels({
+      query: "python",
+      target: "qemuarm64",
+    });
+    assert.deepEqual(labels, {
+      "py-generic": "generic",
+    });
+    const text = await searchText({ query: "python", target: "qemuarm64" });
+    assert.match(text, /3 references listing other targets omitted/);
+  }, ["qemuarm64", "jetson-orin-nano-devkit", "jetson-agx-orin-devkit"]);
+});
+
+test("a known target filters through its devkit-suffixed docs slug", async () => {
+  await withReferencesFixture(async () => {
+    const labels = await searchLabels({
+      query: "python",
+      target: "jetson-orin-nano",
+    });
+    assert.deepEqual(labels, {
+      "py-generic": "generic",
+      "py-new": "listed",
+      "py-old": "listed",
+    });
+  }, ["jetson-orin-nano-devkit", "jetson-agx-orin-devkit"]);
+});
+
+test("an ambiguous target says nothing was filtered", async () => {
+  await withReferencesFixture(async () => {
+    for (const args of [{ query: "python" }, {}]) {
+      const text = await searchText({ ...args, target: "jetson" });
+      assert.match(
+        text,
+        /`jetson` .*not resolved to one target, so nothing was filtered/,
+      );
+    }
+  }, ["jetson-orin-nano-devkit", "jetson-agx-orin-devkit"]);
+});
+
+test("a resolved target does not carry the unresolved note", async () => {
+  await withReferencesFixture(async () => {
+    const text = await searchText({ query: "python", target: "rpi5" });
+    assert.doesNotMatch(text, /nothing was filtered/);
+  });
+});
+
+test("the table shows each row's compatibility when a target is given", async () => {
+  await withReferencesFixture(async () => {
+    const text = await searchText({
+      query: "python",
+      target: "jetson-orin-nano",
+      include_incompatible: true,
+    });
+    const row = (slug: string) =>
+      text.split("\n").find((l) => l.startsWith(`| \`${slug}\``)) ?? "";
+    assert.match(text, /\| Compatibility \|/);
+    assert.match(row("py-new"), /\| listed \|/);
+    assert.match(row("py-generic"), /\| generic \|/);
+    assert.match(row("py-pi"), /\| unlisted \|/);
+    const bare = await searchText({ query: "python" });
+    assert.doesNotMatch(bare, /Compatibility/);
   });
 });

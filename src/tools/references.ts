@@ -9,7 +9,7 @@ import {
   type ReferenceEntry,
   type ReferenceProject,
 } from "../lib/references-client.js";
-import { sameTarget } from "../lib/hardware-support.js";
+import { getSelectableSlugs, sameTarget } from "../lib/hardware-support.js";
 import { resolveTargetInput } from "../lib/target-resolver.js";
 
 const referenceEntrySchema = z.object({
@@ -37,17 +37,35 @@ type LabelledReference = ReferenceEntry & {
  * equivalent slugs count as listed (a reference naming the old `-devkit` slug
  * matches the new slug). Kept in the tool layer so the project initialization
  * listing is unchanged. `omitted` counts the references the default filter
- * dropped.
+ * dropped. `resolved` is false when the target names no single slug, in which
+ * case nothing is dropped.
+ *
+ * The slugs a target resolves against are the catalog's plus the support
+ * matrix's, so a real board no reference lists yet ("qemuarm64") still
+ * filters instead of passing everything through.
  */
 async function referencesForTarget(
   query: string,
   target: string | undefined,
   includeIncompatible: boolean,
-): Promise<{ references: LabelledReference[]; omitted: number }> {
+): Promise<{
+  references: LabelledReference[];
+  omitted: number;
+  resolved: boolean;
+}> {
   const scored = await searchReferencesScored(query, target);
-  if (!target) return { references: scored.map((s) => s.entry), omitted: 0 };
+  if (!target) {
+    return {
+      references: scored.map((s) => s.entry),
+      omitted: 0,
+      resolved: true,
+    };
+  }
   const slugs = [
-    ...new Set((await listReferences()).flatMap((r) => r.hardware)),
+    ...new Set([
+      ...(await listReferences()).flatMap((r) => r.hardware),
+      ...((await getSelectableSlugs()) ?? []),
+    ]),
   ];
   const typed = target.trim().toLowerCase();
   const resolved = resolveTargetInput(target, slugs).target;
@@ -67,10 +85,21 @@ async function referencesForTarget(
   // A target that names no single slug ("jetson", "imx93") cannot rule a
   // reference out, so nothing is dropped; the labels still show the mismatch.
   if (includeIncompatible || !resolved) {
-    return { references: labelled, omitted: 0 };
+    return { references: labelled, omitted: 0, resolved: !!resolved };
   }
   const kept = labelled.filter((r) => r.compatibility !== "unlisted");
-  return { references: kept, omitted: labelled.length - kept.length };
+  return {
+    references: kept,
+    omitted: labelled.length - kept.length,
+    resolved: true,
+  };
+}
+
+/** The target as shown in the output, with a note when it filtered nothing. */
+function targetLabel(target: string, resolved: boolean): string {
+  return resolved
+    ? `\`${target}\``
+    : `\`${target}\` (not resolved to one target, so nothing was filtered)`;
 }
 
 function omittedNote(omitted: number): string {
@@ -127,15 +156,23 @@ export function registerReferenceTools(server: McpServer): void {
       try {
         if (q.length === 0) {
           // Catalog-browse mode
-          const { references: all, omitted } = target
+          const {
+            references: all,
+            omitted,
+            resolved,
+          } = target
             ? await referencesForTarget(
                 "",
                 target,
                 include_incompatible === true,
               )
-            : { references: await listReferences(), omitted: 0 };
+            : {
+                references: await listReferences(),
+                omitted: 0,
+                resolved: true,
+              };
           let out = `# search-references — catalog\n\n`;
-          out += `**Total:** ${all.length}${target ? `  •  **Target filter:** \`${target}\`` : ""}\n\n`;
+          out += `**Total:** ${all.length}${target ? `  •  **Target filter:** ${targetLabel(target, resolved)}` : ""}\n\n`;
           out += omittedNote(omitted);
           out += renderList(all);
           return {
@@ -150,16 +187,16 @@ export function registerReferenceTools(server: McpServer): void {
         }
 
         // Ranked-search mode
-        const { references: matches, omitted } = await referencesForTarget(
-          q,
-          target,
-          include_incompatible === true,
-        );
+        const {
+          references: matches,
+          omitted,
+          resolved,
+        } = await referencesForTarget(q, target, include_incompatible === true);
         return {
           content: [
             {
               type: "text",
-              text: `# search-references\n\n**Query:** \`${q}\`${target ? `  •  **Target:** \`${target}\`` : ""}\n**Matches:** ${matches.length}\n\n${omittedNote(omitted)}${renderList(matches)}`,
+              text: `# search-references\n\n**Query:** \`${q}\`${target ? `  •  **Target:** ${targetLabel(target, resolved)}` : ""}\n**Matches:** ${matches.length}\n\n${omittedNote(omitted)}${renderList(matches)}`,
             },
           ],
           structuredContent: {
@@ -277,11 +314,13 @@ export function registerReferenceTools(server: McpServer): void {
 
 function renderList(entries: LabelledReference[]): string {
   if (entries.length === 0) return "_No references match._";
-  let out = `| Slug | Title | Language | Hardware | Summary |\n`;
-  out += `|------|-------|----------|----------|---------|\n`;
+  const labelled = entries.some((r) => r.compatibility !== undefined);
+  let out = `| Slug | Title | Language | Hardware |${labelled ? " Compatibility |" : ""} Summary |\n`;
+  out += `|------|-------|----------|----------|${labelled ? "---------------|" : ""}---------|\n`;
   for (const r of entries) {
     const hw = r.hardware.length ? r.hardware.join(", ") : "—";
-    out += `| \`${r.slug}\` | ${r.title} | ${r.language} | ${hw} | ${r.summary} |\n`;
+    const compat = labelled ? ` ${r.compatibility ?? "—"} |` : "";
+    out += `| \`${r.slug}\` | ${r.title} | ${r.language} | ${hw} |${compat} ${r.summary} |\n`;
   }
   return out;
 }
