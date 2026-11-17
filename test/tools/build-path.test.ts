@@ -347,7 +347,12 @@ function commitIn(cwd: string, msg: string): void {
 // a miss after `edit` comes from the edit and not from the fixture.
 async function deltaScenario(
   edit: (ctx: { ws: string; layer: string }) => void,
-  opts: { pv?: string; feeds?: string } = {},
+  opts: {
+    pv?: string;
+    feeds?: string;
+    append?: boolean;
+    deltaChannel?: string;
+  } = {},
 ) {
   const p = project(
     `default_target: qemux86-64\ndistro:\n  release: 2026\n  channel: edge\n  feeds: [${opts.feeds ?? "local, avocado"}]\nrepos:\n  local:\n    path: delta/target/qemux86-64\n`,
@@ -360,7 +365,11 @@ async function deltaScenario(
       join(droot, "delta.json"),
       JSON.stringify({
         schema_version: 1,
-        base: { release: "2026", channel: "edge", snapshot_id: null },
+        base: {
+          release: "2026",
+          channel: opts.deltaChannel ?? "edge",
+          snapshot_id: null,
+        },
         built_recipes: ["foo"],
       }),
     );
@@ -371,6 +380,7 @@ async function deltaScenario(
     writeFileSync(join(dir, "foo_1.0.bb"), "# foo\n");
     writeFileSync(join(dir, "foo.inc"), "# inc\n");
     writeFileSync(join(dir, "files", "fix.patch"), "a\n");
+    if (opts.append) writeFileSync(join(dir, "foo_%.bbappend"), "# append\n");
     gitIn(layer, "add", "-A");
     commitIn(layer, "init");
     writeFileSync(
@@ -408,7 +418,7 @@ async function deltaScenario(
       if (!r.ok) throw new Error("checkBuildPath failed");
       return r.verdict;
     };
-    if (!opts.pv && !opts.feeds)
+    if (!opts.pv && !opts.feeds && !opts.deltaChannel)
       assert.equal((await run()).verdict, "feed_hit");
     edit({ ws, layer });
     return await run();
@@ -557,4 +567,104 @@ test("a delta listed alone sits behind the distro feed, so its hit is unverified
   assert.equal(v.verdict, "package_miss");
   assert.deepEqual(reasons(v), [["foo", "no-cache-key"]]);
   assert.match(v.reasons.join("\n"), /distro feed \(priority 10\) outranks/);
+});
+
+test("a committed delete of an existing .bbappend after the delta build is a miss", async () => {
+  const v = await deltaScenario(
+    ({ layer }) => {
+      gitIn(layer, "rm", "-q", "recipes-x/foo/foo_%.bbappend");
+      commitIn(layer, "drop the append");
+    },
+    { append: true },
+  );
+  assert.equal(v.verdict, "package_miss");
+  assert.deepEqual(reasons(v), [["foo", "stale-delta"]]);
+});
+
+test("a class committed in a second workspace layer is not a delta hit", async () => {
+  const v = await deltaScenario(({ ws }) => {
+    const other = join(ws, "meta-b");
+    mkdirSync(join(other, "classes"), { recursive: true });
+    gitIn(other, "init", "-q");
+    writeFileSync(join(other, "classes", "mine.bbclass"), "A = 1\n");
+    gitIn(other, "add", "-A");
+    commitIn(other, "add a class");
+  });
+  assert.equal(v.verdict, "package_miss");
+  assert.deepEqual(reasons(v), [["foo", "no-cache-key"]]);
+});
+
+test("a delta built for another channel is not a local hit", async () => {
+  const v = await deltaScenario(() => {}, { deltaChannel: "next" });
+  assert.equal(v.verdict, "package_miss");
+  assert.match(v.warnings.join("\n"), /2026\/next/);
+});
+
+class FirstDeltaUnreadable extends UnreachableRepo {
+  override async fetchExtraFeed(
+    ...a: Parameters<RepoClient["fetchExtraFeed"]>
+  ) {
+    if (String(a[0].path).endsWith("/first")) throw new Error("unreadable");
+    return new DeltaRepo().fetchExtraFeed();
+  }
+}
+
+test("an unreadable higher-priority delta repository makes a delta hit unverified", async () => {
+  const p = project(
+    "default_target: qemux86-64\ndistro:\n  release: 2026\n  channel: edge\n  feeds: [first, second, avocado]\nrepos:\n  first:\n    path: delta/target/qemux86-64/first\n  second:\n    path: delta/target/qemux86-64/second\n",
+  );
+  const ws = mkdtempSync(join(tmpdir(), "build-path-ws-"));
+  try {
+    const droot = join(p.dir, "delta");
+    for (const d of ["first", "second"])
+      mkdirSync(join(droot, "target", "qemux86-64", d), { recursive: true });
+    writeFileSync(
+      join(droot, "delta.json"),
+      JSON.stringify({
+        schema_version: 1,
+        base: { release: "2026", channel: "edge", snapshot_id: null },
+        built_recipes: ["foo"],
+      }),
+    );
+    const layer = join(ws, "meta-a");
+    mkdirSync(join(layer, "recipes-x", "foo"), { recursive: true });
+    gitIn(layer, "init", "-q");
+    writeFileSync(join(layer, "recipes-x", "foo", "foo_1.0.bb"), "# foo\n");
+    gitIn(layer, "add", "-A");
+    commitIn(layer, "init");
+    writeFileSync(
+      join(droot, "recipe-map.json"),
+      JSON.stringify({
+        schema_version: 1,
+        entries: [
+          {
+            recipe: "foo",
+            packages: ["foo"],
+            layer: "meta-a",
+            epoch: 0,
+            pv: "1.0",
+            pr: "r0",
+            srcrev: "",
+            layer_commit: gitIn(layer, "rev-parse", "HEAD"),
+            machine: "qemux86-64",
+            release: "2026",
+            task_hash: null,
+          },
+        ],
+      }),
+    );
+    const r = await checkBuildPath(
+      new FirstDeltaUnreadable(),
+      { project_dir: p.dir, workspace_dir: ws, change: { recipes: ["foo"] } },
+      NO_ENV,
+    );
+    assert.equal(r.ok, true);
+    if (!r.ok) return;
+    assert.equal(r.verdict.verdict, "package_miss");
+    assert.deepEqual(reasons(r.verdict), [["foo", "no-cache-key"]]);
+    assert.match(r.verdict.reasons.join("\n"), /first/);
+  } finally {
+    rmSync(ws, { recursive: true, force: true });
+    p.done();
+  }
 });

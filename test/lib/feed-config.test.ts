@@ -1117,3 +1117,37 @@ repos:
   assert.match(g.blocked ?? "", /env\.DISTRO_FEED/);
   assert.throws(() => validateFeed(g), /env\.DISTRO_FEED/);
 });
+
+test("liveChannel marks a feed the CLI reads at the channel head, not a snapshot", () => {
+  const pin = {
+    targets: {
+      t: {
+        "repo-snapshot": { release: "2026", channel: "edge", snapshot: "s1" },
+      },
+    },
+  };
+  const at = (yaml: string, lock?: unknown) =>
+    resolveFeed({ env: {}, config: cfg(yaml), lock, target: "t" });
+  // Pinned and derived releasevers follow the pointer, so they are not live.
+  assert.equal(
+    at("distro:\n  release: 2026\n  channel: edge\n", pin).liveChannel,
+    undefined,
+  );
+  assert.equal(
+    at("distro:\n  release: 2026\n  channel: edge\n").liveChannel,
+    undefined,
+  );
+  // An explicit releasever overrides the pin.
+  assert.equal(
+    at(
+      "distro:\n  release: 2026\n  channel: edge\n  repo:\n    releasever: 2026/edge\n",
+      pin,
+    ).liveChannel,
+    true,
+  );
+  // A stale pin is ignored by the CLI.
+  assert.equal(
+    at("distro:\n  release: 2026\n  channel: apollo\n", pin).liveChannel,
+    true,
+  );
+});

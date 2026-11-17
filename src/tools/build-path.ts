@@ -4,6 +4,7 @@ import { resolve } from "path";
 import {
   classifyBuildPath,
   imageClassOf,
+  selectSnapshot,
   type ChangeInput,
   type FeedPriorities,
   type PackageInfo,
@@ -35,22 +36,24 @@ import { feedContextFrom } from "./feed-args.js";
  */
 function feedPrioritiesOf(
   feed: ResolvedFeed,
-  deltaDirs: string[],
+  deltaRepos: Array<{ path: string; packages: PackageInfo[] | null }>,
 ): FeedPriorities | undefined {
   if (feed.priority === undefined || !feed.feeds) return undefined;
-  const deltaNames = new Set(
-    (feed.extraFeeds ?? [])
-      .filter(
-        (f) => f.path !== undefined && deltaDirs.includes(resolve(f.path)),
-      )
-      .map((f) => f.name),
-  );
-  const deltaPriorities = feed.feeds
-    .filter((f) => deltaNames.has(f.name))
-    .map((f) => f.priority);
+  const byPath = new Map(deltaRepos.map((r) => [r.path, r.packages]));
+  const deltaPackages = new Map<string, PackageInfo[] | null>();
+  for (const f of feed.extraFeeds ?? [])
+    if (f.path !== undefined && byPath.has(resolve(f.path)))
+      deltaPackages.set(f.name, byPath.get(resolve(f.path)) ?? null);
+  const deltaNames = new Set(deltaPackages.keys());
   return {
     distro: feed.priority,
-    delta: deltaPriorities.length > 0 ? Math.min(...deltaPriorities) : null,
+    delta: feed.feeds
+      .filter((f) => deltaNames.has(f.name))
+      .map((f) => ({
+        name: f.name,
+        priority: f.priority,
+        packages: deltaPackages.get(f.name) ?? null,
+      })),
     others: feed.feeds
       .filter(
         (f) =>
@@ -128,12 +131,14 @@ export async function checkBuildPath(
   warnings.push(...deltaWarnings);
   let recipeMap: RecipeMap | null = null;
   let deltaPackages: PackageInfo[] = [];
+  let deltaRepos: Array<{ path: string; packages: PackageInfo[] | null }> = [];
   if (found) {
     const rm = readRecipeMap(found.root);
     recipeMap = rm.map;
     warnings.push(...rm.warnings);
     const loaded = await loadDeltaPackages(client, found.feedDirs);
     deltaPackages = loaded.packages;
+    deltaRepos = loaded.repos;
     warnings.push(...loaded.warnings);
   }
 
@@ -188,7 +193,16 @@ export async function checkBuildPath(
     published,
     mirrorConfigured,
     feeds: verdictFeeds(feed, published.snapshotId, commit),
-    feedPriorities: feedPrioritiesOf(feed, found?.feedDirs ?? []),
+    feedPriorities: feedPrioritiesOf(feed, deltaRepos),
+    pinnedSnapshot:
+      feed.snapshot !== undefined &&
+      selectSnapshot(
+        { snapshot_id: feed.snapshot, url: feed.snapshotRepoUrl ?? null },
+        feed.baseUrl,
+        null,
+      ) === feed.snapshot
+        ? feed.snapshot
+        : null,
   });
   if (!result.ok) return result;
   warnings.push(...workspaceFailures);
@@ -255,7 +269,7 @@ export function registerBuildPathTool(
     {
       title: "Check whether a change needs an image build",
       description:
-        "Decide the build path for a change before building anything. Returns `feed_hit` (every package is served by the published feed or the project's local delta: use `avocado install` and `avocado build`, no Yocto), `package_miss` (packages are not proven to be served; read `missing[].reason` and `reasons` before recommending a rebuild: `no-cache-key` means the tool could not prove coverage, not that the package is absent, for example when the snapshot publishes no `build.json`, when a feed that outranks the one holding the package in `avocado install` carries it or cannot be read, or when a shared include or class changed since the recorded build; `version-differs`, `stale-delta` and `unknown-recipe` mean the package or recipe was found and does not match, so build those recipes into the delta feed; a recipe whose file groups have uncommitted changes is a miss until the changes are committed, with `no-cache-key` (or `version-differs` when the version also moved) and a warning naming the changed files, so the remedy is: commit, then rebuild, not a rebuild alone; a recipe's file groups include every `.inc` beside it and every subdirectory of its directory (for a recipe at the layer root: the root `.inc` files, `files/` and `<recipe>/`), so a change in a sibling recipe's subdirectory counts too, and a deleted member counts as a change) or `image_miss` (the change touches machine, kernel, board-support, layer, distro, package-group or image paths: a full image build is needed). Pass `change.recipes` and/or `change.paths` (paths changed in the layer workspace). `workspace_dir` is the layers checkout, used to prove a delta or published package was built from the current recipe commits. `mirror_dir` (or AVOCADO_FEED_MIRROR_DIR) names a local feed mirror, used for package metadata only when its marker digest matches both the remote head's and the pointed snapshot's metadata index (head only when no pointer exists), and never for a pinned snapshot. A changed path that maps to no recipe (a bbclass, a library file, or a shared include the workspace cannot place) and is not documentation or a test file gives `package_miss` whose `missing` list does not name it: the path is in `unmapped` instead. Read an empty `missing` with a non-empty `unmapped` as: the change cannot be mapped to packages, so build with Yocto as for `image_miss`, or name the affected recipes in `change.recipes` and call again. `missing[].package` only ever holds package names. Image and kernel classes, rootfs and SDK classes and wic layouts give `image_miss`. An unreachable remote still returns a verdict: `feed-unreachable` when no mirror is configured, `no-cache-key` when one is (a mirror carries no snapshot content), and a recipe hit by the local delta stays a hit. An `image_miss` is returned before the remote and the avocado CLI version are read, so it never carries the old-CLI warning. Read-only: it never builds, writes a feed or touches a device.",
+        "Decide the build path for a change before building anything. Returns `feed_hit` (every package is served by the published feed or the project's local delta: use `avocado install` and `avocado build`, no Yocto), `package_miss` (packages are not proven to be served; read `missing[].reason` and `reasons` before recommending a rebuild: `no-cache-key` means the tool could not prove coverage, not that the package is absent, for example when the snapshot publishes no `build.json`, when a feed that outranks the one holding the package in `avocado install` carries it or cannot be read, or when a shared include or class changed since the recorded build; `version-differs` and `stale-delta` mean the recipe was found and does not match, so build those recipes into the delta feed; `unknown-recipe` (with a null `missing[].recipe`) means the recipe name is absent from the recipe map and the workspace, or present in more than one workspace layer, so identify the recipe first (pass its exact name in `change.recipes`, or leave one providing repository out of `workspace_dir`) and call again before recommending a rebuild; a recipe whose file groups have uncommitted changes is a miss until the changes are committed, with `no-cache-key` (or `version-differs` when the version also moved) and a warning naming the changed files, so the remedy is: commit, then rebuild, not a rebuild alone; a recipe's file groups include every `.inc` beside it and every subdirectory of its directory (for a recipe at the layer root: the root `.inc` files, `files/` and `<recipe>/`), so a change in a sibling recipe's subdirectory counts too, and a deleted member counts as a change) or `image_miss` (the change touches machine, kernel, board-support, layer, distro, package-group or image paths: a full image build is needed). Pass `change.recipes` and/or `change.paths` (paths changed in the layer workspace). `workspace_dir` is the layers checkout, used to prove a delta or published package was built from the current recipe commits. `mirror_dir` (or AVOCADO_FEED_MIRROR_DIR) names a local feed mirror, used for package metadata only when its marker digest matches both the remote head's and the pointed snapshot's metadata index (head only when no pointer exists), and never for a pinned snapshot. A changed path that maps to no recipe (a bbclass, a library file, or a shared include the workspace cannot place) and is not documentation or a test file gives `package_miss` whose `missing` list does not name it: the path is in `unmapped` instead. Read an empty `missing` with a non-empty `unmapped` as: the change cannot be mapped to packages, so build with Yocto as for `image_miss`, or name the affected recipes in `change.recipes` and call again. `missing[].package` only ever holds package names. Image and kernel classes, rootfs and SDK classes and wic layouts give `image_miss`. An unreachable remote still returns a verdict: `feed-unreachable` when no mirror is configured, `no-cache-key` when one is (a mirror carries no snapshot content), and a recipe hit by the local delta stays a hit. An `image_miss` is returned before the remote and the avocado CLI version are read, so it never carries the old-CLI warning. Read-only: it never builds, writes a feed or touches a device.",
       inputSchema: {
         project_dir: z
           .string()
@@ -266,7 +280,7 @@ export function registerBuildPathTool(
           .string()
           .optional()
           .describe(
-            "Absolute path to the layers workspace (a git repository, or a directory of them). It should hold only the layers of the build being checked. Uncommitted changes in a recipe's file groups make the recipe a miss until they are committed: commit, then rebuild. A recipe name present in two layer repositories (common when two layer repositories share many recipe names) is an unknown recipe, with a warning naming both. When `workspace_dir` holds every repository that provides a recipe, a recipe provided by two repositories is reported as unknown-recipe (package_miss) because the tool cannot tell which one built it; leave a providing repository out of `workspace_dir` to let the delta's recorded layer decide.",
+            "Absolute path to the layers workspace (a git repository, or a directory of them). It should hold only the layers of the build being checked: the recipe map records the commit of the recipe's layer only, so a second layer repository in it leaves a delta hit with no cache key. Uncommitted changes in a recipe's file groups make the recipe a miss until they are committed: commit, then rebuild. A recipe name present in two layer repositories (common when two layer repositories share many recipe names) is an unknown recipe, with a warning naming both. When `workspace_dir` holds every repository that provides a recipe, a recipe provided by two repositories is reported as unknown-recipe (package_miss) because the tool cannot tell which one built it; leave a providing repository out of `workspace_dir` to let the delta's recorded layer decide.",
           ),
         change: z
           .object({

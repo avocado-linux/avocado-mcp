@@ -234,8 +234,14 @@ export function readRecipeMap(root: string): {
 export async function loadDeltaPackages(
   client: Pick<RepoClient, "fetchExtraFeed">,
   feedDirs: string[],
-): Promise<{ packages: PackageInfo[]; warnings: string[] }> {
+): Promise<{
+  packages: PackageInfo[];
+  /** Per directory, resolved; null packages when it could not be read. */
+  repos: Array<{ path: string; packages: PackageInfo[] | null }>;
+  warnings: string[];
+}> {
   const packages: PackageInfo[] = [];
+  const repos: Array<{ path: string; packages: PackageInfo[] | null }> = [];
   const warnings: string[] = [];
   const results = await Promise.allSettled(
     feedDirs.map((path) =>
@@ -243,13 +249,19 @@ export async function loadDeltaPackages(
     ),
   );
   results.forEach((r, i) => {
-    if (r.status === "fulfilled") packages.push(...r.value.map(toPackageInfo));
-    else
+    const path = resolve(feedDirs[i]);
+    if (r.status === "fulfilled") {
+      const got = r.value.map(toPackageInfo);
+      packages.push(...got);
+      repos.push({ path, packages: got });
+    } else {
+      repos.push({ path, packages: null });
       warnings.push(
         `could not read delta repository ${feedDirs[i]}: ${String((r.reason as Error)?.message ?? r.reason)}`,
       );
+    }
   });
-  return { packages, warnings };
+  return { packages, repos, warnings };
 }
 
 // ---- workspace ------------------------------------------------------------
@@ -672,6 +684,7 @@ export function createWorkspace(
           }
         return [...names].sort();
       }),
+    layerNames: () => layers.map((l) => l.name),
     isAncestor: (a, b) =>
       memo(ancestorMemo, `${a}\0${b}`, () => computeAncestor(a, b)),
     unchangedSince: (recipe, layerCommits) =>
@@ -838,6 +851,35 @@ export async function loadPublishedState(input: {
       // agent cannot tell a feed that cannot answer from a recipe that moved.
       warnings.push(`build.json for snapshot ${snapshotId}: ${b.reason}`);
       if (b.kind === "unreachable") manifestDown = true;
+    }
+  }
+  // The CLI reads the live channel head here, while build.json describes the
+  // pointed snapshot: the two prove the same packages only while the head's
+  // metadata is the snapshot's.
+  if (feed.liveChannel && !pinned && snapshotId && buildManifest) {
+    const repos = manifest?.[target] ?? [];
+    const snapFeed: FeedSpec = {
+      ...headFeed,
+      releasever: `${feed.manifestPath}/snapshots/${snapshotId}`,
+    };
+    let same = repos.length > 0;
+    try {
+      for (const r of repos) {
+        if (!same) break;
+        const [h, sd] = await Promise.all([
+          client.fetchRepomdDigest(headFeed, r),
+          client.fetchRepomdDigest(snapFeed, r),
+        ]);
+        same = h.toLowerCase() === sd.toLowerCase();
+      }
+    } catch {
+      same = false;
+    }
+    if (!same) {
+      buildManifest = null;
+      warnings.push(
+        `avocado install reads the live channel ${feed.manifestPath}, which could not be shown to match snapshot ${snapshotId}; the build manifest was not used`,
+      );
     }
   }
   let reachable = !remoteDown && !manifestDown;

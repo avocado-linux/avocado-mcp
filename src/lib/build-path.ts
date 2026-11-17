@@ -106,6 +106,8 @@ export interface Workspace {
    * one files directory and `.inc`. Empty when the directory holds none.
    */
   recipesInDir?(recipeDir: string): string[];
+  /** Names of the workspace's layer repositories. */
+  layerNames?(): string[];
   /**
    * True when commit `a` is an ancestor of (or equal to) commit `b`, false
    * when it is not, null when the answer could not be established (a git
@@ -158,8 +160,16 @@ export interface PublishedState {
  */
 export interface FeedPriorities {
   distro: number;
-  /** Lowest number among the delta's path feeds; null without a delta. */
-  delta: number | null;
+  /**
+   * One entry per path feed of the delta, each with its own priority. Null
+   * `packages` means the repository could not be read, so it may carry
+   * anything.
+   */
+  delta: Array<{
+    name: string;
+    priority: number;
+    packages: PackageInfo[] | null;
+  }>;
   /** Feeds that are neither the distro feed nor the delta. */
   others: Array<{
     name: string;
@@ -198,6 +208,8 @@ export interface ClassifyInput {
   feeds?: VerdictFeed[];
   /** Without it no feed outranks another and every hit stands. */
   feedPriorities?: FeedPriorities;
+  /** The snapshot the project's lock file pins for this feed, when it does. */
+  pinnedSnapshot?: string | null;
   /** ISO timestamp; defaults to the current time. */
   now?: string;
 }
@@ -360,11 +372,28 @@ function localKey(e: RecipeMapEntry): string {
 }
 
 /** Pure verdict classifier: every external fact arrives through `input`. */
-export function classifyBuildPath(input: ClassifyInput): ClassifyResult {
+export function classifyBuildPath(raw: ClassifyInput): ClassifyResult {
   const warnings: string[] = [];
   const warn = (w: string) => {
     if (!warnings.includes(w)) warnings.push(w);
   };
+  // A delta built for another release stream, or on another snapshot than
+  // the one the project pins, says nothing about this project's install.
+  let input = raw;
+  const base = raw.delta?.manifest.base;
+  if (base) {
+    const pin = raw.pinnedSnapshot ?? null;
+    const stream = base.release !== raw.release || base.channel !== raw.channel;
+    const snapshot = pin !== null && base.snapshot_id !== pin;
+    if (stream || snapshot) {
+      warn(
+        stream
+          ? `delta was built for ${base.release}/${base.channel}, not ${raw.release}/${raw.channel}; it was not used`
+          : `delta was built on snapshot ${base.snapshot_id ?? "none"}, but the project pins ${pin}; it was not used`,
+      );
+      input = { ...raw, delta: null };
+    }
+  }
   const change = input.change ?? {};
   const named = [...new Set(change.recipes ?? [])];
   const paths = change.paths ?? [];
@@ -535,7 +564,13 @@ function evaluateRecipe(
       // compare; a dirty group carries an empty commit too, once one is given.
       localReason = "no-cache-key";
     } else {
-      localReason = localRule(entry, input.delta.packages, ws, recipe);
+      localReason = localRule(
+        entry,
+        input.delta.packages,
+        ws,
+        recipe,
+        out.extraReasons,
+      );
       if (localReason === null) {
         const shadow = outrankedBy("delta", entry.packages, input);
         if (shadow === null) {
@@ -578,6 +613,7 @@ function localRule(
   deltaPackages: PackageInfo[],
   ws: Workspace,
   recipe: string,
+  notes: string[],
 ): MissReason | null {
   // An entry that lists no package proves nothing about what was built.
   if (entry.packages.length === 0) return "no-cache-key";
@@ -605,6 +641,21 @@ function localRule(
     if (anc === null) return "no-cache-key";
     if (!anc) return "stale-delta";
   }
+  // An ancestor test cannot see a file a later commit deleted (a .bbappend):
+  // compare the recipe's files at the recorded commit with the workspace's.
+  const same = ws.unchangedSince(recipe, { [entry.layer]: entry.layer_commit });
+  if (same === null) return "no-cache-key";
+  if (!same) return "stale-delta";
+  // The recipe map records the commit of the recipe's layer only. A class or
+  // include may come from any other layer, and nothing says what that layer
+  // was at build time, so another layer in the workspace cannot be proven.
+  const others = (ws.layerNames?.() ?? []).filter((n) => n !== entry.layer);
+  if (others.length > 0) {
+    notes.push(
+      `${recipe}: delta: no recorded build commit for layer ${others.join(", ")}, which can supply shared classes and includes`,
+    );
+    return "no-cache-key";
+  }
   // A shared include or class lies outside every recipe group: any such path
   // that differs from the recorded layer commit, in the commits or in the
   // working tree, leaves the delta without a proven build.
@@ -617,7 +668,8 @@ function localRule(
 /**
  * Why a hit in the `own` feed cannot be trusted, or null: a feed that
  * outranks it carries one of the packages (dnf installs that one), or cannot
- * be read to tell.
+ * be read to tell. Each package is judged on its own: a delta repository's
+ * priority counts only for the packages that repository carries.
  */
 function outrankedBy(
   own: "delta" | "distro",
@@ -626,39 +678,49 @@ function outrankedBy(
 ): string | null {
   const fp = input.feedPriorities;
   if (!fp) return null;
-  const mine = own === "delta" ? fp.delta : fp.distro;
-  if (mine === null) return null;
-  const carried = (pkgs: PackageInfo[]) =>
-    names.find((n) => pkgs.some((p) => p.name === n));
-  const outranks = (
-    label: string,
-    priority: number,
-    pkgs: PackageInfo[] | null,
-  ) => {
-    if (priority >= mine) return null;
-    if (pkgs === null)
-      return `the ${label} feed (priority ${priority}) outranks the ${own} feed (priority ${mine}) and could not be read`;
-    const hit = carried(pkgs);
-    return hit === undefined
-      ? null
-      : `${hit} is also in the ${label} feed (priority ${priority}), which outranks the ${own} feed (priority ${mine})`;
-  };
-  if (own === "delta") {
-    const pub = input.published;
-    const read = Boolean(pub?.reachable) && pub?.packagesRead !== false;
-    const r = outranks(
-      "distro",
-      fp.distro,
-      read ? (pub?.packages ?? []) : null,
-    );
-    if (r) return r;
-  } else if (fp.delta !== null && input.delta) {
-    const r = outranks("delta", fp.delta, input.delta.packages);
-    if (r) return r;
-  }
-  for (const o of fp.others) {
-    const r = outranks(o.name, o.priority, o.packages);
-    if (r) return r;
+  if (own === "delta" && fp.delta.length === 0) return null;
+  const pub = input.published;
+  const read = Boolean(pub?.reachable) && pub?.packagesRead !== false;
+  const sources = [
+    {
+      label: "distro",
+      isDelta: false,
+      priority: fp.distro,
+      packages: read ? (pub?.packages ?? []) : null,
+    },
+    ...fp.delta.map((d) => ({
+      label: fp.delta.length > 1 ? `delta ${d.name}` : "delta",
+      isDelta: true,
+      priority: d.priority,
+      packages: d.packages,
+    })),
+    ...fp.others.map((o) => ({
+      label: o.name,
+      isDelta: false,
+      priority: o.priority,
+      packages: o.packages,
+    })),
+  ];
+  const carries = (pkgs: PackageInfo[] | null, n: string) =>
+    pkgs?.some((p) => p.name === n) ?? false;
+  for (const n of names) {
+    let mine: number;
+    if (own === "distro") mine = fp.distro;
+    else {
+      const winners = sources.filter(
+        (s) => s.isDelta && carries(s.packages, n),
+      );
+      if (winners.length === 0) continue;
+      mine = Math.min(...winners.map((w) => w.priority));
+    }
+    for (const s of sources) {
+      if (own === "distro" && s.label === "distro") continue;
+      if (s.priority >= mine) continue;
+      if (s.packages === null)
+        return `the ${s.label} feed (priority ${s.priority}) outranks the ${own} feed (priority ${mine}) and could not be read`;
+      if (carries(s.packages, n))
+        return `${n} is also in the ${s.label} feed (priority ${s.priority}), which outranks the ${own} feed (priority ${mine})`;
+    }
   }
   return null;
 }

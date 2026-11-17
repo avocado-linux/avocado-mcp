@@ -1101,16 +1101,31 @@ test("a delta hit is a miss when the changed paths could not be listed", () => {
 
 // ---- dnf feed priority ----
 
-const prio = (over = {}) => ({
-  distro: 20,
-  delta: 10,
-  others: [] as Array<{
-    name: string;
-    priority: number;
-    packages: PackageInfo[] | null;
-  }>,
-  ...over,
-});
+type PrioFeed = {
+  name: string;
+  priority: number;
+  packages: PackageInfo[] | null;
+};
+
+// `delta` as a number is one delta repository carrying htop at that priority.
+const prio = (
+  over: {
+    distro?: number;
+    delta?: number | PrioFeed[];
+    others?: PrioFeed[];
+  } = {},
+) => {
+  const { delta = 10, ...rest } = over;
+  return {
+    distro: 20,
+    others: [] as PrioFeed[],
+    ...rest,
+    delta:
+      typeof delta === "number"
+        ? [{ name: "delta", priority: delta, packages: [pkg("htop")] }]
+        : delta,
+  };
+};
 
 test("a delta hit stands when the delta outranks the distro feed", () => {
   const v = verdictOf(
@@ -1222,4 +1237,136 @@ test("a hit is unverified when an outranking feed the tool cannot read exists", 
     assert.equal(v.missing[0].reason, "no-cache-key");
     assert.match(v.reasons.join("\n"), /private/);
   }
+});
+
+test("a delta repository behind the distro feed does not borrow a better delta's priority", () => {
+  // feeds: delta-a (10), distro (20), delta-b (30); htop is only in delta-b.
+  const v = verdictOf(
+    base({
+      feedPriorities: prio({
+        distro: 20,
+        delta: [
+          { name: "delta-a", priority: 10, packages: [pkg("other")] },
+          { name: "delta-b", priority: 30, packages: [pkg("htop")] },
+        ],
+      }),
+      published: publishedHit(),
+    }),
+  );
+  // DNF installs the distro RPM, so the hit is the distro's, not the delta's.
+  assert.equal(v.verdict, "feed_hit");
+  assert.deepEqual(v.cache_keys.local, {});
+  assert.equal(v.cache_keys.published.htop, "meta-oe@def5678");
+});
+
+test("a delta hit is unverified when an outranking delta repository could not be read", () => {
+  const v = verdictOf(
+    base({
+      feedPriorities: prio({
+        distro: 30,
+        delta: [
+          { name: "delta-a", priority: 10, packages: null },
+          { name: "delta-b", priority: 20, packages: [pkg("htop")] },
+        ],
+      }),
+      published: publishedHit(),
+    }),
+  );
+  assert.equal(v.verdict, "package_miss");
+  assert.match(
+    v.reasons.join("\n"),
+    /delta-a feed \(priority 10\).*could not be read/,
+  );
+});
+
+test("a published hit is unverified when an outranking delta repository could not be read", () => {
+  const v = verdictOf(
+    base({
+      recipeMap: null,
+      delta: null,
+      feedPriorities: prio({
+        distro: 20,
+        delta: [{ name: "delta-a", priority: 10, packages: null }],
+      }),
+      published: publishedHit(),
+    }),
+  );
+  assert.equal(v.verdict, "package_miss");
+  assert.match(v.reasons.join("\n"), /could not be read/);
+});
+
+test("a delta hit is a miss when another layer in the workspace has no recorded commit", () => {
+  const ws: Workspace = {
+    ...workspace({ htop: [{ commit: "abc1234", layer: "meta-oe" }] }, [
+      "abc1234",
+      "def5678",
+    ]),
+    layerNames: () => ["meta-oe", "meta-extra"],
+    changedSince: () => [],
+  };
+  const v = verdictOf(base({ workspace: ws }));
+  assert.equal(v.verdict, "package_miss");
+  assert.equal(v.missing[0].reason, "no-cache-key");
+  assert.match(v.reasons.join("\n"), /meta-extra/);
+});
+
+test("a delta hit stands when the recipe's layer is the only workspace layer", () => {
+  const ws: Workspace = {
+    ...workspace({ htop: [{ commit: "abc1234", layer: "meta-oe" }] }, [
+      "abc1234",
+      "def5678",
+    ]),
+    layerNames: () => ["meta-oe"],
+  };
+  assert.equal(verdictOf(base({ workspace: ws })).verdict, "feed_hit");
+});
+
+test("a delta hit is a miss when the recipe's files changed since the recorded commit", () => {
+  const ws: Workspace = {
+    ...workspace(
+      { htop: [{ commit: "abc1234", layer: "meta-oe" }] },
+      ["abc1234", "def5678"],
+      {},
+      false,
+    ),
+  };
+  const v = verdictOf(base({ workspace: ws }));
+  assert.equal(v.verdict, "package_miss");
+  assert.equal(v.missing[0].reason, "stale-delta");
+});
+
+test("a delta built for another channel is not evidence", () => {
+  const b = base();
+  const v = verdictOf({
+    ...b,
+    delta: {
+      packages: [pkg("htop")],
+      manifest: {
+        schema_version: 1,
+        base: { release: "2026", channel: "next", snapshot_id: null },
+        built_recipes: ["htop"],
+      },
+    },
+  });
+  assert.equal(v.verdict, "package_miss");
+  assert.match(v.warnings.join("\n"), /2026\/next/);
+});
+
+test("a delta built on another snapshot than the project's pin is not evidence", () => {
+  const b = base();
+  const manifest = (snapshot_id: string | null) => ({
+    schema_version: 1,
+    base: { release: "2026", channel: "edge", snapshot_id },
+    built_recipes: ["htop"],
+  });
+  const withDelta = (s: string | null, pin: string | null) =>
+    verdictOf({
+      ...b,
+      pinnedSnapshot: pin,
+      delta: { packages: [pkg("htop")], manifest: manifest(s) },
+    });
+  assert.equal(withDelta("s0", "s1").verdict, "package_miss");
+  assert.equal(withDelta(null, "s1").verdict, "package_miss");
+  assert.equal(withDelta("s1", "s1").verdict, "feed_hit");
+  assert.equal(withDelta("s0", null).verdict, "feed_hit");
 });
