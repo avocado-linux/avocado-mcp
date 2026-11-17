@@ -1545,3 +1545,30 @@ test("an avocado CLI older than 1.0.0 warns; a current or absent one does not", 
     null,
   );
 });
+
+test("a live-channel feed proves a hit only when the head matches the pointed snapshot", async () => {
+  const same = await loadPublishedState({
+    client: stub().client,
+    feed: feed({ liveChannel: true }),
+    target: "qemux86-64",
+  });
+  assert.notEqual(same.published.buildManifest, null);
+
+  const moved = await loadPublishedState({
+    client: stub({ snapshotDigest: "cd".repeat(32) }).client,
+    feed: feed({ liveChannel: true }),
+    target: "qemux86-64",
+  });
+  assert.equal(moved.published.buildManifest, null);
+  assert.ok(
+    moved.warnings.some((w) => /live channel/.test(w)),
+    JSON.stringify(moved.warnings),
+  );
+
+  const control = await loadPublishedState({
+    client: stub({ snapshotDigest: "cd".repeat(32) }).client,
+    feed: feed(),
+    target: "qemux86-64",
+  });
+  assert.notEqual(control.published.buildManifest, null);
+});

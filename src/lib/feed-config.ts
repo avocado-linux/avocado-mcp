@@ -126,6 +126,11 @@ export interface ResolvedFeed extends FeedSpec {
   snapshot?: string;
   /** Repo URL the pin was recorded against, when the lock records one. */
   snapshotRepoUrl?: string;
+  /**
+   * True when the CLI installs from the live channel head because an explicit
+   * releasever or a stale lock pin turns the snapshot pin off.
+   */
+  liveChannel?: boolean;
   /** Human-readable provenance for each resolved value. */
   sources: {
     repoUrl: string;
@@ -399,6 +404,7 @@ export function resolveFeed(input: ResolveInput): ResolvedFeed {
   let releaseverSrc = "";
   let snapshot: string | undefined;
   let snapshotRepoUrl: string | undefined;
+  let liveChannel = false;
   const explicitStream = Boolean(ov.release || ov.channel);
 
   const cfgReleasever = cfgString(["distro", "repo", "releasever"]);
@@ -426,6 +432,7 @@ export function resolveFeed(input: ResolveInput): ResolvedFeed {
       releasever = `${release}/${channel}/snapshots/${pin.snapshot}`;
       releaseverSrc = `lock file snapshot pin for \`${input.target}\``;
     } else {
+      liveChannel = true;
       notes.push(
         `Lock file pins \`${input.target}\` to a snapshot of ${pin.release}/${pin.channel}, but config names ${release}/${channel}. The CLI ignores that stale pin and tracks the live channel head (run \`avocado update\` to re-pin). The MCP does the same.`,
       );
@@ -435,23 +442,29 @@ export function resolveFeed(input: ResolveInput): ResolvedFeed {
     if (env.AVOCADO_RELEASEVER !== undefined) {
       releasever = env.AVOCADO_RELEASEVER;
       releaseverSrc = "env AVOCADO_RELEASEVER";
+      liveChannel = true;
     } else if (env.AVOCADO_SDK_REPO_RELEASE !== undefined) {
       releasever = env.AVOCADO_SDK_REPO_RELEASE;
       releaseverSrc = "env AVOCADO_SDK_REPO_RELEASE (legacy)";
+      liveChannel = true;
     } else if (cfgReleasever !== undefined) {
       releasever = cfgReleasever;
       releaseverSrc = `${label} distro.repo.releasever`;
+      liveChannel = true;
     } else if (defExplicitReleasever !== undefined) {
       releasever = defExplicitReleasever;
       releaseverSrc = defLabel("releasever");
+      liveChannel = true;
     } else if (defDerivedReleasever !== undefined) {
       releasever = defDerivedReleasever;
       releaseverSrc = defLabel("release/channel");
       // sdk.repo_release still counts as an override for the CLI.
       if (cfgSdkRepoRelease === undefined) applyPin();
+      else liveChannel = true;
     } else if (cfgSdkRepoRelease !== undefined) {
       releasever = cfgSdkRepoRelease;
       releaseverSrc = `${label} sdk.repo_release (legacy)`;
+      liveChannel = true;
     }
   }
 
@@ -623,6 +636,7 @@ export function resolveFeed(input: ResolveInput): ResolvedFeed {
     release,
     channel,
     snapshot,
+    ...(liveChannel ? { liveChannel } : {}),
     ...(snapshotRepoUrl ? { snapshotRepoUrl } : {}),
     sources: {
       repoUrl: repoUrlSrc,
