@@ -1,7 +1,7 @@
 export const URI = "avocado://skills/feeds-and-lockfile";
 export const NAME = "feeds-and-lockfile";
 export const DESCRIPTION =
-  "How an Avocado project picks its package feeds (`repos:`, `distro.feeds`, `stages:`, private `org:` feeds and `avocado login`) and how avocado.lock pins what was resolved (`avocado update`, `avocado unlock`, `ext fetch --locked`, `clean --stamps --unlock`). Read this when a user adds a feed, gets a private-feed or auth error, asks why a package version does not change, or sets up CI.";
+  "How an Avocado project picks its package feeds (`repos:`, `distro.feeds`, `stages:`, private `org:` feeds and `avocado login`) and how avocado.lock pins what was resolved (`avocado update`, `avocado unlock`, `ext fetch --locked`, `clean --stamps --unlock`). Read this when a user adds a feed, gets a private-feed or auth error, moves a project to a new feed or rebuilt packages, asks why a package version does not change, or sets up CI.";
 
 export const CONTENT = `# Package feeds and the lock file
 
@@ -168,6 +168,33 @@ If you change \`distro.release\` or \`distro.channel\`, the old snapshot pin no
 longer applies. The CLI tracks the live channel and warns until you run
 \`avocado update\`.
 
+### Picking up new or rebuilt packages
+
+To move a project to a new feed, a new snapshot or rebuilt packages
+(including a local build's feed), update it in place:
+
+\`\`\`bash
+avocado update
+avocado install
+avocado build         # then provision, or deploy to a running device
+\`\`\`
+
+Do not copy the project, create a new one, delete \`avocado.lock\` or wipe
+the SDK volume to get a clean state. That hides the real problem.
+
+If install keeps the old copy of a package that was rebuilt, compare the
+package's NEVRA (name, epoch, version, release, arch) in the feed's
+\`repodata/*-primary.xml.gz\` with its entry in \`avocado.lock\`:
+
+- **Same NEVRA:** the rebuild did not get a new version, so there is
+  nothing to update. Fix the build's versioning. A version with
+  \`+0.gunknown\` comes from a local Yocto build that could not read its
+  layer's git metadata (for example a git worktree whose \`.git\` the build
+  container cannot see). Every such build gets the same version, so a
+  project cannot be updated in place from it.
+- **Different NEVRA, old one still installed:** a CLI bug. Report it with
+  both NEVRAs. Do not work around it by resetting state.
+
 ### CI
 
 \`--locked\` exists only on \`avocado ext fetch\`, and it covers only the lock
@@ -178,6 +205,7 @@ something new by accident.
 
 ### Resetting state
 
+Resetting state is not how a project picks up new packages; see above.
 \`avocado clean\` removes the project's container volumes by default. To clear
 only the build stamps and lock entries for a target, keep the volume:
 
