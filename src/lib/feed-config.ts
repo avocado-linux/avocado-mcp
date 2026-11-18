@@ -426,7 +426,12 @@ export function resolveFeed(input: ResolveInput): ResolvedFeed {
     if (!input.target || !release || !channel) return;
     const pin = readPin(input.lock, input.target);
     if (!pin) return;
-    if (pin.release === release && pin.channel === channel) {
+    // CLI snapshot::pin_status: a pin recorded without a URL matches any URL;
+    // otherwise the URLs must match once trailing slashes are dropped.
+    const urlMatches =
+      pin.repoUrl === undefined ||
+      pin.repoUrl.replace(/\/+$/, "") === baseUrl.replace(/\/+$/, "");
+    if (pin.release === release && pin.channel === channel && urlMatches) {
       snapshot = pin.snapshot;
       snapshotRepoUrl = pin.repoUrl;
       releasever = `${release}/${channel}/snapshots/${pin.snapshot}`;
@@ -434,7 +439,7 @@ export function resolveFeed(input: ResolveInput): ResolvedFeed {
     } else {
       liveChannel = true;
       notes.push(
-        `Lock file pins \`${input.target}\` to a snapshot of ${pin.release}/${pin.channel}, but config names ${release}/${channel}. The CLI ignores that stale pin and tracks the live channel head (run \`avocado update\` to re-pin). The MCP does the same.`,
+        `Lock file pins \`${input.target}\` to a snapshot of ${pin.release}/${pin.channel}, but config names ${release}/${channel} or another repo URL. The CLI ignores that stale pin and tracks the live channel head (run \`avocado update\` to re-pin). The MCP does the same.`,
       );
     }
   };
