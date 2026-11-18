@@ -30,6 +30,7 @@ function readme(slug: string): string {
 async function withReferencesFixture<T>(
   run: () => Promise<T>,
   matrixTargets: string[] = [],
+  omitSlugs: string[] = [],
 ): Promise<T> {
   const realFetch = globalThis.fetch;
   clearSelectableCache();
@@ -47,14 +48,16 @@ async function withReferencesFixture<T>(
       );
     }
     if (u.includes("api.github.com")) {
-      const tree = Object.keys(FIXTURE).flatMap((slug) => [
-        { path: `${slug}/README.md`, type: "blob" },
-        { path: `${slug}/avocado.yaml`, type: "blob" },
-      ]);
+      const tree = Object.keys(FIXTURE)
+        .filter((slug) => !omitSlugs.includes(slug))
+        .flatMap((slug) => [
+          { path: `${slug}/README.md`, type: "blob" },
+          { path: `${slug}/avocado.yaml`, type: "blob" },
+        ]);
       return new Response(JSON.stringify({ tree }), { status: 200 });
     }
     const m = u.match(/\/([a-z0-9-]+)\/README\.md$/);
-    if (m && m[1] in FIXTURE) {
+    if (m && m[1] in FIXTURE && !omitSlugs.includes(m[1])) {
       return new Response(readme(m[1]), { status: 200 });
     }
     return new Response("not found", { status: 404 });
@@ -185,6 +188,23 @@ test("a target using the old devkit slug keeps a reference listing the new slug"
       "py-old": "listed",
     });
   });
+});
+
+test("a devkit alias filters when the catalog and matrix list only the current slug", async () => {
+  await withReferencesFixture(
+    async () => {
+      const labels = await searchLabels({
+        query: "python",
+        target: "jetson-orin-nano-devkit",
+      });
+      assert.deepEqual(labels, {
+        "py-generic": "generic",
+        "py-new": "listed",
+      });
+    },
+    ["jetson-orin-nano", "raspberrypi5"],
+    ["py-old"],
+  );
 });
 
 test("an alias target keeps references listing the canonical slug", async () => {
