@@ -68,7 +68,15 @@ async function referencesForTarget(
     ]),
   ];
   const typed = target.trim().toLowerCase();
-  const resolved = resolveTargetInput(target, slugs).target;
+  // A known equivalent slug ("-devkit" against its current name) resolves
+  // before fuzzy matching, which cannot cover the suffix word.
+  const equivalents = slugs.filter(
+    (s) => sameTarget(s, typed) || sameTarget(typed, s),
+  );
+  const resolved =
+    !slugs.includes(target.trim()) && equivalents.length === 1
+      ? equivalents[0]
+      : resolveTargetInput(target, slugs).target;
   const wanted = (resolved ?? typed).toLowerCase();
   const labelled = scored.map(({ entry }): LabelledReference => {
     const compatibility: ReferenceCompatibility =
