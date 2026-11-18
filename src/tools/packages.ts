@@ -194,6 +194,9 @@ export function registerPackageTools(
           if (p.feed) out += `- **Feed:** \`${p.feed}\`\n`;
           out += `- **Version:** ${p.version}${p.release ? `-${p.release}` : ""}\n`;
           out += `- **Arch:** \`${p.arch}\`\n`;
+          if (`${p.version}-${p.release}`.includes("gunknown")) {
+            out += `- ⚠️ **Unversioned local build:** \`gunknown\` means the build could not read its layer's git metadata, so every rebuild has this same version and \`avocado update\`/\`install\` cannot pick it up in place. Fix the build's git access and rebuild. See \`avocado://skills/feeds-and-lockfile\`.\n`;
+          }
           out += `- **Summary:** ${p.summary || "_(none)_"}\n`;
           if (p.description) {
             out += `\n${p.description}\n`;

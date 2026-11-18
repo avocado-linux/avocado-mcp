@@ -677,6 +677,44 @@ test("an exact match still lists the feeds the MCP could not read", async () => 
   assert.match(text, /Not checked[\s\S]*`acme` for `qemuarm64`/);
 });
 
+test("describe-package flags a gunknown local build version", async () => {
+  class StubRepo extends RepoClient {
+    override async getTargetsConfig() {
+      return { qemuarm64: ["target/armv8a"] };
+    }
+    override async searchPackages() {
+      return {
+        totalMatches: 1,
+        results: [
+          {
+            name: "avocadoctl",
+            summary: "",
+            description: "",
+            version: "2026.0+0.gunknown",
+            release: "r0",
+            arch: "armv8a",
+            repo: "target/armv8a",
+            href: "",
+            feed: "avocado",
+            score: 100,
+          },
+        ],
+        errors: [],
+        notChecked: [],
+      };
+    }
+  }
+  const { client } = await connect(new StubRepo());
+  const described = await client.callTool({
+    name: "describe-package",
+    arguments: { targets: ["qemuarm64"], name: "avocadoctl" },
+  });
+  assert.match(
+    (described.content as { text: string }[])[0].text,
+    /Unversioned local build/,
+  );
+});
+
 test("validate-yaml shows the errors and warnings the CLI reports", async () => {
   const { client } = await connect();
   setReport({
