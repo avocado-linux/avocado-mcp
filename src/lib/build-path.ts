@@ -572,7 +572,7 @@ function evaluateRecipe(
         out.extraReasons,
       );
       if (localReason === null) {
-        const shadow = outrankedBy("delta", entry.packages, input);
+        const shadow = outrankedBy("delta", entry.packages, input, entry);
         if (shadow === null) {
           out.hit = true;
           out.localKey = localKey(entry);
@@ -675,6 +675,7 @@ function outrankedBy(
   own: "delta" | "distro",
   names: string[],
   input: ClassifyInput,
+  expected?: RecipeMapEntry,
 ): string | null {
   const fp = input.feedPriorities;
   if (!fp) return null;
@@ -712,6 +713,23 @@ function outrankedBy(
       );
       if (winners.length === 0) continue;
       mine = Math.min(...winners.map((w) => w.priority));
+      // DNF installs the best version of the best-priority repository, so
+      // the expected version must be the one that repository serves.
+      if (expected) {
+        const top = winners.filter((w) => w.priority === mine);
+        const evr = (p: PackageInfo) => `${p.epoch}:${p.version}-${p.release}`;
+        const want = `${Number(expected.epoch)}:${expected.pv}-${expected.pr}`;
+        const served = top
+          .flatMap((w) => (w.packages ?? []).filter((p) => p.name === n))
+          .map(evr)
+          .reduce((a, b) => (compareEvr(a, b) >= 0 ? a : b));
+        if (compareEvr(served, want) !== 0) {
+          const w = top.find((t) =>
+            (t.packages ?? []).some((p) => p.name === n && evr(p) === served),
+          );
+          return `${n} ${served} in the ${w?.label ?? "delta"} feed (priority ${mine}) wins over the expected ${want}`;
+        }
+      }
     }
     for (const s of sources) {
       if (own === "distro" && s.label === "distro") continue;

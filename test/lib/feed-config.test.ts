@@ -201,11 +201,48 @@ test("stale snapshot pin (different channel) is ignored with a note", () => {
   assert.ok(f.notes.some((n) => n.includes("avocado update")));
 });
 
+test("a snapshot pin recorded against another repo_url is stale", () => {
+  const mk = (repoUrl: string | undefined, cfgYaml: string) =>
+    resolveFeed({
+      env: {},
+      config: cfg(cfgYaml),
+      lock: {
+        targets: {
+          t: {
+            "repo-snapshot": {
+              release: "2026",
+              channel: "edge",
+              snapshot: "s1",
+              ...(repoUrl ? { repo_url: repoUrl } : {}),
+            },
+          },
+        },
+      },
+      target: "t",
+    });
+  const yaml = (url: string) =>
+    `distro:\n  release: 2026\n  channel: edge\n  repo:\n    url: ${url}\n`;
+  const other = mk("https://other.example", yaml("https://repo.example"));
+  assert.equal(other.liveChannel, true);
+  assert.equal(other.snapshot, undefined);
+  assert.equal(other.releasever, "2026/edge");
+  assert.ok(other.notes.some((n) => n.includes("avocado update")));
+  // Trailing slashes do not make a different feed, and an unrecorded URL
+  // matches any (CLI: snapshot::pin_status).
+  const same = mk("https://repo.example/", yaml("https://repo.example"));
+  assert.equal(same.liveChannel, undefined);
+  assert.equal(same.snapshot, "s1");
+  const unrecorded = mk(undefined, yaml("https://repo.example"));
+  assert.equal(unrecorded.snapshot, "s1");
+});
+
 test("a snapshot pin carries the repo_url it was recorded against", () => {
   const mk = (extra: Record<string, unknown>) =>
     resolveFeed({
       env: {},
-      config: cfg("distro:\n  release: 2026\n  channel: edge\n"),
+      config: cfg(
+        "distro:\n  release: 2026\n  channel: edge\n  repo:\n    url: https://other.example\n",
+      ),
       lock: {
         targets: {
           t: {

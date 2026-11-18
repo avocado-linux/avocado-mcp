@@ -1239,6 +1239,59 @@ test("a hit is unverified when an outranking feed the tool cannot read exists", 
   }
 });
 
+test("a delta hit is a miss when the winning delta repository carries an older version", () => {
+  // delta-a (10) carries htop 0.9, delta-b (20) carries the expected 3.3.0:
+  // DNF installs 0.9 from delta-a.
+  const v = verdictOf(
+    base({
+      delta: {
+        manifest: {
+          schema_version: 1,
+          base: { release: "2026", channel: "edge", snapshot_id: null },
+          built_recipes: ["htop"],
+        },
+        packages: [pkg("htop", "0.9"), pkg("htop")],
+      },
+      feedPriorities: prio({
+        distro: 30,
+        delta: [
+          { name: "delta-a", priority: 10, packages: [pkg("htop", "0.9")] },
+          { name: "delta-b", priority: 20, packages: [pkg("htop")] },
+        ],
+      }),
+      published: publishedHit({ buildManifest: null }),
+    }),
+  );
+  assert.equal(v.verdict, "package_miss");
+  assert.equal(v.missing[0].reason, "no-cache-key");
+  assert.match(v.reasons.join("\n"), /delta-a/);
+});
+
+test("a delta hit stands when the winning delta repository carries the expected version", () => {
+  const v = verdictOf(
+    base({
+      delta: {
+        manifest: {
+          schema_version: 1,
+          base: { release: "2026", channel: "edge", snapshot_id: null },
+          built_recipes: ["htop"],
+        },
+        packages: [pkg("htop", "0.9"), pkg("htop")],
+      },
+      feedPriorities: prio({
+        distro: 30,
+        delta: [
+          { name: "delta-a", priority: 10, packages: [pkg("htop")] },
+          { name: "delta-b", priority: 20, packages: [pkg("htop", "0.9")] },
+        ],
+      }),
+      published: publishedHit(),
+    }),
+  );
+  assert.equal(v.verdict, "feed_hit");
+  assert.deepEqual(v.cache_keys.local, { htop: "th-htop" });
+});
+
 test("a delta repository behind the distro feed does not borrow a better delta's priority", () => {
   // feeds: delta-a (10), distro (20), delta-b (30); htop is only in delta-b.
   const v = verdictOf(
