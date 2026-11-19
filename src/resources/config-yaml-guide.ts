@@ -1,7 +1,7 @@
 export const URI = "avocado://skills/config-yaml-guide";
 export const NAME = "config-yaml-guide";
 export const DESCRIPTION =
-  "How to author avocado.yaml — the structure of a project file, what each top-level key means, and the rules for safe edits. Read this before generating any YAML or invoking add-extension / add-runtime / add-package-to-extension.";
+  "How to author avocado.yaml: the structure of a project file, what each top-level key means, and the rules for safe edits. Read this before generating any YAML or invoking add-extension / add-runtime / add-package-to-extension.";
 
 export const CONTENT = `# Authoring avocado.yaml
 
@@ -19,13 +19,13 @@ This is what \`avocado init --target <target>\` writes (comments removed):
 
 \`\`\`yaml
 # yaml-language-server: $schema=https://docs.peridio.com/schemas/avocado-config.json
-cli_requirement: ">=0.41.0"         # semver range the running CLI must satisfy
+cli_requirement: ">=1.0.0"          # semver range the running CLI must satisfy
 default_target: "<target>"          # target used when --target is not given
 supported_targets:                  # or "*" for all targets
   - <target>
 
 distro:
-  release: 2024                     # feed year: 2024 or 2026
+  release: 2026                     # feed year: 2024 or 2026
   channel: edge                     # next, edge or stable
 
 runtimes:                           # named deployment profiles
@@ -87,9 +87,9 @@ Users and groups go in a top-level \`permissions:\` profile, referenced from \`r
 
 1. **Schema-first.** Call \`get-config-schema\` before generating or modifying any YAML. Don't guess key names, value types, or enum values.
 2. **Targets come from the feed.** The schema accepts any target string. Use \`list-targets\` to find the targets the feed has.
-3. **Every package must be verified — against the project's feed.** Before adding a package to an extension or runtime, call \`search-packages\` (or \`describe-package\`) for the user's target **with \`projectDir\`** and confirm the package exists. Package sets differ between releases/channels, so a hit on the default 2026/edge feed doesn't prove the package exists on the project's feed. Never invent a package name.
+3. **Every package must be verified against the project's feed.** Before adding a package to an extension or runtime, call \`search-packages\` (or \`describe-package\`) for the user's target **with \`projectDir\`** and confirm the package exists. Package sets differ between releases/channels, so a hit on the default 2026/edge feed doesn't prove the package exists on the project's feed. Never invent a package name.
 4. **Extension types are constrained.** Only \`sysext\` and \`confext\` are valid. \`sysext\` extends \`/usr\`. \`confext\` extends \`/etc\`. Most apps want both.
-5. **Don't break the \`dev\` runtime.** If the user is just getting started, keep \`avocado-ext-dev\` and \`avocado-ext-sshd-dev\` in their dev runtime — without these, they can't SSH or debug.
+5. **Don't break the \`dev\` runtime.** If the user is just getting started, keep \`avocado-ext-dev\` and \`avocado-ext-sshd-dev\` in their dev runtime. Without these, they can't SSH or debug.
 6. **Prefer the helper tools** over hand-edited YAML. \`add-extension\`, \`add-runtime\`, \`add-package-to-extension\` all check the result with \`avocado config validate\` before returning.
 7. **Fix warnings too.** The CLI ignores a key the schema does not describe and prints a warning. \`validate-yaml\` reports the same warnings. A typo such as \`enable_service\` does not fail the build, but the setting has no effect.
 
@@ -100,5 +100,5 @@ The schema validates *structure*, not *semantics*:
 - It doesn't know whether your extension actually builds.
 - It does not check every rule the CLI checks at build time. For example, \`signing.fit_key\` and \`signing.fit_unsigned\` together fail the build but pass the schema.
 
-Those are the user's (or \`avocado build\`'s) job to discover. The MCP can verify package names — anything else is left to the build.
+Those are the user's (or \`avocado build\`'s) job to discover. The MCP can verify package names. Anything else is left to the build.
 `;
