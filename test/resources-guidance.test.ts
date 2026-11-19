@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { readFileSync } from "fs";
+import { parse } from "yaml";
 
 import { registerSkillResources } from "../src/tools/resources.js";
 import { registerPrompts } from "../src/tools/prompts.js";
@@ -123,4 +125,23 @@ test("the package-coverage prompt matches the exact-only tool and names no old t
   } finally {
     await client.close();
   }
+});
+
+test("config yaml guide shows the vendored CLI template", async () => {
+  // The guide says its block is what `avocado init` writes. `npm run
+  // sync-schema` updates only the vendored file, so this test fails when
+  // a sync changes the template and the guide still shows the old values.
+  const text = await readResource("avocado://skills/config-yaml-guide");
+  const block = text.match(
+    /## The default template\n[\s\S]*?```yaml\n([\s\S]*?)```/,
+  );
+  assert.ok(block, "the guide has a yaml block under The default template");
+  const template = readFileSync(
+    new URL("../src/lib/schema/default.yaml", import.meta.url),
+    "utf8",
+  );
+  assert.deepEqual(
+    parse(block[1].replaceAll("<target>", "{target}")),
+    parse(template),
+  );
 });
