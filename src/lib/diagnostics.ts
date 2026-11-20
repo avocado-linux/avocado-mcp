@@ -45,6 +45,16 @@ const STAMP_PATTERNS: Pattern[] = [
       "The CLI was upgraded and its stamp format changed. Every stamp that the older CLI wrote now reads as stale, although `avocado.yaml` did not change.",
     suggestion:
       "This is expected after `avocado upgrade`. Your config needs no edit. Run `avocado install`, then `avocado build`, to write new stamps. Do not run the `To fix:` list line by line: the CLI sorts it by name, not in install order. Docs: https://docs.peridio.com/developer-reference/lockfiles-and-build-stamps",
+  }, // The build volume check also runs before every command. Match text is
+  // from avocado-cli 1.2.0 `src/utils/volume.rs`.
+  {
+    label: "Build volume not found on this daemon",
+    match:
+      /Build volume '[^'\n]+' recorded in \.avocado-state was not found in /,
+    cause:
+      "The project's build volume is not on the Docker daemon the CLI is using. Either the CLI is on another daemon (on macOS, the avocado-vm was not running and the CLI fell back to local Docker, or DOCKER_HOST changed), or the volume was deleted by `avocado vm reset` or a Docker data purge.",
+    suggestion:
+      "Check the daemon first: `avocado vm status` on macOS, `DOCKER_HOST` and `docker context show` on Linux. If the volume is on another daemon, switch back to it and retry. Run `avocado clean`, then `avocado install` and `avocado build`, only when the volume is really gone.",
   },
 ];
 
