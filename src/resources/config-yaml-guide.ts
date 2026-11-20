@@ -11,7 +11,7 @@ The source of truth for its structure is the JSON Schema that the installed avoc
 
 ## Start a project with \`avocado init\`
 
-Run \`avocado init --target <target> [<project-dir>]\` to create a new project. It writes \`avocado.yaml\` from the template of the installed CLI. \`init-project\` gives you the command and the edits to make after it. Edit the generated file. Do not write one from memory.
+Run \`avocado init --target <target> [<project-dir>]\` to create a new project. It writes \`avocado.yaml\` from the template of the installed CLI. \`init-project\` gives you the command and the edits to make after it. Edit the generated file. Do not write one from memory. When the feed lacks the default extensions (\`avocado-ext-dev\`, \`avocado-ext-sshd-dev\`, the board BSP), as a local dev feed often does, use \`avocado init --minimal\` (CLI 1.2.0 and later): it keeps only the local application extension.
 
 ## The default template
 
@@ -80,6 +80,8 @@ sdk:
 - Extension fields: \`packages\`, \`overlay\`, \`enable_services\`, \`modprobe\`, \`depends_on\`, \`image\`.
 - Extension \`source\`: \`{type: package, version}\`, \`{type: git, url, ref}\` or \`{type: path, path}\`.
 - \`kernel.cmdline\` or \`kernel.cmdline_extra\` (not both).
+- \`sdk.container\` (CLI 1.2.0 and later): \`privileged\`, \`network_mode\`, \`volumes\`, \`devices\`, \`extra_hosts\`, \`cap_add\` and \`environment\`, spelled as in Docker Compose. It wins over \`container_args\`, which stays for flags without a key.
+- \`runtimes.<r>.var.initial_os_rollback: false\` (CLI 1.1.0 and later) leaves the OS bundle out of the provisioned var image to save space. A rollback to the provisioned OS is then impossible; OTA is unaffected.
 
 Users and groups go in a top-level \`permissions:\` profile, referenced from \`rootfs.permissions\` and \`initramfs.permissions\`. The \`users:\` and \`groups:\` keys on an extension are deprecated.
 

@@ -22,8 +22,12 @@ includes a helper VM (\`avocado-vm\`). This is a QEMU virtual machine that runs
 
 - The CLI forwards the socket \`/run/docker.sock\` from the VM to a local socket
   (\`~/.avocado/vm/docker.sock\`) with SSH. Then it sets \`DOCKER_HOST\` for its own
-  subprocesses. Each \`docker\` command from the CLI works. You do not need Docker
-  Desktop or a manual \`docker context\`.
+  subprocesses. You do not need Docker Desktop or a manual \`docker context\`.
+- CLI 1.2.0 and later talk to the daemon over the Docker Engine API, so the
+  host needs no \`docker\` client either. The \`docker\` command is still used
+  for \`avocado container dev\`, \`--runs-on\`, on Windows, with another
+  \`--container-tool\`, and when \`DOCKER_HOST\` is \`ssh://\` or TLS. Set
+  \`AVOCADO_DOCKER_CLI=1\` to use the \`docker\` command everywhere.
 - If the VM runs, the CLI uses it. VM routing is on by default.
 - If the VM is not running when a build starts, the CLI auto-starts it only
   when \`AVOCADO_VM_DIR\` points at the VM install. A plain \`avocado vm update\`
@@ -78,6 +82,12 @@ instead, use one of these options:
 - \`AVOCADO_VM_AUTO_START=0\`
 - \`--runs-on <host>\` (the older remote-Docker path)
 
+## Windows — avocado-vm preview
+
+CLI 1.2.0 and later run \`avocado vm\` on Windows: the VM boots under QEMU
+with WHPX and \`provision\` runs through it. The workspace share uses SMB and
+needs a one-time elevated setup. Treat it as a preview.
+
 ## Linux — native Docker Engine
 
 On Linux, the CLI connects to the native Docker Engine on the host. The CLI does
@@ -95,6 +105,7 @@ docker info        # must succeed
 |---|---|---|
 | "Cannot connect to the Docker daemon" | Run \`avocado vm status\`. If the VM is stopped, run \`avocado vm start\` (first time: \`avocado vm update -y\` first). If the VM runs but the socket forward is missing, run \`avocado vm stop && avocado vm start\`. Do not run \`sudo systemctl start docker\`, because there is no host daemon. | Run \`sudo systemctl start docker\`. |
 | Build stopped for out of memory | The build runs in the avocado-vm. Give the VM more memory: run \`avocado vm stop\`, then \`avocado vm start --memory-mib <MiB> --cpus <n>\` (a running VM rejects the flags, so stop it first). The values persist to \`~/.avocado/vm/config.yaml\`. Do not change Docker Desktop Resources. | Raise host limits or free RAM. |
+| "Build volume '<name>' recorded in .avocado-state was not found" | The CLI is talking to a different daemon than the one that built the project, or the volume was deleted (\`avocado vm reset\`, a Docker data purge). Run \`avocado vm status\` first: if the VM is stopped and the CLI fell back to local Docker, start the VM and retry. Run \`avocado clean\` only when the volume is really gone. | Check \`DOCKER_HOST\` and \`docker context show\`. Run \`avocado clean\` only when the volume is really gone. |
 | SDK image pull fails | Make sure that the VM has network (\`avocado vm shell\`, then \`docker pull <tag>\`). The VM caches images across restarts, so a retry is cheap. | Examine host network, or run \`docker pull\` directly. |
 
 ## Do not look inside the SDK container — on any platform
