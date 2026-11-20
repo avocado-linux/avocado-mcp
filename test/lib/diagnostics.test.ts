@@ -990,3 +990,13 @@ test("a clean stone run matches no pattern", () => {
   assert.deepEqual(labels(diagnoseBuildLog(clean)), []);
   assert.deepEqual(labels(diagnoseProvisionLog(clean)), []);
 });
+
+test("a missing build volume points at the daemon before avocado clean", () => {
+  const log =
+    "Error: Build volume 'avo-1234' recorded in .avocado-state was not found in the local docker daemon. Either it was deleted";
+  const d = diagnoseBuildLog(log).find(
+    (x) => x.label === "Build volume not found on this daemon",
+  );
+  assert.ok(d);
+  assert.match(d.suggestion, /avocado vm status[\s\S]*avocado clean/);
+});

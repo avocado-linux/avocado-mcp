@@ -1,7 +1,7 @@
 export const URI = "avocado://skills/feeds-and-lockfile";
 export const NAME = "feeds-and-lockfile";
 export const DESCRIPTION =
-  "How an Avocado project picks its package feeds (`repos:`, `distro.feeds`, `stages:`, private `org:` feeds and `avocado login`) and how avocado.lock pins what was resolved (`avocado update`, `avocado unlock`, `ext fetch --locked`, `clean --stamps --unlock`). Read this when a user adds a feed, gets a private-feed or auth error, asks why a package version does not change, or sets up CI.";
+  "How an Avocado project picks its package feeds (`repos:`, `distro.feeds`, `stages:`, private `org:` feeds and `avocado login`) and how avocado.lock pins what was resolved (`avocado update`, `avocado unlock`, `ext fetch --locked`, `clean --stamps --unlock`). Read this when a user adds a feed, gets a private-feed or auth error, moves a project to a new feed or rebuilt packages, asks why a package version does not change, or sets up CI.";
 
 export const CONTENT = `# Package feeds and the lock file
 
@@ -28,8 +28,13 @@ Each \`repos:\` entry has exactly one locator:
 | Locator | Meaning |
 |---|---|
 | \`url:\` | A remote dnf repo. The CLI expands \`$releasever\` and \`$target\`. |
-| \`path:\` | A local directory of RPMs with \`repodata/\` (run \`createrepo_c\` on it). |
+| \`path:\` | A local directory of RPMs with \`repodata/\` (\`avocado feed index <dir>\` writes it). |
 | \`org:\` | A private feed hosted by Peridio Connect. |
+
+A \`url:\` feed served from \`localhost\` or \`127.0.0.1\` is not reachable from
+the build container. Set \`rewrite_loopback: true\` on that feed (CLI 1.2.0 and
+later) and the CLI maps the host to one the container can reach. The distro
+feed refuses the key.
 
 Other keys: \`targets:\` (only these targets), \`stages:\` (only these
 install stages), \`username\`/\`password\`, \`ca\`, \`tls_verify\`,
@@ -94,7 +99,8 @@ The feed grammar belongs to the CLI; the steps here only use what it accepts.
    \`avocado ext package <name> --out-dir <dir>\`. Without an output
    directory the RPM stays inside the container.
 2. Put the RPM in a directory and make it an RPM repository, for example
-   with \`createrepo_c <dir>\`.
+   with \`avocado feed index <dir>\` (CLI 1.2.0 and later; it runs the host
+   \`createrepo_c\`, so that must be on PATH). Older CLIs: \`createrepo_c <dir>\`.
 3. Declare the directory under \`repos:\` with \`path:\`.
 4. List it before the distro feed, as \`distro.feeds: [local-rpms, avocado]\`.
    The first feed that has the package name wins.
@@ -164,9 +170,57 @@ avocado update        # advance the snapshot pin and clear package pins
 avocado install       # resolve and lock the new versions
 \`\`\`
 
+One target can stay on another release or channel with a \`target-<name>:\`
+block inside \`distro:\` (CLI 1.1.0 and later), for example
+\`distro: { release: 2026, target-raspberrypi0-2w: { release: 2024 } }\`.
+\`avocado update --target <name>\` then resolves that target's feed.
+
+A snapshot pin also records the feed URL (CLI 1.2.0 and later). Pointing the
+project at a mirror or another feed with the same release and channel warns
+that the pin does not match. Run \`avocado update\` then. A pinned build also
+prints one line when the channel has newer snapshots.
+
 If you change \`distro.release\` or \`distro.channel\`, the old snapshot pin no
 longer applies. The CLI tracks the live channel and warns until you run
 \`avocado update\`.
+
+### Picking up new or rebuilt packages
+
+To move a project to a new feed, a new snapshot or rebuilt packages
+(including a local build's feed), update it in place:
+
+\`\`\`bash
+avocado update
+avocado install
+avocado build         # then provision, or deploy to a running device
+\`\`\`
+
+Do not copy the project, create a new one, delete \`avocado.lock\` or wipe
+the SDK volume to get a clean state. That hides the real problem.
+
+If install keeps the old copy of a package that was rebuilt, compare the
+package's NEVRA (name, epoch, version, release, arch) in the feed's
+\`repodata/*-primary.xml.gz\` with its entry in \`avocado.lock\`:
+
+- **Same NEVRA:** the rebuild did not get a new version, so there is
+  nothing to update. Fix the build's versioning. A version with
+  \`+0.gunknown\` comes from a local Yocto build that could not read its
+  layer's git metadata (for example a git worktree whose \`.git\` the build
+  container cannot see). Every such build gets the same version, so a
+  project cannot be updated in place from it.
+- **Different NEVRA, old one still installed:** a CLI bug. Report it with
+  both NEVRAs. Do not work around it by resetting state.
+
+### Offline
+
+\`--offline\` or \`AVOCADO_OFFLINE=1\` (CLI 1.2.0 and later) skips the snapshot
+lookup, the pin check and the feed preflight, and uses the locked pin. It
+needs a locked pin on the default feed, and \`avocado update\` refuses it. It
+does not make dnf in the SDK container offline: packages not already
+installed still need the network.
+
+\`AVOCADO_RELEASEVER\` overrides a locked pin. CLI 1.2.0 and later print
+\`pin ignored: AVOCADO_RELEASEVER is set to ...\` once per run when it does.
 
 ### CI
 
@@ -178,6 +232,7 @@ something new by accident.
 
 ### Resetting state
 
+Resetting state is not how a project picks up new packages; see above.
 \`avocado clean\` removes the project's container volumes by default. To clear
 only the build stamps and lock entries for a target, keep the volume:
 

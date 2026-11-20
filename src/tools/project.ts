@@ -38,7 +38,7 @@ export function registerProjectTools(
     {
       title: "Scaffold a new Avocado project",
       description:
-        "Scaffold a new Avocado OS project. ALWAYS searches the reference catalog first. References are pre-built, verified, working projects that dramatically beat starting from scratch. If a reference matches the user's task, returns the `avocado init --reference` CLI command to clone it. When no reference fits, or when `forceFromScratch: true`, returns the `avocado init --target` command and the edits to make after it. Set `cliAvailable: false` only when the avocado CLI cannot be used. The tool then returns a starter YAML copied from the CLI template. Pass the user's task in their own words via `task`.",
+        "Scaffold a new Avocado OS project. Never use this to move an existing project to a new feed or to rebuilt packages: run `avocado update`, `avocado install` and `avocado build` in that project instead. ALWAYS searches the reference catalog first. References are pre-built, verified, working projects that dramatically beat starting from scratch. If a reference matches the user's task, returns the `avocado init --reference` CLI command to clone it. When no reference fits, or when `forceFromScratch: true`, returns the `avocado init --target` command and the edits to make after it. Set `cliAvailable: false` only when the avocado CLI cannot be used. The tool then returns a starter YAML copied from the CLI template. Pass the user's task in their own words via `task`.",
       inputSchema: {
         target: z
           .string()
