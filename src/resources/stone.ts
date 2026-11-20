@@ -122,8 +122,10 @@ avocado sdk run -E bash -c 'jq "{provision_default: .runtime.provision_default, 
   \`AVOCADO_USB_PASSTHROUGH\` itself. The CLI sets it to \`0\` on macOS and
   Windows hosts.
 
-\`provision_profiles.<profile>\` in avocado.yaml takes only \`container_args\`
-and \`state_file\`. The key must equal the stone profile key, for example
+\`provision_profiles.<profile>\` in avocado.yaml takes \`container_args\`,
+\`state_file\` and, from CLI 1.2.0, a \`container:\` block (\`privileged\`,
+\`network_mode\`, \`volumes\`, \`devices\`, \`extra_hosts\`, \`cap_add\`,
+\`environment\`, spelled as in Docker Compose; it wins over \`container_args\`). The key must equal the stone profile key, for example
 \`provision_profiles.sd\` for \`--profile sd\`. The CLI applies the block only
 when you pass \`--profile\`. It does not apply it to the default profile.
 
@@ -132,6 +134,21 @@ provision_profiles:
   sd:
     container_args: ["--device", "/dev/sdb"]
 \`\`\`
+
+CLI 1.2.0 and later add for provision:
+
+- \`avocado provision --dry-run\` runs every guard of a profile and writes
+  nothing. The CLI refuses it unless the stone manifest declares
+  \`config.dry_run: true\`. Offer it before an erasing flash when the profile
+  supports it.
+- Provision scripts see \`AVOCADO_PROVISION_FORCE\` (\`1\` under \`--force\`)
+  and, on a Linux host with native Docker only, the host mount table at
+  \`AVOCADO_PROVISION_HOST_MOUNTS\`.
+- A board on a Rubicon (a networked test fixture) is driven with
+  \`avocado rubicon\`: list boards, run \`rubicon.run.<name>\` profiles, and
+  open the serial console. \`avocado provision --rubicon\` flashes through it,
+  and \`--pack\`/\`--bundle\` write and replay a provisionable bundle. Run
+  \`avocado rubicon --help\` for the subcommands.
 
 ## Recipes
 
